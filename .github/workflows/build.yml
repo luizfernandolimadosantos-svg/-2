@@ -1,1 +1,32 @@
 
+name: Build Macaquito Scanner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Compile Windows EXE
+        shell: cmd
+        run: |
+          if not exist dist mkdir dist
+          cl /nologo /std:c++20 /EHsc /O2 /MT /DUNICODE /D_UNICODE main.cpp /link /SUBSYSTEM:WINDOWS /OUT:dist\MacaquitoScanner.exe
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacaquitoScanner-Windows-x64
+          path: dist/MacaquitoScanner.exe
+          if-no-files-found: error
+
