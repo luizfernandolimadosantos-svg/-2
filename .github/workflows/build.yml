@@ -16,12 +16,14 @@ jobs:
 
       - name: Configure MSVC
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Compile Windows EXE
         shell: cmd
         run: |
           if not exist dist mkdir dist
-          cl /nologo /std:c++20 /EHsc /O2 /MT /DUNICODE /D_UNICODE main.cpp /link /SUBSYSTEM:WINDOWS /OUT:dist\MacaquitoScanner.exe
+          cl /nologo /std:c++20 /EHsc /O2 /MT /DUNICODE /D_UNICODE main.cpp /link user32.lib /SUBSYSTEM:WINDOWS /OUT:dist\MacaquitoScanner.exe
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
@@ -29,4 +31,3 @@ jobs:
           name: MacaquitoScanner-Windows-x64
           path: dist/MacaquitoScanner.exe
           if-no-files-found: error
-
