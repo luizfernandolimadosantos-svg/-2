@@ -135,7 +135,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int){
    ImGui::SameLine();if(ImGui::Button("Cancel",ImVec2(120,0)))ImGui::CloseCurrentPopup();
    ImGui::EndPopup();
   }
-  ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),ImGui::GetWindowHeight()-35.f));ImGui::Separator();ImGui::TextDisabled("%s",status.c_str());
+ImGui::SetCursorPosY((std::max)(ImGui::GetCursorPosY(), ImGui::GetWindowHeight() - 35.f)); ImGui::Separator(); ImGui::TextDisabled("%s", status.c_str());
   ImGui::End();
   ImGui::Render();const float clear[4]={.065f,.070f,.083f,1};context->OMSetRenderTargets(1,&target,nullptr);context->ClearRenderTargetView(target,clear);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());swapchain->Present(1,0);
  }
