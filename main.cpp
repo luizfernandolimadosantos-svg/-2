@@ -1,121 +1,140 @@
-#define UNICODE
-#define _UNICODE
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tlhelp32.h>
-#include <commctrl.h>
+#include <d3d11.h>
 #include <string>
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <algorithm>
 #include <chrono>
-#include <iomanip>
-#include <sstream>
-#pragma comment(lib, "comctl32.lib")
+#include "imgui.h"
+#include "imgui_impl_win32.h"
+#include "imgui_impl_dx11.h"
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "shell32.lib")
 
-struct ProcessInfo { DWORD pid; std::wstring name, path, status; };
-static HWND gList=nullptr, gStatus=nullptr, gButton=nullptr;
-static std::vector<ProcessInfo> gProcesses;
-
-static std::wstring csvEscape(const std::wstring& s) {
-    std::wstring r=L"\"";
-    for(wchar_t c:s) { if(c==L'"') r+=L'"'; r+=c; }
-    return r+L"\"";
+static ID3D11Device* device=nullptr;
+static ID3D11DeviceContext* context=nullptr;
+static IDXGISwapChain* swapchain=nullptr;
+static ID3D11RenderTargetView* target=nullptr;
+static bool resized=false;
+static UINT newWidth=0,newHeight=0;
+static void CreateTarget(){ID3D11Texture2D* back=nullptr;if(SUCCEEDED(swapchain->GetBuffer(0,IID_PPV_ARGS(&back)))){device->CreateRenderTargetView(back,nullptr,&target);back->Release();}}
+static void DestroyTarget(){if(target){target->Release();target=nullptr;}}
+static bool CreateDevice(HWND hwnd){
+ DXGI_SWAP_CHAIN_DESC d={};d.BufferCount=2;d.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;d.OutputWindow=hwnd;d.SampleDesc.Count=1;d.Windowed=TRUE;d.SwapEffect=DXGI_SWAP_EFFECT_DISCARD;
+ D3D_FEATURE_LEVEL level;D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_0,D3D_FEATURE_LEVEL_10_0};
+ if(FAILED(D3D11CreateDeviceAndSwapChain(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,levels,2,D3D11_SDK_VERSION,&d,&swapchain,&device,&level,&context)))return false;
+ CreateTarget();return target!=nullptr;
 }
-static void setStatus(const std::wstring& s) { SetWindowTextW(gStatus,s.c_str()); }
-static void scan() {
-    EnableWindow(gButton,FALSE);
-    setStatus(L"Scanning processes...");
-    gProcesses.clear();
-    ListView_DeleteAllItems(gList);
-    HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
-    if(snap==INVALID_HANDLE_VALUE) {
-        setStatus(L"Unable to enumerate processes.");
-        EnableWindow(gButton,TRUE); return;
-    }
-    PROCESSENTRY32W e{}; e.dwSize=sizeof(e);
-    if(Process32FirstW(snap,&e)) {
-        do {
-            ProcessInfo p{e.th32ProcessID,e.szExeFile,L"",L"Unavailable"};
-            HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
-            if(h) {
-                wchar_t buf[32768]; DWORD size=32768;
-                if(QueryFullProcessImageNameW(h,0,buf,&size)) {
-                    p.path.assign(buf,size); p.status=L"OK";
-                } else p.status=L"Access denied or unavailable";
-                CloseHandle(h);
-            } else p.status=L"Access denied or unavailable";
-            gProcesses.push_back(p);
-        } while(Process32NextW(snap,&e));
-    }
-    CloseHandle(snap);
-    for(size_t i=0;i<gProcesses.size();++i) {
-        const auto& p=gProcesses[i];
-        std::wstring pid=std::to_wstring(p.pid);
-        LVITEMW item{}; item.mask=LVIF_TEXT; item.iItem=(int)i;
-        item.pszText=const_cast<wchar_t*>(pid.c_str());
-        int row=ListView_InsertItem(gList,&item);
-        ListView_SetItemText(gList,row,1,const_cast<wchar_t*>(p.name.c_str()));
-        ListView_SetItemText(gList,row,2,const_cast<wchar_t*>(p.path.c_str()));
-        ListView_SetItemText(gList,row,3,const_cast<wchar_t*>(p.status.c_str()));
-    }
-    setStatus(L"Scan completed: "+std::to_wstring(gProcesses.size())+L" processes. No threat classification performed.");
-    EnableWindow(gButton,TRUE);
+static void Cleanup(){DestroyTarget();if(swapchain)swapchain->Release();if(context)context->Release();if(device)device->Release();}
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
+static LRESULT WINAPI WndProc(HWND h,UINT m,WPARAM w,LPARAM l){
+ if(ImGui_ImplWin32_WndProcHandler(h,m,w,l))return true;
+ switch(m){case WM_SIZE:if(w!=SIZE_MINIMIZED){newWidth=LOWORD(l);newHeight=HIWORD(l);resized=true;}return 0;
+ case WM_SYSCOMMAND:if((w&0xfff0)==SC_KEYMENU)return 0;break;
+ case WM_DESTROY:PostQuitMessage(0);return 0;}return DefWindowProcW(h,m,w,l);
 }
-static void exportCsv(HWND owner) {
-    if(gProcesses.empty()) { MessageBoxW(owner,L"Run a scan first.",L"Macaquito Scanner",MB_OK); return; }
-    wchar_t path[MAX_PATH]=L"MacaquitoScanner-processes.csv";
-    OPENFILENAMEW ofn{}; ofn.lStructSize=sizeof(ofn); ofn.hwndOwner=owner;
-    ofn.lpstrFilter=L"CSV files (*.csv)\0*.csv\0All files (*.*)\0*.*\0";
-    ofn.lpstrFile=path; ofn.nMaxFile=MAX_PATH; ofn.lpstrDefExt=L"csv";
-    ofn.Flags=OFN_OVERWRITEPROMPT|OFN_PATHMUSTEXIST;
-    if(!GetSaveFileNameW(&ofn)) return;
-    std::wofstream f{std::filesystem::path(path)};
-    if(!f) { MessageBoxW(owner,L"Could not write report.",L"Error",MB_ICONERROR); return; }
-    f << L"PID,Process,Executable Path,Collection Status\n";
-    for(const auto& p:gProcesses)
-        f << p.pid << L"," << csvEscape(p.name) << L"," << csvEscape(p.path) << L"," << csvEscape(p.status) << L"\n";
-    f.close();
-    MessageBoxW(owner,L"CSV report saved locally.",L"Macaquito Scanner",MB_OK);
+struct Process{DWORD pid;std::wstring name,path;bool accessible;};
+static std::vector<Process> processes;
+static bool scanned=false;
+static std::string status="Ready. Read-only process inspection.";
+static std::string Utf8(const std::wstring& s){if(s.empty())return {};int n=WideCharToMultiByte(CP_UTF8,0,s.c_str(),(int)s.size(),nullptr,0,nullptr,nullptr);std::string o(n,'\0');WideCharToMultiByte(CP_UTF8,0,s.c_str(),(int)s.size(),o.data(),n,nullptr,nullptr);return o;}
+static void Scan(){
+ processes.clear();
+ HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+ if(snap==INVALID_HANDLE_VALUE){status="Failed: Windows process snapshot unavailable.";scanned=false;return;}
+ PROCESSENTRY32W e={};e.dwSize=sizeof(e);
+ if(Process32FirstW(snap,&e))do{
+  Process p={};p.pid=e.th32ProcessID;p.name=e.szExeFile;p.accessible=false;
+  HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
+  if(h){wchar_t path[32768];DWORD size=32768;if(QueryFullProcessImageNameW(h,0,path,&size)){p.path.assign(path,size);p.accessible=true;}CloseHandle(h);}
+  processes.push_back(std::move(p));
+ }while(Process32NextW(snap,&e));
+ CloseHandle(snap);
+ std::sort(processes.begin(),processes.end(),[](auto&a,auto&b){return a.pid<b.pid;});
+ scanned=true;status="Scan completed. Process inventory collected.";
 }
-static LRESULT CALLBACK wndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
-    switch(msg) {
-    case WM_CREATE: {
-        INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&ic);
-        gButton=CreateWindowW(L"BUTTON",L"Start Scan",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,16,16,140,34,hwnd,(HMENU)101,nullptr,nullptr);
-        CreateWindowW(L"BUTTON",L"Export CSV",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,166,16,140,34,hwnd,(HMENU)102,nullptr,nullptr);
-        gStatus=CreateWindowW(L"STATIC",L"Ready. Read-only process inventory.",WS_CHILD|WS_VISIBLE,320,25,680,25,hwnd,nullptr,nullptr,nullptr);
-        gList=CreateWindowW(WC_LISTVIEWW,L"",WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SINGLESEL|WS_BORDER,16,64,960,520,hwnd,(HMENU)103,nullptr,nullptr);
-        ListView_SetExtendedListViewStyle(gList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_GRIDLINES);
-        const wchar_t* names[]={L"PID",L"Process",L"Executable Path",L"Status"};
-        int widths[]={90,190,490,190};
-        for(int i=0;i<4;i++){ LVCOLUMNW c{};c.mask=LVCF_TEXT|LVCF_WIDTH|LVCF_SUBITEM;c.pszText=const_cast<wchar_t*>(names[i]);c.cx=widths[i];c.iSubItem=i;ListView_InsertColumn(gList,i,&c); }
-        return 0;
-    }
-    case WM_SIZE: {
-        int w=LOWORD(lp),h=HIWORD(lp);
-        if(gList) MoveWindow(gList,16,64,(w>32?w-32:0),(h>80?h-80:0),TRUE);
-        if(gStatus) MoveWindow(gStatus,320,25,(w>340?w-340:0),25,TRUE);
-        return 0;
-    }
-    case WM_COMMAND:
-        if(LOWORD(wp)==101) scan();
-        else if(LOWORD(wp)==102) exportCsv(hwnd);
-        return 0;
-    case WM_DESTROY: PostQuitMessage(0);return 0;
-    }
-    return DefWindowProcW(hwnd,msg,wp,lp);
+static std::string Csv(const std::string& s){std::string v="\"";for(char c:s){if(c=='"')v+="\"\"";else if(c!='\r'&&c!='\n')v+=c;}return v+"\"";}
+static void Export(){
+ if(!scanned){status="Run a scan before exporting.";return;}
+ wchar_t exe[MAX_PATH];GetModuleFileNameW(nullptr,exe,MAX_PATH);
+ std::filesystem::path out=std::filesystem::path(exe).parent_path()/L"MacaquitoScanner-processes.csv";
+ std::ofstream f(out,std::ios::binary);
+ if(!f){status="Export failed. Move EXE to a writable folder.";return;}
+ f<<"PID,Process,Executable Path,Status\r\n";
+ for(auto&p:processes)f<<p.pid<<","<<Csv(Utf8(p.name))<<","<<Csv(Utf8(p.path))<<","<<Csv(p.accessible?"Accessible":"Unavailable")<<"\r\n";
+ status="CSV saved beside MacaquitoScanner.exe";
 }
-int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,PWSTR,int show) {
-    const wchar_t* cls=L"MacaquitoScannerProcessInventory";
-    WNDCLASSW wc{};wc.lpfnWndProc=wndProc;wc.hInstance=inst;wc.lpszClassName=cls;
-    wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
-    if(!RegisterClassW(&wc)) return 1;
-    HWND hwnd=CreateWindowExW(0,cls,L"Macaquito Scanner - Process Inventory (Functional Prototype)",WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,CW_USEDEFAULT,1040,680,nullptr,nullptr,inst,nullptr);
-    if(!hwnd) return 2;
-    ShowWindow(hwnd,show);UpdateWindow(hwnd);
-    MSG msg;while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}
-    return (int)msg.wParam;
+static void ApplyStyle(){
+ ImGuiStyle& s=ImGui::GetStyle();s.WindowRounding=10;s.ChildRounding=9;s.FrameRounding=6;s.GrabRounding=5;s.ScrollbarRounding=7;s.WindowPadding=ImVec2(16,16);s.FramePadding=ImVec2(11,8);s.ItemSpacing=ImVec2(10,10);
+ auto& c=s.Colors;c[ImGuiCol_WindowBg]=ImVec4(.065f,.070f,.083f,1);c[ImGuiCol_ChildBg]=ImVec4(.095f,.102f,.12f,1);c[ImGuiCol_PopupBg]=ImVec4(.11f,.12f,.14f,1);c[ImGuiCol_Border]=ImVec4(.20f,.21f,.24f,1);c[ImGuiCol_Text]=ImVec4(.94f,.94f,.96f,1);c[ImGuiCol_TextDisabled]=ImVec4(.55f,.57f,.62f,1);c[ImGuiCol_Button]=ImVec4(.93f,.40f,.12f,1);c[ImGuiCol_ButtonHovered]=ImVec4(1,.48f,.18f,1);c[ImGuiCol_ButtonActive]=ImVec4(.75f,.31f,.08f,1);c[ImGuiCol_Header]=ImVec4(.20f,.22f,.25f,1);c[ImGuiCol_HeaderHovered]=ImVec4(.27f,.28f,.31f,1);c[ImGuiCol_HeaderActive]=ImVec4(.31f,.32f,.35f,1);c[ImGuiCol_FrameBg]=ImVec4(.14f,.15f,.17f,1);c[ImGuiCol_FrameBgHovered]=ImVec4(.19f,.20f,.23f,1);c[ImGuiCol_Separator]=ImVec4(.20f,.21f,.24f,1);c[ImGuiCol_TableHeaderBg]=ImVec4(.15f,.16f,.18f,1);c[ImGuiCol_TableRowBg]=ImVec4(.095f,.102f,.12f,1);c[ImGuiCol_TableRowBgAlt]=ImVec4(.12f,.13f,.15f,1);c[ImGuiCol_CheckMark]=ImVec4(1,.52f,.2f,1);
+}
+int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int){
+ WNDCLASSEXW wc={sizeof(wc),CS_CLASSDC,WndProc,0,0,instance,nullptr,nullptr,nullptr,nullptr,L"MacaquitoScanner",nullptr};RegisterClassExW(&wc);
+ HWND hwnd=CreateWindowW(wc.lpszClassName,L"Macaquito Scanner V38 - System Inspection",WS_OVERLAPPEDWINDOW,100,90,1150,740,nullptr,nullptr,instance,nullptr);
+ if(!CreateDevice(hwnd)){MessageBoxW(nullptr,L"DirectX 11 initialization failed.",L"Macaquito Scanner",MB_OK|MB_ICONERROR);DestroyWindow(hwnd);UnregisterClassW(wc.lpszClassName,instance);return 1;}
+ ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
+ IMGUI_CHECKVERSION();ImGui::CreateContext();ImGuiIO& io=ImGui::GetIO();io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;ApplyStyle();
+ ImGui_ImplWin32_Init(hwnd);ImGui_ImplDX11_Init(device,context);
+ int page=0;bool confirm=false;bool showUnavailable=true;bool done=false;
+ while(!done){
+  MSG msg;while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessageW(&msg);if(msg.message==WM_QUIT)done=true;}
+  if(done)break;
+  if(resized&&newWidth&&newHeight){DestroyTarget();swapchain->ResizeBuffers(0,newWidth,newHeight,DXGI_FORMAT_UNKNOWN,0);CreateTarget();resized=false;}
+  ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
+  ImGuiViewport* vp=ImGui::GetMainViewport();ImGui::SetNextWindowPos(vp->WorkPos);ImGui::SetNextWindowSize(vp->WorkSize);
+  ImGui::Begin("##app",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
+  ImGui::TextColored(ImVec4(1,.49f,.18f,1),"MACAQUITO");ImGui::SameLine();ImGui::Text("SCANNER");ImGui::SameLine();ImGui::TextDisabled("  V38  |  LOCAL SYSTEM INSPECTION");
+  ImGui::Separator();
+  const char* tabs[]={"Dashboard","Inspection","Results","Settings"};
+  for(int i=0;i<4;i++){if(i)ImGui::SameLine();if(ImGui::Selectable(tabs[i],page==i,0,ImVec2(130,32)))page=i;}
+  ImGui::Separator();ImGui::Spacing();
+  if(page==0){
+   ImGui::TextDisabled("SYSTEM STATUS");ImGui::Text("Ready to Inspect");ImGui::TextDisabled("Read-only Windows process inventory. No automatic threat verdicts.");
+   ImGui::Spacing();
+   if(ImGui::Button("Start Full Scan",ImVec2(240,46))){if(confirm)ImGui::OpenPopup("Confirm Inspection");else{Scan();page=2;}}
+   ImGui::Spacing();ImGui::Text("Processes: %zu",processes.size());ImGui::Text("Inspection module: Process Inventory");ImGui::TextDisabled("File Integrity / USB Review / FiveM Integrity: Not implemented");
+  }else if(page==1){
+   ImGui::Text("Inspection");ImGui::TextDisabled("Available module: Process Inventory");
+   if(ImGui::Button("Start Scan",ImVec2(180,40))){if(confirm)ImGui::OpenPopup("Confirm Inspection");else{Scan();page=2;}}
+   ImGui::TextWrapped("This scan lists running processes and accessible executable paths. It does not read private files or send data.");
+  }else if(page==2){
+   ImGui::Text("Scan Completed");ImGui::SameLine();ImGui::TextDisabled(scanned?"- process inventory":"- no scan performed");
+   ImGui::Text("Processes: %zu",processes.size());ImGui::SameLine();ImGui::TextDisabled("Findings: Not evaluated");
+   if(ImGui::Button("Export CSV",ImVec2(150,36)))Export();
+   ImGui::SameLine();ImGui::Checkbox("Show unavailable paths",&showUnavailable);
+   if(ImGui::BeginTabBar("results")){
+    if(ImGui::BeginTabItem("Findings")){
+     ImGui::TextDisabled("No threat detection rules are implemented. Processes below are inventory, not findings.");
+     if(ImGui::BeginTable("processes",4,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-8))){
+      ImGui::TableSetupScrollFreeze(0,1);ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,80);ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthFixed,200);ImGui::TableSetupColumn("Executable Path");ImGui::TableSetupColumn("Status",ImGuiTableColumnFlags_WidthFixed,115);ImGui::TableHeadersRow();
+      for(auto&p:processes){if(!showUnavailable&&!p.accessible)continue;ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(Utf8(p.name).c_str());ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(p.accessible?Utf8(p.path).c_str():"Unavailable");ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(p.accessible?"Done":"Partial");}
+      ImGui::EndTable();
+     }ImGui::EndTabItem();
+    }
+    if(ImGui::BeginTabItem("USB Review")){ImGui::TextDisabled("Not implemented yet.");ImGui::EndTabItem();}
+    if(ImGui::BeginTabItem("Modules")){ImGui::BulletText("Process Inventory - Available");ImGui::BulletText("Other inspection modules - Planned");ImGui::EndTabItem();}
+    ImGui::EndTabBar();
+   }
+  }else{
+   ImGui::Text("Settings");ImGui::Separator();ImGui::Checkbox("Confirm before scanning",&confirm);ImGui::Checkbox("Show unavailable process paths",&showUnavailable);
+   ImGui::TextDisabled("Theme: Carbon Ember");ImGui::TextDisabled("Scan mode: Read-only");ImGui::TextDisabled("Network uploads: None");
+   ImGui::TextDisabled("Settings apply during this session only.");
+  }
+  if(ImGui::BeginPopupModal("Confirm Inspection",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+   ImGui::TextWrapped("Inspect running processes on this PC? No files will be modified.");
+   if(ImGui::Button("Start",ImVec2(120,0))){Scan();page=2;ImGui::CloseCurrentPopup();}
+   ImGui::SameLine();if(ImGui::Button("Cancel",ImVec2(120,0)))ImGui::CloseCurrentPopup();
+   ImGui::EndPopup();
+  }
+  ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(),ImGui::GetWindowHeight()-35.f));ImGui::Separator();ImGui::TextDisabled("%s",status.c_str());
+  ImGui::End();
+  ImGui::Render();const float clear[4]={.065f,.070f,.083f,1};context->OMSetRenderTargets(1,&target,nullptr);context->ClearRenderTargetView(target,clear);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());swapchain->Present(1,0);
+ }
+ ImGui_ImplDX11_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();Cleanup();DestroyWindow(hwnd);UnregisterClassW(wc.lpszClassName,instance);return 0;
 }
