@@ -1,32 +1,41 @@
-name: Build Macaquito Scanner V38
+name: Build Macaquito Scanner V47
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
-  build:
+  windows-build:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Configure MSVC x64
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+
       - name: Download Dear ImGui
-        shell: cmd
+        shell: pwsh
         run: |
-          git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git vendor\imgui
-      - name: Compile
+          git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git imgui
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Compile Windows application
         shell: cmd
         run: |
           if not exist dist mkdir dist
-          cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE /Ivendor\imgui /Ivendor\imgui\backends main.cpp vendor\imgui\imgui.cpp vendor\imgui\imgui_draw.cpp vendor\imgui\imgui_tables.cpp vendor\imgui\imgui_widgets.cpp vendor\imgui\backends\imgui_impl_win32.cpp vendor\imgui\backends\imgui_impl_dx11.cpp /link d3d11.lib dxgi.lib user32.lib gdi32.lib shell32.lib /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /OUT:dist\MacaquitoScanner.exe
-      - name: Upload EXE
+          cl /nologo /std:c++20 /EHsc /utf-8 /W3 /O2 /DNOMINMAX /DUNICODE /D_UNICODE /Iimgui /Iimgui\backends main.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp /Fe:dist\MacaquitoScanner.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib d3d11.lib dxgi.lib comdlg32.lib wintrust.lib crypt32.lib bcrypt.lib
+
+      - name: Generate release SHA-256
+        shell: pwsh
+        run: |
+          (Get-FileHash dist\MacaquitoScanner.exe -Algorithm SHA256).Hash | Set-Content dist\MacaquitoScanner.sha256.txt
+          Get-Content dist\MacaquitoScanner.sha256.txt
+
+      - name: Upload executable and hash
         uses: actions/upload-artifact@v4
         with:
-          name: MacaquitoScanner-V38-Windows-x64
-          path: dist/MacaquitoScanner.exe
-          if-no-files-found: error
+          name: MacaquitoScanner-V47-Windows
+          path: dist/*
