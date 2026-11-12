@@ -316,7 +316,7 @@ static void exportCsv() {
         out<<"Process,"<<p.pid<<","<<p.parent<<","<<csvQuote(utf8(p.name))<<","
            <<csvQuote(utf8(p.path))<<",,\n";
     for(const auto& r:records)
-        out<<csvQuote(r.category)<<",,,"<<csvQuote(r.name)<<","<<csvQuote(r.detail)<<",,\\n";
+        out<<csvQuote(r.category)<<",,,"<<csvQuote(r.name)<<","<<csvQuote(r.detail)<<",,\n";
     for(const auto& f:files)
         out<<"File,,,"<<csvQuote(utf8(fs::path(f.path).filename().wstring()))<<","
            <<csvQuote(utf8(f.path))<<","<<csvQuote(f.hash)<<","<<csvQuote(f.signature)<<"\n";
@@ -386,126 +386,249 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     }
     return DefWindowProcW(h,msg,w,l);
 }
+
+static ImVec4 orange(){return ImVec4(.98f,.43f,.15f,1.f);}
 static void applyTheme() {
     ImGui::StyleColorsDark();
-    auto& s=ImGui::GetStyle();
-    s.WindowRounding=10;s.FrameRounding=6;s.ChildRounding=8;
-    s.GrabRounding=6;s.WindowPadding=ImVec2(16,16);
-    s.ItemSpacing=ImVec2(10,10);
-    auto& c=s.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.055f,.060f,.075f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.095f,.105f,.125f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.15f,.16f,.19f,1);
-    c[ImGuiCol_Button]=ImVec4(.90f,.37f,.12f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(1,.48f,.19f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.78f,.29f,.09f,1);
-    c[ImGuiCol_Header]=ImVec4(.31f,.20f,.16f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.50f,.25f,.14f,1);
-    c[ImGuiCol_CheckMark]=ImVec4(1,.52f,.23f,1);
-    c[ImGuiCol_Tab]=ImVec4(.13f,.14f,.17f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.80f,.36f,.14f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.55f,.25f,.12f,1);
+    ImGuiStyle& st=ImGui::GetStyle();
+    st.WindowRounding=0; st.ChildRounding=12; st.FrameRounding=7;
+    st.PopupRounding=9; st.ScrollbarRounding=9;
+    st.WindowPadding=ImVec2(18,18);st.FramePadding=ImVec2(11,8);
+    st.ItemSpacing=ImVec2(11,10);st.ItemInnerSpacing=ImVec2(9,6);
+    st.ScrollbarSize=11;
+    auto& c=st.Colors;
+    c[ImGuiCol_WindowBg]=ImVec4(.047f,.052f,.066f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.080f,.088f,.109f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.105f,.115f,.140f,1);
+    c[ImGuiCol_Border]=ImVec4(.18f,.20f,.24f,1);
+    c[ImGuiCol_Text]=ImVec4(.94f,.95f,.97f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.57f,.60f,.66f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.14f,.15f,.19f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.19f,.21f,.26f,1);
+    c[ImGuiCol_Button]=ImVec4(.16f,.18f,.22f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.24f,.26f,.31f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.29f,.31f,.37f,1);
+    c[ImGuiCol_Header]=ImVec4(.18f,.20f,.25f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.24f,.26f,.32f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.28f,.30f,.36f,1);
+    c[ImGuiCol_CheckMark]=orange();
+    c[ImGuiCol_SliderGrab]=orange();
+    c[ImGuiCol_Tab]=ImVec4(.12f,.14f,.18f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(.27f,.20f,.17f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.29f,.19f,.14f,1);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.12f,.13f,.16f,.55f);
 }
-static void textDim(const char* s) {ImGui::TextDisabled("%s",s);}
+static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.96f,.39f,.11f,1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1,.49f,.19f,1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.83f,.30f,.07f,1));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.08f,.08f,.10f,1));
+    bool clicked=ImGui::Button(text,size);
+    ImGui::PopStyleColor(4);
+    return clicked;
+}
+static void sectionTitle(const char* title,const char* description=nullptr) {
+    ImGui::TextColored(orange(),"%s",title);
+    if(description)ImGui::TextDisabled("%s",description);
+    ImGui::Spacing();
+}
+static void metric(const char* label,const std::string& value,float width) {
+    ImGui::BeginChild(label,ImVec2(width,94),ImGuiChildFlags_Borders);
+    ImGui::TextDisabled("%s",label);
+    ImGui::SetWindowFontScale(1.35f);
+    ImGui::Text("%s",value.c_str());
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::EndChild();
+}
+static const char* stateText() {
+    if(scanning)return cancelRequested?"Cancelling...":"Scanning";
+    if(done)return "Completed";
+    return "Ready";
+}
+static const char* stages[]={"Preparing","Processes","Services & Drivers","Startup Entries","Network Connections","Finalizing"};
+static void modulesList() {
+    struct Module {const char* name;const char* detail;bool available;};
+    static const Module items[]={
+        {"Processes & Privileges","Process inventory, parent IDs and accessible paths",true},
+        {"Memory Integrity","Memory analysis is not implemented",false},
+        {"Injection Indicators","Advanced injection checks are not implemented",false},
+        {"Hooks & Interception","Hook verification is not implemented",false},
+        {"Kernel & Drivers","Service and driver inventory",true},
+        {"Persistence & Boot","Run / RunOnce entries and services",true},
+        {"Network & Firewall","TCP IPv4 connections; firewall analysis unavailable",true},
+        {"Hardware & USB","USB history is not implemented",false},
+        {"Execution Forensics","Prefetch, Amcache and event analysis unavailable",false},
+        {"Files & Signatures","Manual SHA-256 and offline Authenticode checks",true},
+        {"FiveM Integrity","Reference-manifest verification unavailable",false},
+        {"Evidence Correlation","Cross-source correlation unavailable",false}
+    };
+    for(const auto& m:items) {
+        ImGui::PushID(m.name);
+        ImGui::BeginChild("module",ImVec2(0,66),ImGuiChildFlags_Borders);
+        ImGui::Text("%s",m.name);
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x>150?ImGui::GetWindowWidth()-125:0);
+        ImGui::TextColored(m.available?ImVec4(.45f,.78f,.59f,1):ImVec4(.69f,.70f,.75f,1),
+                           "%s",m.available?"AVAILABLE":"UNAVAILABLE");
+        ImGui::TextDisabled("%s",m.detail);
+        ImGui::EndChild();
+        ImGui::PopID();
+    }
+}
+static void processTable(float height) {
+    ImGui::InputTextWithHint("##search","Search processes or paths...",searchInput,sizeof(searchInput));
+    ImGui::SameLine();ImGui::Checkbox("Show inaccessible paths",&showUnavailable);
+    if(ImGui::BeginTable("processes",4,ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
+        ImVec2(0,height))) {
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
+        ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,75);
+        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthFixed,190);
+        ImGui::TableSetupColumn("Executable path");
+        ImGui::TableHeadersRow();
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& p:processes) {
+            if(!showUnavailable&&p.path==L"Unavailable")continue;
+            auto name=utf8(p.name),path=utf8(p.path);
+            std::string combined=name+" "+path,q=searchInput;
+            std::transform(combined.begin(),combined.end(),combined.begin(),[](unsigned char c){return (char)tolower(c);});
+            std::transform(q.begin(),q.end(),q.begin(),[](unsigned char c){return (char)tolower(c);});
+            if(combined.find(q)==std::string::npos)continue;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
+            ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
+            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
+            ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
+        }
+        ImGui::EndTable();
+    }
+}
+static void recordsTable() {
+    if(ImGui::BeginTable("records",3,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,370))) {
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110);
+        ImGui::TableSetupColumn("Name",ImGuiTableColumnFlags_WidthFixed,230);
+        ImGui::TableSetupColumn("Details");
+        ImGui::TableHeadersRow();
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& r:records) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.detail.c_str());
+        }
+        ImGui::EndTable();
+    }
+}
 static void renderUI() {
-    const ImGuiViewport* vp=ImGui::GetMainViewport();
+    ImGuiViewport* vp=ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin("Macaquito Scanner",nullptr,ImGuiWindowFlags_NoDecoration|
-                 ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextColored(ImVec4(1,.52f,.23f,1),"MACAQUITO SCANNER");
-    ImGui::SameLine();ImGui::TextDisabled("V48  |  Developer: Mudin  |  %s",isAdministrator()?"Administrator":"Standard User");
-    ImGui::Separator();
-    const char* tabs[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
+    ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+    const float sidebar=210.f;
+    ImGui::BeginChild("##sidebar",ImVec2(sidebar,0),ImGuiChildFlags_None);
+    ImGui::Dummy(ImVec2(0,8));
+    ImGui::TextColored(orange(),"MACAQUITO");
+    ImGui::Text("SCANNER");
+    ImGui::TextDisabled("Developer: Mudin");
+    ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+    const char* names[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
     for(int i=0;i<6;i++) {
-        if(i) ImGui::SameLine();
-        if(ImGui::Button(tabs[i],ImVec2(i==5?140:110,34))) page=i;
-    }
-    ImGui::Separator();
-    if(page==0) {
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1,.52f,.23f,1),"INSPECTION CENTER");
-        ImGui::SetWindowFontScale(1.5f);ImGui::TextUnformatted("Ready to Inspect");
-        ImGui::SetWindowFontScale(1.f);
-        textDim("One full scan. Available modules run automatically.");
-        ImGui::Spacing();
-        if(ImGui::Button("Start Full Scan",ImVec2(240,48))) ImGui::OpenPopup("Confirm Inspection");
-        ImGui::Spacing();
-        ImGui::Text("Process inventory: %zu",processes.size());
-        ImGui::Text("Files checked: %zu",files.size());
-        ImGui::Text("System records: %zu",records.size());
-        textDim("Real: processes, services, drivers, startup entries, TCP connections, manual file integrity.");
-        textDim("Other forensic modules remain planned; no fabricated detections.");
-    } else if(page==1) {
-        ImGui::Text("Inspection Status: %s",scanning?"Running":done?"Completed":"Ready");
-        if(scanning) {
-            const char* labels[]={"Starting","Processes","Services and drivers","Startup entries","TCP connections","Completed"};
-            int i=(std::min)(stage.load(),5);
-            ImGui::Text("Current stage: %s",labels[i]);
-            ImGui::ProgressBar(i/5.f,ImVec2(-1,18));
-            if(ImGui::Button("Cancel Scan"))cancelRequested=true;
+        ImGui::PushID(i);
+        if(page==i) {
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.35f,.20f,.14f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,.57f,.30f,1));
         }
-        if(!scanning && ImGui::Button("Start Full Scan",ImVec2(220,40)))
-            ImGui::OpenPopup("Confirm Inspection");
+        if(ImGui::Button(names[i],ImVec2(-1,43)))page=i;
+        if(page==i)ImGui::PopStyleColor(2);
+        ImGui::PopID();
+    }
+    ImGui::Dummy(ImVec2(0,22));
+    ImGui::Separator();
+    ImGui::TextDisabled("SYSTEM ACCESS");
+    ImGui::TextColored(isAdministrator()?ImVec4(.43f,.81f,.60f,1):ImVec4(1,.65f,.36f,1),
+                       "%s",isAdministrator()?"Administrator":"Standard User");
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##main",ImVec2(0,0),ImGuiChildFlags_None);
+    ImGui::TextColored(orange(),"MACAQUITO SCANNER");
+    ImGui::SameLine();ImGui::TextDisabled(" /  %s",names[page]);
+    ImGui::Separator();ImGui::Dummy(ImVec2(0,8));
+    float available=ImGui::GetContentRegionAvail().x;
+    float metricWidth=(available-24.f)/3.f;
+    if(page==0) {
+        sectionTitle("SYSTEM OVERVIEW","Comprehensive read-only system inspection");
+        ImGui::BeginChild("hero",ImVec2(0,183),ImGuiChildFlags_Borders);
+        ImGui::TextDisabled("INSPECTION CENTER");
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::Text("%s",scanning?"Inspection in Progress":done?"Inspection Completed":"Ready for Inspection");
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::TextDisabled("All available modules. One complete workflow.");
+        ImGui::Spacing();
+        if(!scanning) {
+            if(accentButton("Start Full Scan",ImVec2(225,46)))ImGui::OpenPopup("Confirm Inspection");
+        } else {
+            if(ImGui::Button("View Inspection",ImVec2(225,46)))page=1;
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        metric("Processes",std::to_string(processes.size()),metricWidth);
+        ImGui::SameLine();
+        metric("System Records",std::to_string(records.size()),metricWidth);
+        ImGui::SameLine();
+        metric("Files Verified",std::to_string(files.size()),metricWidth);
+        ImGui::Spacing();
+        sectionTitle("INSPECTION COVERAGE","Real collection status; no fabricated findings");
+        ImGui::BeginChild("coverage",ImVec2(0,0),ImGuiChildFlags_Borders);
+        ImGui::Text("Current status: %s",stateText());
         ImGui::Separator();
-        ImGui::TextUnformatted("Implemented");
-        ImGui::BulletText("Process inventory and process paths");
-        ImGui::BulletText("SHA-256 file hashing (manual file selection)");
-        ImGui::BulletText("Authenticode verification (offline)");
-        ImGui::BulletText("CSV report export");
-        ImGui::BulletText("Service and driver inventory");
-        ImGui::BulletText("Run / RunOnce startup entries");
-        ImGui::BulletText("TCP IPv4 connection inventory");
-        ImGui::Separator();
-        ImGui::TextUnformatted("Planned / not collected in this build");
-        ImGui::BulletText("Memory, injection indicators and hooks");
-        ImGui::BulletText("Advanced persistence, network, USB and execution forensics");
-        ImGui::BulletText("FiveM reference integrity and evidence correlation");
+        ImGui::TextDisabled("Available: Processes, Services, Drivers, Startup, TCP IPv4, Manual File Integrity");
+        ImGui::TextDisabled("Unavailable: Memory, Hooks, USB history, Execution forensics, FiveM reference checks");
+        if(ImGui::Button("Browse Inspection Modules"))page=1;
+        ImGui::EndChild();
+    } else if(page==1) {
+        sectionTitle("SYSTEM INSPECTION","Live collection status and module availability");
+        ImGui::BeginChild("inspectionCard",ImVec2(0,scanning?160:126),ImGuiChildFlags_Borders);
+        ImGui::Text("Status: %s",stateText());
+        if(scanning) {
+            int idx=(std::min)(stage.load(),5);
+            ImGui::TextDisabled("Current stage: %s",stages[idx]);
+            ImGui::ProgressBar(idx/5.f,ImVec2(-1,15));
+            if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
+        } else {
+            ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
+            if(accentButton("Start Full Scan",ImVec2(210,42)))ImGui::OpenPopup("Confirm Inspection");
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
+        sectionTitle("MODULE COVERAGE","12 inspection categories preserved");
+        modulesList();
     } else if(page==2) {
-        ImGui::TextUnformatted(done?"Scan Completed":"Inspection Results");
-        if(ImGui::Button("Export CSV",ImVec2(160,36))) exportCsv();
-        ImGui::SameLine();ImGui::Checkbox("Show unavailable paths",&showUnavailable);
+        sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
+                     "Inventory is not a threat finding. No automated threat rules are enabled.");
+        if(ImGui::Button("Export CSV",ImVec2(135,38)))exportCsv();
+        ImGui::SameLine();ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
+                          processes.size(),records.size(),files.size());
+        ImGui::Spacing();
         if(ImGui::BeginTabBar("results")) {
             if(ImGui::BeginTabItem("Findings")) {
-                textDim("No threat detection rules are enabled. Inventory is not a finding.");
-                ImGui::InputTextWithHint("##search","Search process name or path",searchInput,sizeof(searchInput));
-                if(ImGui::BeginTable("processes",4,ImGuiTableFlags_Borders|
-                    ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
-                    ImVec2(0,300))) {
-                    ImGui::TableSetupScrollFreeze(0,1);
-                    ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,70);
-                    ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,70);
-                    ImGui::TableSetupColumn("Process");
-                    ImGui::TableSetupColumn("Path");
-                    ImGui::TableHeadersRow();
-                    std::lock_guard<std::mutex> lock(dataMutex);
-                    for(const auto& p:processes) {
-                        if(!showUnavailable && p.path==L"Unavailable")continue;
-                        auto name=utf8(p.name),path=utf8(p.path);
-                        std::string combined=name+" "+path;
-                        std::string q=searchInput;
-                        std::transform(combined.begin(),combined.end(),combined.begin(),[](unsigned char c){return (char)tolower(c);});
-                        std::transform(q.begin(),q.end(),q.begin(),[](unsigned char c){return (char)tolower(c);});
-                        if(combined.find(q)==std::string::npos)continue;
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
-                        ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
-                        ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
-                        ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
-                    }
-                    ImGui::EndTable();
-                }
+                ImGui::TextDisabled("No threat classification is implemented. Process inventory:");
+                processTable(370);
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("File Integrity")) {
-                ImGui::InputText("File path",fileInput,sizeof(fileInput));
+                ImGui::InputTextWithHint("##file","Select a file to verify...",fileInput,sizeof(fileInput));
                 ImGui::SameLine();if(ImGui::Button("Browse"))chooseFile();
-                if(ImGui::Button("Verify SHA-256 + Signature"))inspectSelectedFile();
-                if(ImGui::BeginTable("files",3,ImGuiTableFlags_Borders|
-                    ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
-                    ImVec2(0,250))) {
-                    ImGui::TableSetupColumn("File");ImGui::TableSetupColumn("SHA-256");
-                    ImGui::TableSetupColumn("Signature");ImGui::TableHeadersRow();
+                if(accentButton("Calculate SHA-256 + Verify Signature"))inspectSelectedFile();
+                if(ImGui::BeginTable("files",3,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,310))) {
+                    ImGui::TableSetupColumn("File",ImGuiTableColumnFlags_WidthStretch,2);
+                    ImGui::TableSetupColumn("SHA-256",ImGuiTableColumnFlags_WidthStretch,2);
+                    ImGui::TableSetupColumn("Signature",ImGuiTableColumnFlags_WidthStretch,2);
+                    ImGui::TableHeadersRow();
                     std::lock_guard<std::mutex> lock(dataMutex);
                     for(const auto& f:files) {
                         ImGui::TableNextRow();
@@ -518,85 +641,85 @@ static void renderUI() {
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("System Inventory")) {
-                if(ImGui::BeginTable("records",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
-                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,330))) {
-                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,100);
-                    ImGui::TableSetupColumn("Name");
-                    ImGui::TableSetupColumn("Details");
-                    ImGui::TableHeadersRow();
-                    std::lock_guard<std::mutex> lock(dataMutex);
-                    for(const auto& r:records) {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
-                        ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
-                        ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
-                    }
-                    ImGui::EndTable();
-                }
-                ImGui::EndTabItem();
+                recordsTable();ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("USB Review")) {
-                textDim("Not implemented in this build.");ImGui::EndTabItem();
+                ImGui::TextDisabled("USB forensics is unavailable in this build.");
+                ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Modules")) {
-                textDim("Processes, services, drivers, startup, TCP and manual file verification: available.");
-                textDim("Memory, hooks, USB, execution history, FiveM reference and correlation: not implemented.");
-                ImGui::EndTabItem();
+                modulesList();ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
         }
     } else if(page==3) {
-        ImGui::TextUnformatted("Execution Timeline");
-        textDim("Timeline correlation is planned; no events have been collected.");
+        sectionTitle("EXECUTION TIMELINE","Chronological correlation of Windows evidence");
+        ImGui::BeginChild("timeline",ImVec2(0,210),ImGuiChildFlags_Borders);
+        ImGui::TextDisabled("NOT AVAILABLE");
+        ImGui::TextWrapped("Prefetch, Amcache, event log and USB timeline collection are not implemented.");
+        ImGui::TextWrapped("The scanner will not generate synthetic events or timestamps.");
+        ImGui::EndChild();
     } else if(page==4) {
-        ImGui::TextUnformatted("Settings");
-        textDim("Single Full Scan workflow. No Quick / Standard / Deep modes.");
-        textDim("Read-only collection; offline signature validation.");
-        textDim("The current prototype does not persist preferences.");
-    } else if(page==5) {
-        ImGui::TextUnformatted("Digital Identity Center");
+        sectionTitle("SETTINGS","Single full inspection. No scan profiles.");
+        ImGui::BeginChild("settings",ImVec2(0,230),ImGuiChildFlags_Borders);
+        ImGui::Text("Detection");
+        ImGui::TextDisabled("Offline Authenticode verification and read-only inventory.");
         ImGui::Separator();
-        ImGui::Text("Application: Macaquito Scanner");
-        ImGui::Text("Developer: Mudin");
-        ImGui::Text("Publisher (display): Mudin");
-        ImGui::Text("Version: V48");
-        ImGui::Text("Privilege: %s",isAdministrator()?"Administrator":"Standard User");
-        ImGui::Text("Executable: %s",utf8(executablePath()).c_str());
-        if(ImGui::Button("Verify This Executable",ImVec2(240,38))) {
+        ImGui::Text("Privacy");
+        ImGui::TextDisabled("Results are collected locally. CSV export is manual.");
+        ImGui::Separator();
+        ImGui::Text("Performance");
+        ImGui::TextDisabled("System inventory runs in a background worker.");
+        ImGui::EndChild();
+    } else if(page==5) {
+        sectionTitle("DIGITAL IDENTITY","Application integrity and developer information");
+        ImGui::BeginChild("identity",ImVec2(0,270),ImGuiChildFlags_Borders);
+        ImGui::Text("Application       Macaquito Scanner");
+        ImGui::Text("Developer         Mudin");
+        ImGui::Text("Publisher         Mudin (display name)");
+        ImGui::Text("Privileges        %s",isAdministrator()?"Administrator":"Standard User");
+        ImGui::TextWrapped("Executable: %s",utf8(executablePath()).c_str());
+        ImGui::Separator();
+        if(accentButton("Verify This Executable",ImVec2(240,43))) {
             try {
                 auto r=inspectFile(executablePath());
                 std::lock_guard<std::mutex> lock(dataMutex);
-                files.push_back(r);
-                status="Self verification recorded under Results > File Integrity";
-            } catch(...) {status="Self verification failed";}
+                files.push_back(std::move(r));
+                status="Executable verification recorded in Results > File Integrity";
+            } catch(...) {status="Executable verification failed";}
         }
-        textDim("Self-signed certificates are not automatically trusted by other PCs.");
-        textDim("A publicly trusted signature requires a code-signing certificate.");
+        ImGui::TextDisabled("A self-signed certificate is not publicly trusted by default.");
+        ImGui::EndChild();
     }
     if(ImGui::BeginPopupModal("Confirm Inspection",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Inspect running processes on this PC? No files will be modified.");
-        if(ImGui::Button("Start",ImVec2(120,0))) {
+        ImGui::TextWrapped("Inspect accessible Windows sources on this PC?");
+        ImGui::TextDisabled("Read-only. No files or settings will be modified.");
+        if(accentButton("Start Inspection",ImVec2(155,40))) {
             startScan();page=1;ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if(ImGui::Button("Cancel",ImVec2(120,0)))ImGui::CloseCurrentPopup();
+        if(ImGui::Button("Cancel",ImVec2(120,40)))ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
-    ImGui::Separator();
-    ImGui::TextDisabled("%s",status.c_str());
+    ImGui::EndChild();
     ImGui::End();
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,nullptr,nullptr,nullptr,nullptr,
-                  L"MacaquitoScannerV48",nullptr};
+                  L"MacaquitoScanner",nullptr};
     RegisterClassExW(&wc);
-    hwnd=CreateWindowW(wc.lpszClassName,L"Macaquito Scanner V48 - Mudin",
+    hwnd=CreateWindowW(wc.lpszClassName,L"Macaquito Scanner - Mudin",
                        WS_OVERLAPPEDWINDOW,100,100,1200,780,nullptr,nullptr,inst,nullptr);
     if(!hwnd || !initD3D(hwnd))return 1;
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
     IMGUI_CHECKVERSION();ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     applyTheme();
+    // Use Windows' modern UI font when available; fallback to the built-in font.
+    ImGuiIO& io=ImGui::GetIO();
+    ImFontConfig fontCfg{};
+    fontCfg.OversampleH=2;
+    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf",17.f,&fontCfg);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(device,context);
     MSG msg{};
