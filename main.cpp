@@ -1828,6 +1828,41 @@ static std::vector<Record> inspectFirmwareAndDmaIndicators(){
     return out;
 }
 
+
+// FiveM safe test harness: inspect ONLY a dedicated temporary marker directory.
+// These findings prove the test pipeline works; they do NOT imply real malware.
+static std::vector<Record> inspectFiveMSafeTestMarkers(){
+    std::vector<Record> result;
+    wchar_t temp[MAX_PATH]={};
+    DWORD len=GetTempPathW(MAX_PATH,temp);
+    if(!len || len>=MAX_PATH)return result;
+    const fs::path root=fs::path(temp)/L"SyncPCChecker-FiveM-SafeTest";
+    struct Marker {const wchar_t* filename;const char* label;const char* id;};
+    const Marker markers[]={
+        {L"injector-indicator.txt","FiveM injector indicator","FIVEM-TEST-001"},
+        {L"credential-theft-indicator.txt","Credential theft indicator","FIVEM-TEST-002"},
+        {L"startup-persistence-indicator.txt","Persistence indicator","FIVEM-TEST-003"},
+        {L"network-c2-indicator.txt","Command-and-control indicator","FIVEM-TEST-004"},
+    };
+    for(const auto& marker:markers){
+        if(cancelRequested)break;
+        std::error_code ec;
+        const fs::path path=root/marker.filename;
+        if(!fs::is_regular_file(path,ec) || ec)continue;
+        if(fs::file_size(path,ec)>4096 || ec)continue;
+        std::ifstream in(path,std::ios::binary);
+        if(!in)continue;
+        std::string contents((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+        const std::string expected=std::string("SYNCPC_FIVEM_SAFE_TEST_V1|")+marker.id;
+        if(contents.find(expected)==std::string::npos)continue;
+        result.push_back({"FiveM Safe Test",marker.label,
+            std::string(marker.id)+" | DETECTED TEST MARKER ONLY | "
+            "Simulated evidence, NOT an actual malware detection"});
+    }
+    return result;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -1859,6 +1894,7 @@ static void scanWorker() {
         auto security=inspectWindowsSecurityConfiguration();
         auto policyRules=inspectPolicyRuleSet();
         auto firmwareIndicators=inspectFirmwareAndDmaIndicators();
+        auto fiveMTest=inspectFiveMSafeTestMarkers();
         // Capture-protection diagnostics: inspect only our own window.
         // A protected window is not evidence of malware, and this does not
         // enumerate or bypass other applications' capture settings.
@@ -1897,6 +1933,7 @@ static void scanWorker() {
         services.insert(services.end(),security.begin(),security.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
+        services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
         services.insert(services.end(),ifeo.begin(),ifeo.end());
         services.insert(services.end(),advancedPersistence.begin(),advancedPersistence.end());
         services.insert(services.end(),extendedEndpoint.begin(),extendedEndpoint.end());
