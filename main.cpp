@@ -4023,6 +4023,10 @@ static std::vector<Record> inspectDeepProcessExecutables(
     }
     return findings;
 }
+// Optional presentation hold, never counted as forensic work.
+static constexpr unsigned kMinimumDisplaySeconds=15;
+static std::atomic<unsigned> presentationWaitRemaining{0};
+static std::atomic<bool> presentationHold{false};
 static void scanWorker() {
     try {
         stage=1;
@@ -4323,6 +4327,25 @@ static void scanWorker() {
         }
         stageWorkItems[5]=static_cast<unsigned>(recordCount.load());
         markInspectionStage(6);
+        // The forensic scan has finished. Keep a separate, clearly labeled
+        // presentation countdown; do not change scanElapsedUs or stage timings.
+        const auto actualUs=scanElapsedUs.load();
+        const auto minimumUs=static_cast<unsigned long long>(kMinimumDisplaySeconds)*1000000ULL;
+        if(actualUs<minimumUs){
+            presentationHold=true;
+            const auto until=std::chrono::steady_clock::now()+
+                std::chrono::microseconds(minimumUs-actualUs);
+            while(!cancelRequested){
+                const auto now=std::chrono::steady_clock::now();
+                if(now>=until)break;
+                const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(until-now).count();
+                presentationWaitRemaining=static_cast<unsigned>((remaining+999)/1000);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            presentationWaitRemaining=0;
+            presentationHold=false;
+            if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        }
         done=true;
     } catch(...) {
         scanFailed=true;
@@ -4349,6 +4372,7 @@ static void startScan() {
     processChecksPlanned=0;processChecksCompleted=0;processChecksUnavailable=0;
     processNewPids=0;processExitedPids=0;processSecondSnapshot=0;
     forensicProducedRecords=0;
+    presentationHold=false;presentationWaitRemaining=0;
     deepFilesChecked=0;deepFilesSkipped=0;deepUniquePaths=0;
     sequentialDone=0;sequentialTotal=0;
     setSequentialItem("");
@@ -6862,7 +6886,14 @@ static void renderUI() {
         ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
-            ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
+            if(presentationHold.load()){
+                ImGui::TextColored(accent,"SCAN COMPLETE - RESULT PRESENTATION DELAY");
+                ImGui::Text("Forensic work finished. Displaying results in about %u s.",
+                    presentationWaitRemaining.load());
+                ImGui::TextDisabled("This is an intentional display wait, not extra analysis.");
+            }else{
+                ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
+            }
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else if(done && inspectionDisplayPercent()<100){
             ImGui::TextColored(accent,"FINALIZING INSPECTION");
