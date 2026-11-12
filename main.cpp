@@ -2932,15 +2932,16 @@ static void renderUI() {
     ImGui::EndGroup();
     ImGui::SameLine(0,30);
     ImGui::TextColored(accentInk,"ENDPOINT ANALYSIS");
+    // Scan activity is displayed only when a real scan is running.
     if(scanning){
         const ImVec2 wp=ImGui::GetWindowPos();
         const ImVec2 ws=ImGui::GetWindowSize();
-        const float t=static_cast<float>(ImGui::GetTime());
-        const float span=(std::max)(1.f,ws.x-135.f);
-        const float x=wp.x+std::fmod(t*100.f,span);
+        const float fraction=(std::max)(0.f,(std::min)(1.f,
+            completedStages.load()/(float)(std::max)(1,totalStages.load())));
         ImGui::GetWindowDrawList()->AddRectFilled(
-            ImVec2(x,wp.y+ws.y-3),ImVec2(x+135,wp.y+ws.y),
-            IM_COL32(105,165,250,210),2.f);
+            ImVec2(wp.x,wp.y+ws.y-2.f),
+            ImVec2(wp.x+ws.x*fraction,wp.y+ws.y),
+            IM_COL32(101,155,238,220));
     }
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
@@ -2954,6 +2955,17 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.030f,.042f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,11));
     ImGui::BeginChild("##atlasNav",ImVec2(0,114),ImGuiChildFlags_None);
+    // Persistent UI-only transition state; scan and evidence data are unaffected.
+    static int lastNavPage=-1;
+    static float navTransitionStart=0.f;
+    static ImVec2 activeMarkStart(0,0),activeMarkEnd(0,0);
+    static ImVec2 activeMarkTargetStart(0,0),activeMarkTargetEnd(0,0);
+    static bool markInitialized=false;
+    const float uiNow=(float)ImGui::GetTime();
+    const float uiDt=(std::min)(ImGui::GetIO().DeltaTime,.05f);
+    const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
+    if(pageChanged)navTransitionStart=uiNow;
+    lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
                        "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","PREFERENCES"};
     const int navPages[]={0,2,3,6,7,8,9,4};
@@ -2969,7 +2981,18 @@ static void renderUI() {
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
             ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.61f,.89f,1));
         }
-        if(ImGui::Button(nav[i],ImVec2(navWidth,39)))page=navPages[i];
+        if(ImGui::Button(nav[i],ImVec2(navWidth,39))){
+            if(page!=navPages[i]){
+                page=navPages[i];
+                navTransitionStart=uiNow;
+                lastNavPage=page;
+            }
+        }
+        if(active){
+            const ImVec2 lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
+            activeMarkTargetStart=ImVec2(lo.x+12.f,hi.y-2.f);
+            activeMarkTargetEnd=ImVec2(hi.x-12.f,hi.y-2.f);
+        }
         if(active){
             ImGui::PopStyleColor(3);
             ImGui::PopStyleVar();
@@ -2977,6 +3000,19 @@ static void renderUI() {
         ImGui::PopID();
         if(i!=3 && i!=7)ImGui::SameLine(0,navGap);
     }
+    // Animated selection marker glides to the newly selected tab.
+    if(!markInitialized){
+        activeMarkStart=activeMarkTargetStart;
+        activeMarkEnd=activeMarkTargetEnd;
+        markInitialized=true;
+    }
+    const float easing=(std::min)(1.f,uiDt*15.f);
+    activeMarkStart.x+=(activeMarkTargetStart.x-activeMarkStart.x)*easing;
+    activeMarkStart.y+=(activeMarkTargetStart.y-activeMarkStart.y)*easing;
+    activeMarkEnd.x+=(activeMarkTargetEnd.x-activeMarkEnd.x)*easing;
+    activeMarkEnd.y+=(activeMarkTargetEnd.y-activeMarkEnd.y)*easing;
+    ImGui::GetWindowDrawList()->AddLine(activeMarkStart,activeMarkEnd,
+        IM_COL32(135,179,245,210),2.f);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
@@ -2984,11 +3020,34 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.015f,.019f,.028f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,26));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
+    // Professional workstation backdrop: restrained tonal separation.
+    // No moving rings, artificial radar sweeps or fabricated activity.
+    {
+        const ImVec2 origin=ImGui::GetWindowPos();
+        const ImVec2 extent=ImGui::GetWindowSize();
+        ImDrawList* dl=ImGui::GetWindowDrawList();
+        dl->PushClipRect(origin,ImVec2(origin.x+extent.x,origin.y+extent.y),true);
+        dl->AddRectFilledMultiColor(
+            origin,ImVec2(origin.x+extent.x,origin.y+210.f),
+            IM_COL32(20,27,39,255),IM_COL32(16,22,32,255),
+            IM_COL32(10,14,21,255),IM_COL32(12,17,25,255));
+        dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
+                    ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
+                    IM_COL32(80,103,136,33),1.f);
+        dl->PopClipRect();
+    }
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
         page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
         page==9?"FILE INTELLIGENCE":"PREFERENCES";
-    ImGui::TextColored(accentInk,"SYNC / %s",section);
+    // A short title entrance signals navigation without obscuring the tables.
+    const float elapsed=uiNow-navTransitionStart;
+    const float entrance=(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.30f);
+    const float titleAlpha=1.f-.42f*entrance;
+    const float titleOffset=10.f*entrance;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+titleOffset);
+    ImGui::TextColored(ImVec4(accentInk.x,accentInk.y,accentInk.z,titleAlpha),
+                       "SYNC / %s",section);
     ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     ImGui::Dummy(ImVec2(0,17));
