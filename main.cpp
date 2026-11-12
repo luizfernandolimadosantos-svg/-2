@@ -1434,22 +1434,6 @@ static void sectionTitle(const char* title,const char* description=nullptr) {
     if(description)ImGui::TextDisabled("%s",description);
     ImGui::Dummy(ImVec2(0,14));
 }
-static void metric(const char* label,const std::string& value,float width) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.080f,.105f,1));
-    ImGui::BeginChild(label,ImVec2(width,112),ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar);
-    const ImVec2 mn=ImGui::GetWindowPos();
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        ImVec2(mn.x+16,mn.y+15),ImVec2(mn.x+19,mn.y+45),IM_COL32(106,161,252,255),2.f);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+15);
-    ImGui::TextDisabled("%s",label);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+15);
-    ImGui::SetWindowFontScale(1.8f);
-    ImGui::TextColored(ImVec4(.91f,.94f,1,1),"%s",value.c_str());
-    ImGui::SetWindowFontScale(1.f);
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-}
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
     if(scanFailed)return "Failed";
@@ -1644,27 +1628,36 @@ static void drawMemoryInvestigation(const char* mode){
 }
 static void modulesList() {
     const float full=ImGui::GetContentRegionAvail().x;
-    const float gap=12.f;
-    const float tileWidth=(full>780.f)?(full-gap)*.5f:full;
+    const float gap=10.f;
+    const int columns=full>=930.f?3:full>=590.f?2:1;
+    const float width=(std::max)(150.f,(full-gap*(columns-1))/columns);
     for(int i=0;i<IM_ARRAYSIZE(inspectionModules);++i) {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
-        if(full>780.f && i%2)ImGui::SameLine(0,gap);
-        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,154),ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar);
-        ImGui::SetWindowFontScale(1.07f);
-        ImGui::TextUnformatted(m.title);
-        ImGui::SetWindowFontScale(1.f);
+        if(i%columns)ImGui::SameLine(0,gap);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.077f,.102f,1));
+        ImGui::BeginChild("##tool",ImVec2(width,156),ImGuiChildFlags_Borders);
+        const ImVec2 start=ImGui::GetWindowPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(start.x+1,start.y+1),ImVec2(start.x+4,start.y+155),
+            m.implemented?IM_COL32(75,152,229,255):IM_COL32(117,124,137,255));
+        ImGui::TextColored(ImVec4(.56f,.66f,.81f,1),"MODULE %02d",i+1);
         ImGui::SameLine();
-        ImGui::TextColored(m.implemented?ImVec4(.42f,.83f,.64f,1):ImVec4(.67f,.70f,.76f,1),
-            "  %s",m.implemented?"ACTIVE":"NOT IMPLEMENTED");
-        ImGui::Separator();
-        ImGui::TextWrapped("%s",m.summary);
-        if(ImGui::Button("Open investigation",ImVec2(180,31))) {
+        ImGui::TextColored(m.implemented?ImVec4(.45f,.82f,.68f,1):
+            ImVec4(.64f,.68f,.74f,1),m.implemented?"AVAILABLE":"LIMITED");
+        ImGui::SetWindowFontScale(1.10f);
+        ImGui::TextWrapped("%s",m.title);
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::TextDisabled("%s",m.summary);
+        const float bottom=ImGui::GetWindowHeight()-39.f;
+        if(ImGui::GetCursorPosY()<bottom)ImGui::SetCursorPosY(bottom);
+        if(ImGui::Button("INSPECT  >##module",ImVec2(-1,27))) {
             inspectedModule=i;
             moduleSearch[0]=0;
-            openInspectorRequested = true;
+            openInspectorRequested=true;
         }
         ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::PopID();
     }
     if(openInspectorRequested) { ImGui::OpenPopup("Evidence inspector"); openInspectorRequested=false; }
