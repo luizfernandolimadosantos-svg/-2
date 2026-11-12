@@ -1460,17 +1460,17 @@ struct InspectionModule {
 };
 static const InspectionModule inspectionModules[] = {
     {"Processes & Privileges","Process inventory, parent PIDs and executable paths","@process",true},
-    {"Memory Integrity","Memory-region analysis has not been implemented","",false},
-    {"Injection Indicators","Injection detection has not been implemented","",false},
-    {"Hooks & Interception","Hook verification has not been implemented","",false},
+    {"Memory Integrity","Read-only process virtual-memory protection and region inspection","@memory",true},
+    {"Injection Indicators","Heuristic review of private executable and writable executable memory","@injection",true},
+    {"Hooks & Interception","Memory protection review only; actual hook verification not yet supported","@hooks",true},
     {"Kernel & Drivers","Installed drivers and service inventory","Drivers;Services",true},
     {"Persistence & Boot","Startup registry entries and service inventory","Startup;Services",true},
     {"Network & Firewall","TCP/UDP endpoint inventory; firewall rules not analyzed","Network;Network UDP;Network IPv6",true},
     {"Hardware & USB","Registered USB storage device inventory","USB",true},
-    {"Execution Forensics","Prefetch and event-log analysis has not been implemented","",false},
+    {"Execution Forensics","Collected Windows event timeline and security-provider alerts","@timeline",true},
     {"Files & Signatures","User-selected files: SHA-256 and Authenticode","@files",true},
-    {"FiveM Integrity","Reference-manifest verification has not been implemented","",false},
-    {"Evidence Correlation","Cross-source correlation has not been implemented","",false}
+    {"FiveM Integrity","Local file SHA-256 verification against a trusted reference hash","@fivem",true},
+    {"Evidence Correlation","Correlates collected process paths with other evidence records","@correlation",true}
 };
 static int inspectedModule = -1;
 static bool openInspectorRequested = false;
@@ -1492,6 +1492,148 @@ static bool moduleSearchMatches(const std::string& text) {
     std::transform(hay.begin(),hay.end(),hay.begin(),[](unsigned char c){return (char)std::tolower(c);});
     std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return (char)std::tolower(c);});
     return hay.find(needle)!=std::string::npos;
+}
+static char fivemFile[32768]{};
+static char fivemExpectedHash[65]{};
+static std::string fivemActualHash;
+static std::string fivemVerificationStatus="Choose a local file and enter a trusted SHA-256 reference.";
+static bool validSha256Text(const char* h) {
+    if(std::strlen(h)!=64)return false;
+    for(size_t i=0;i<64;++i)if(!std::isxdigit((unsigned char)h[i]))return false;
+    return true;
+}
+
+struct MemoryFinding {
+    uintptr_t address=0;
+    size_t size=0;
+    DWORD protection=0;
+    DWORD type=0;
+    std::string category,explanation;
+};
+static std::mutex memoryGuard;
+static std::vector<MemoryFinding> memoryFindings;
+static std::string memoryStatus="Choose a PID and click Inspect memory.";
+static std::atomic<bool> memoryBusy{false};
+static int memoryPid=0;
+static size_t memoryRegionsChecked=0;
+static std::string memoryProtectName(DWORD p){
+    switch(p&0xff){
+    case PAGE_EXECUTE:return "EXECUTE";
+    case PAGE_EXECUTE_READ:return "EXECUTE_READ";
+    case PAGE_EXECUTE_READWRITE:return "EXECUTE_READWRITE";
+    case PAGE_EXECUTE_WRITECOPY:return "EXECUTE_WRITECOPY";
+    case PAGE_READWRITE:return "READWRITE";
+    case PAGE_READONLY:return "READONLY";
+    default:return "OTHER";
+    }
+}
+static void runMemoryInspection(DWORD pid){
+    if(memoryBusy.exchange(true))return;
+    std::thread([pid](){
+        std::vector<MemoryFinding> findings;
+        size_t checked=0;
+        std::string status;
+        HANDLE proc=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,pid);
+        if(!proc){
+            status="Cannot inspect PID: access denied, process exited, or protected process.";
+        }else{
+            SYSTEM_INFO sys{};GetNativeSystemInfo(&sys);
+            uintptr_t addr=(uintptr_t)sys.lpMinimumApplicationAddress;
+            const uintptr_t maximum=(uintptr_t)sys.lpMaximumApplicationAddress;
+            while(addr<maximum&&checked<250000){
+                MEMORY_BASIC_INFORMATION mbi{};
+                if(!VirtualQueryEx(proc,(LPCVOID)addr,&mbi,sizeof(mbi)))break;
+                ++checked;
+                const DWORD p=mbi.Protect&0xff;
+                const bool executable=p==PAGE_EXECUTE||p==PAGE_EXECUTE_READ||
+                    p==PAGE_EXECUTE_READWRITE||p==PAGE_EXECUTE_WRITECOPY;
+                const bool writable=p==PAGE_EXECUTE_READWRITE||p==PAGE_EXECUTE_WRITECOPY;
+                const bool privateExec=mbi.Type==MEM_PRIVATE&&executable;
+                const bool mappedExec=mbi.Type==MEM_MAPPED&&executable;
+                if(mbi.State==MEM_COMMIT&&executable&&(writable||privateExec||mappedExec)){
+                    MemoryFinding f{};
+                    f.address=(uintptr_t)mbi.BaseAddress;
+                    f.size=mbi.RegionSize;
+                    f.protection=mbi.Protect;
+                    f.type=mbi.Type;
+                    if(privateExec&&writable){
+                        f.category="REVIEW: private writable executable";
+                        f.explanation="Executable private memory with write permissions; common in JITs and some legitimate software.";
+                    }else if(privateExec){
+                        f.category="REVIEW: private executable";
+                        f.explanation="Executable private allocation; may be legitimate JIT/runtime code.";
+                    }else if(writable){
+                        f.category="REVIEW: writable executable";
+                        f.explanation="Writable executable mapping; investigate context before drawing conclusions.";
+                    }else{
+                        f.category="INFO: mapped executable";
+                        f.explanation="Executable mapped region; verify backing file and expected use.";
+                    }
+                    if(findings.size()<2000)findings.push_back(std::move(f));
+                }
+                uintptr_t base=(uintptr_t)mbi.BaseAddress;
+                if(mbi.RegionSize==0||base>UINTPTR_MAX-mbi.RegionSize)break;
+                uintptr_t next=base+mbi.RegionSize;
+                if(next<=addr)break;
+                addr=next;
+            }
+            CloseHandle(proc);
+            status="Inspection completed. Findings are heuristics, not confirmed injections.";
+        }
+        {std::lock_guard<std::mutex> lock(memoryGuard);
+            memoryFindings=std::move(findings);
+            memoryRegionsChecked=checked;
+            memoryStatus=std::move(status);}
+        memoryBusy=false;
+    }).detach();
+}
+static void drawMemoryInvestigation(const char* mode){
+    ImGui::TextWrapped("Read-only process memory inspection. Protected processes may deny access.");
+    ImGui::InputInt("Process ID (PID)",&memoryPid);
+    if(memoryPid<0)memoryPid=0;
+    ImGui::SameLine();
+    ImGui::BeginDisabled(memoryPid<=0||memoryBusy.load());
+    if(ImGui::Button("Inspect memory",ImVec2(150,34)))
+        runMemoryInspection((DWORD)memoryPid);
+    ImGui::EndDisabled();
+    if(memoryBusy.load())ImGui::TextDisabled("Inspecting address space...");
+    std::vector<MemoryFinding> findings;
+    std::string status;size_t regions=0;
+    {std::lock_guard<std::mutex> lock(memoryGuard);
+        findings=memoryFindings;status=memoryStatus;regions=memoryRegionsChecked;}
+    ImGui::TextWrapped("%s",status.c_str());
+    ImGui::TextDisabled("%zu memory regions queried; %zu review entries (capped at 2,000).",
+        regions,findings.size());
+    if(std::strcmp(mode,"@hooks")==0){
+        ImGui::TextWrapped("This inspection checks executable memory protections only. "
+            "It cannot verify inline/IAT/EAT hooks; those require separate module-baseline analysis.");
+    }else if(std::strcmp(mode,"@injection")==0){
+        ImGui::TextWrapped("Private executable or writable-executable memory is a possible "
+            "injection indicator, but is also used by legitimate JIT engines.");
+    }
+    if(ImGui::BeginTable("memoryResults",4,ImGuiTableFlags_Borders|
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
+        ImGuiTableFlags_ScrollY,ImVec2(0,-40))){
+        ImGui::TableSetupColumn("Address",ImGuiTableColumnFlags_WidthFixed,150);
+        ImGui::TableSetupColumn("Size",ImGuiTableColumnFlags_WidthFixed,100);
+        ImGui::TableSetupColumn("Protection",ImGuiTableColumnFlags_WidthFixed,155);
+        ImGui::TableSetupColumn("Assessment / explanation",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for(const auto& f:findings){
+            char address[40]{};
+            std::snprintf(address,sizeof(address),"0x%llX",(unsigned long long)f.address);
+            std::string filter=std::string(address)+" "+f.category+" "+f.explanation;
+            if(!moduleSearchMatches(filter))continue;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(address);
+            ImGui::TableSetColumnIndex(1);ImGui::Text("%llu KiB",(unsigned long long)(f.size/1024));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(memoryProtectName(f.protection).c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextWrapped("%s: %s",f.category.c_str(),f.explanation.c_str());
+        }
+        ImGui::EndTable();
+    }
 }
 static void modulesList() {
     const float full=ImGui::GetContentRegionAvail().x;
@@ -1535,7 +1677,109 @@ static void modulesList() {
                 ImGui::SetNextItemWidth(-1);
                 ImGui::InputTextWithHint("##moduleSearch","Search collected evidence...",moduleSearch,sizeof(moduleSearch));
                 ImGui::Separator();
-                if(std::string(m.categories)=="@process") {
+                if(std::string(m.categories)=="@memory"||
+                   std::string(m.categories)=="@injection"||
+                   std::string(m.categories)=="@hooks"){
+                    drawMemoryInvestigation(m.categories);
+                } else if(std::string(m.categories)=="@timeline") {
+                    std::vector<TimelineEvent> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=timelineEvents;}
+                    ImGui::TextDisabled("%zu Windows events collected. Run a full scan to refresh.",snapshot.size());
+                    if(ImGui::BeginTable("executionEvents",4,ImGuiTableFlags_Borders|
+                        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))) {
+                        ImGui::TableSetupColumn("Time",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Provider",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Event ID",ImGuiTableColumnFlags_WidthFixed,85);
+                        ImGui::TableSetupColumn("Event / evidence",ImGuiTableColumnFlags_WidthStretch,3);
+                        ImGui::TableHeadersRow();
+                        for(const auto& e:snapshot){
+                            if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
+                                " "+e.description+" "+e.detail))continue;
+                            ImGui::TableNextRow();
+                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(102,70,24,120));
+                            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
+                            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
+                            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(e.eventId.c_str());
+                            ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s | %s",e.description.c_str(),e.detail.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TextDisabled("Prefetch parsing is not included; these are collected event-log records.");
+                } else if(std::string(m.categories)=="@fivem") {
+                    ImGui::TextWrapped("Verify a local FiveM-related file against a SHA-256 reference from a trusted source.");
+                    ImGui::SetNextItemWidth(-140);
+                    ImGui::InputTextWithHint("##fivemFile","Full path to the file to verify",
+                        fivemFile,sizeof(fivemFile));
+                    ImGui::SameLine();
+                    if(ImGui::Button("Browse file##fivem")){
+                        wchar_t path[32768]{};
+                        OPENFILENAMEW ofn{};ofn.lStructSize=sizeof(ofn);
+                        ofn.hwndOwner=hwnd;ofn.lpstrFile=path;ofn.nMaxFile=32768;
+                        ofn.lpstrFilter=L"All files\0*.*\0";
+                        ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+                        if(GetOpenFileNameW(&ofn))
+                            strncpy_s(fivemFile,sizeof(fivemFile),utf8(path).c_str(),_TRUNCATE);
+                    }
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::InputTextWithHint("##fivemHash","Trusted SHA-256 reference (64 hex characters)",
+                        fivemExpectedHash,sizeof(fivemExpectedHash));
+                    ImGui::BeginDisabled(!fivemFile[0]||!validSha256Text(fivemExpectedHash));
+                    if(ImGui::Button("Verify file integrity",ImVec2(210,38))){
+                        fivemActualHash=sha256(wide(fivemFile));
+                        if(fivemActualHash.size()!=64)fivemVerificationStatus="Unable to hash file; verify access and path.";
+                        else {
+                            std::string expected=fivemExpectedHash,actual=fivemActualHash;
+                            std::transform(expected.begin(),expected.end(),expected.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            std::transform(actual.begin(),actual.end(),actual.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            fivemVerificationStatus=expected==actual?
+                                "MATCH: The selected file matches the supplied reference hash.":
+                                "MISMATCH: The selected file differs from the supplied reference hash.";
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::TextWrapped("%s",fivemVerificationStatus.c_str());
+                    if(!fivemActualHash.empty())ImGui::TextWrapped("Computed SHA-256: %s",fivemActualHash.c_str());
+                    ImGui::TextDisabled("This checks one file only; it does not validate the complete FiveM installation.");
+                } else if(std::string(m.categories)=="@correlation") {
+                    std::vector<Process> ps;
+                    std::vector<Record> rs;
+                    {std::lock_guard<std::mutex> lock(dataMutex);ps=processes;rs=records;}
+                    ImGui::TextDisabled("Cross-referencing %zu processes with %zu collected records.",ps.size(),rs.size());
+                    ImGui::TextWrapped("A match means the same executable path occurs in multiple evidence sources. It is not a malware verdict.");
+                    size_t matches=0;
+                    if(ImGui::BeginTable("crossSource",4,ImGuiTableFlags_Borders|
+                        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))){
+                        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
+                        ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Matched record",ImGuiTableColumnFlags_WidthStretch,3);
+                        ImGui::TableHeadersRow();
+                        for(const auto& proc:ps){
+                            const std::string path=utf8(proc.path);
+                            if(path.size()<7)continue;
+                            std::string lowPath=path;
+                            std::transform(lowPath.begin(),lowPath.end(),lowPath.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            for(const auto& rec:rs){
+                                std::string detail=rec.name+" "+rec.detail;
+                                std::transform(detail.begin(),detail.end(),detail.begin(),
+                                    [](unsigned char c){return (char)std::tolower(c);});
+                                if(detail.find(lowPath)==std::string::npos)continue;
+                                if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
+                                ++matches;
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
+                                ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
+                                ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
+                                ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s | %s",rec.name.c_str(),rec.detail.c_str());
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TextDisabled("%zu matching records (exact path text, case-insensitive).",matches);
+                } else if(std::string(m.categories)=="@process") {
                     std::vector<Process> snapshot;
                     {std::lock_guard<std::mutex> lock(dataMutex);snapshot=processes;}
                     ImGui::TextDisabled("%zu processes collected",snapshot.size());
