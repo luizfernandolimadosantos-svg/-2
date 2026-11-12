@@ -1489,7 +1489,11 @@ static const InspectionModule inspectionModules[] = {
     {"Execution Forensics","Collected Windows event timeline and security-provider alerts","@timeline",true},
     {"Files & Signatures","User-selected files: SHA-256 and Authenticode","@files",true},
     {"FiveM Integrity","Local file SHA-256 verification against a trusted reference hash","@fivem",true},
-    {"Evidence Correlation","Correlates collected process paths with other evidence records","@correlation",true}
+    {"Evidence Correlation","Correlates collected process paths with other evidence records","@correlation",true},
+    {"Mounted Media Review","Enumerate mounted volumes and optical media; VHD/ISO backing not confirmed","@media",true},
+    {"Administrative Tool Review","List running administrative and diagnostic tools for contextual review","@tools",true},
+    {"Kernel Integrity Coverage","SSDT, IDT, MSR, IRP, DKOM, PspCidTable and BYOVD capability status","@kernelstatus",false},
+    {"Graphics Hook Coverage","Present interception and Heaven's Gate capability status","@graphicstatus",false}
 };
 static int inspectedModule = -1;
 static bool openInspectorRequested = false;
@@ -1760,7 +1764,163 @@ static void modulesList() {
                    std::string(m.categories)=="@injection"||
                    std::string(m.categories)=="@hooks"){
                     drawMemoryInvestigation(m.categories);
+                } else if(std::string(m.categories)=="@media") {
+                    ImGui::TextWrapped("Mounted drives visible to Windows. Drive type does not establish whether a VHD or ISO is mounted.");
+                    if(ImGui::BeginTable("mountedDrives",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg)){
+                        ImGui::TableSetupColumn("Drive");
+                        ImGui::TableSetupColumn("Type");
+                        ImGui::TableSetupColumn("Evidence");
+                        ImGui::TableHeadersRow();
+                        wchar_t buffer[2048]{};
+                        DWORD length=GetLogicalDriveStringsW(2047,buffer);
+                        if(length>0&&length<2047){
+                            for(const wchar_t* d=buffer;*d;d+=wcslen(d)+1){
+                                const UINT t=GetDriveTypeW(d);
+                                const char* type=t==DRIVE_CDROM?"Optical":t==DRIVE_FIXED?"Fixed":
+                                    t==DRIVE_REMOVABLE?"Removable":t==DRIVE_REMOTE?"Network":"Other";
+                                const std::string path=utf8(d);
+                                if(!moduleSearchMatches(path+" "+type))continue;
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(path.c_str());
+                                ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(type);
+                                ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted("Backing image not verified");
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                } else if(std::string(m.categories)=="@tools") {
+                    std::vector<Process> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=processes;}
+                    static const wchar_t* toolNames[]={L"powershell.exe",L"pwsh.exe",
+                        L"cmd.exe",L"psexec.exe",L"procexp.exe",L"procexp64.exe",
+                        L"procmon.exe",L"taskmgr.exe",L"reg.exe",L"sc.exe",
+                        L"wmic.exe",L"mshta.exe",L"rundll32.exe",
+                        L"wscript.exe",L"cscript.exe",L"certutil.exe",L"bitsadmin.exe"};
+                    ImGui::TextWrapped("Running administrative tools. Their presence is not evidence of abuse.");
+                    if(ImGui::BeginTable("adminTools",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg)){
+                        ImGui::TableSetupColumn("Process");
+                        ImGui::TableSetupColumn("PID");
+                        ImGui::TableSetupColumn("Executable path");
+                        ImGui::TableHeadersRow();
+                        for(const auto& proc:snapshot){
+                            bool match=false;
+                            for(const wchar_t* name:toolNames)
+                                if(_wcsicmp(proc.name.c_str(),name)==0){match=true;break;}
+                            if(!match)continue;
+                            const std::string name=utf8(proc.name),path=utf8(proc.path);
+                            if(!moduleSearchMatches(name+" "+path))continue;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(name.c_str());
+                            ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
+                            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",path.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                } else if(std::string(m.categories)=="@kernelstatus") {
+                    ImGui::TextWrapped("UNAVAILABLE: SSDT, IDT, MSR, IRP, DKOM cross-view, PspCidTable, and BYOVD reputation.");
+                    ImGui::TextWrapped("Reliable coverage needs trusted kernel telemetry and a maintained vulnerable-driver reference set. No kernel detections are claimed.");
+                } else if(std::string(m.categories)=="@graphicstatus") {
+                    ImGui::TextWrapped("UNAVAILABLE: DirectX Present hook verification and Heaven's Gate transition detection.");
+                    ImGui::TextWrapped("Current user-mode memory heuristics do not establish these findings.");
                 } else if(std::string(m.categories)=="@timeline") {
+                    std::vector<TimelineEvent> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=timelineEvents;}
+                    ImGui::TextDisabled("%zu Windows events collected. Run a full scan to refresh.",snapshot.size());
+                    if(ImGui::BeginTable("executionEvents",4,ImGuiTableFlags_Borders|
+                        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))) {
+                        ImGui::TableSetupColumn("Time",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Provider",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Event ID",ImGuiTableColumnFlags_WidthFixed,85);
+                        ImGui::TableSetupColumn("Event / evidence",ImGuiTableColumnFlags_WidthStretch,3);
+                        ImGui::TableHeadersRow();
+                        for(const auto& e:snapshot){
+                            if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
+                                " "+e.description+" "+e.detail))continue;
+                            ImGui::TableNextRow();
+                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(102,70,24,120));
+                            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
+                            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
+                            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(e.eventId.c_str());
+                            ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s | %s",e.description.c_str(),e.detail.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TextDisabled("Prefetch parsing is not included; these are collected event-log records.");
+                } else if(std::string(m.categories)=="@fivem") {
+                    ImGui::TextWrapped("Verify a local FiveM-related file against a SHA-256 reference from a trusted source.");
+                    ImGui::SetNextItemWidth(-140);
+                    ImGui::InputTextWithHint("##fivemFile","Full path to the file to verify",
+                        fivemFile,sizeof(fivemFile));
+                    ImGui::SameLine();
+                    if(ImGui::Button("Browse file##fivem")){
+                        wchar_t path[32768]{};
+                        OPENFILENAMEW ofn{};ofn.lStructSize=sizeof(ofn);
+                        ofn.hwndOwner=hwnd;ofn.lpstrFile=path;ofn.nMaxFile=32768;
+                        ofn.lpstrFilter=L"All files\\0*.*\\0";
+                        ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+                        if(GetOpenFileNameW(&ofn))
+                            strncpy_s(fivemFile,sizeof(fivemFile),utf8(path).c_str(),_TRUNCATE);
+                    }
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::InputTextWithHint("##fivemHash","Trusted SHA-256 reference (64 hex characters)",
+                        fivemExpectedHash,sizeof(fivemExpectedHash));
+                    ImGui::BeginDisabled(!fivemFile[0]||!validSha256Text(fivemExpectedHash));
+                    if(ImGui::Button("Verify file integrity",ImVec2(210,38))){
+                        fivemActualHash=sha256(wide(fivemFile));
+                        if(fivemActualHash.size()!=64)fivemVerificationStatus="Unable to hash file; verify access and path.";
+                        else {
+                            std::string expected=fivemExpectedHash,actual=fivemActualHash;
+                            std::transform(expected.begin(),expected.end(),expected.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            std::transform(actual.begin(),actual.end(),actual.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            fivemVerificationStatus=expected==actual?
+                                "MATCH: The selected file matches the supplied reference hash.":
+                                "MISMATCH: The selected file differs from the supplied reference hash.";
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::TextWrapped("%s",fivemVerificationStatus.c_str());
+                    if(!fivemActualHash.empty())ImGui::TextWrapped("Computed SHA-256: %s",fivemActualHash.c_str());
+                    ImGui::TextDisabled("This checks one file only; it does not validate the complete FiveM installation.");
+                } else if(std::string(m.categories)=="@correlation") {
+                    std::vector<Process> ps;
+                    std::vector<Record> rs;
+                    {std::lock_guard<std::mutex> lock(dataMutex);ps=processes;rs=records;}
+                    ImGui::TextDisabled("Cross-referencing %zu processes with %zu collected records.",ps.size(),rs.size());
+                    ImGui::TextWrapped("A match means the same executable path occurs in multiple evidence sources. It is not a malware verdict.");
+                    size_t matches=0;
+                    if(ImGui::BeginTable("crossSource",4,ImGuiTableFlags_Borders|
+                        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))){
+                        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
+                        ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Matched record",ImGuiTableColumnFlags_WidthStretch,3);
+                        ImGui::TableHeadersRow();
+                        for(const auto& proc:ps){
+                            const std::string path=utf8(proc.path);
+                            if(path.size()<7)continue;
+                            std::string lowPath=path;
+                            std::transform(lowPath.begin(),lowPath.end(),lowPath.begin(),
+                                [](unsigned char c){return (char)std::tolower(c);});
+                            for(const auto& rec:rs){
+                                std::string detail=rec.name+" "+rec.detail;
+                                std::transform(detail.begin(),detail.end(),detail.begin(),
+                                    [](unsigned char c){return (char)std::tolower(c);});
+                                if(detail.find(lowPath)==std::string::npos)continue;
+                                if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
+                                ++matches;
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
+                                ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
+                                ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
+                                ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s | %s",rec.name.c_str(),rec.detail.c_str());
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TextDisabled("%zu matching records (exact path text, case-insensitive).",matches);
+                } else if(std::string(m.categories)=="@process") {
                     std::vector<TimelineEvent> snapshot;
                     {std::lock_guard<std::mutex> lock(dataMutex);snapshot=timelineEvents;}
                     ImGui::TextDisabled("%zu Windows events collected. Run a full scan to refresh.",snapshot.size());
@@ -2795,12 +2955,12 @@ static void renderUI() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,11));
     ImGui::BeginChild("##atlasNav",ImVec2(0,114),ImGuiChildFlags_None);
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
-                       "BINARY LAB","NETWORK","PERSISTENCE","PREFERENCES"};
-    const int navPages[]={0,2,3,6,7,8,4};
+                       "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","PREFERENCES"};
+    const int navPages[]={0,2,3,6,7,8,9,4};
     const float navGap=10.f;
     const float navWidth=(std::max)(110.f,
         (ImGui::GetContentRegionAvail().x-3*navGap)/4.f);
-    for(int i=0;i<7;i++){
+    for(int i=0;i<8;i++){
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
@@ -2815,7 +2975,7 @@ static void renderUI() {
             ImGui::PopStyleVar();
         }
         ImGui::PopID();
-        if(i!=3 && i!=6)ImGui::SameLine(0,navGap);
+        if(i!=3 && i!=7)ImGui::SameLine(0,navGap);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -2826,7 +2986,8 @@ static void renderUI() {
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
-        page==7?"NETWORK CONNECTIONS":page==8?"PERSISTENCE AUDIT":"PREFERENCES";
+        page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
+        page==9?"FILE INTELLIGENCE":"PREFERENCES";
     ImGui::TextColored(accentInk,"SYNC / %s",section);
     ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
@@ -3070,13 +3231,14 @@ static void renderUI() {
                 }
     } else if(page==7||page==8) {
         const bool networkView=page==7;
-        sectionTitle(networkView?"Network Evidence":"Persistence Evidence",
+        sectionTitle(networkView?"Network Evidence":"Driver Audit",
             networkView?"TCP/UDP endpoints collected by the scan":
-            "Startup, service and registry records collected by the scan");
-        static char evidenceSearch[256]{};
+            "Kernel driver and service-driver evidence collected by the scan");
+        static char evidenceSearch[2][256]{};
+        char* activeSearch=evidenceSearch[networkView?0:1];
         ImGui::SetNextItemWidth(420);
         ImGui::InputTextWithHint("##specialEvidenceSearch","Search evidence, names or paths...",
-            evidenceSearch,sizeof(evidenceSearch));
+            activeSearch,256);
         ImGui::SameLine();
         if(ImGui::Button("RUN FULL SCAN##evidence")&&!scanning)startScan();
         std::vector<Record> snapshot;
@@ -3097,17 +3259,13 @@ static void renderUI() {
                     category.find("network")!=std::string::npos||
                     category.find("tcp")!=std::string::npos||
                     category.find("udp")!=std::string::npos:
-                    category.find("startup")!=std::string::npos||
-                    category.find("service")!=std::string::npos||
-                    category.find("registry")!=std::string::npos||
-                    category.find("persistence")!=std::string::npos||
-                    category.find("ifeo")!=std::string::npos||
-                    category.find("logon")!=std::string::npos;
+                    category.find("driver")!=std::string::npos||
+                    category.find("kernel")!=std::string::npos;
                 if(!relevant)continue;
                 std::string text=r.category+" "+r.name+" "+r.detail;
                 std::transform(text.begin(),text.end(),text.begin(),
                     [](unsigned char c){return (char)std::tolower(c);});
-                std::string query=evidenceSearch;
+                std::string query=activeSearch;
                 std::transform(query.begin(),query.end(),query.begin(),
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&text.find(query)==std::string::npos)continue;
@@ -3120,6 +3278,42 @@ static void renderUI() {
             ImGui::EndTable();
         }
         if(!shown)ImGui::TextDisabled("No matching evidence. Run a scan or adjust the search.");
+    } else if(page==9) {
+        sectionTitle("File Intelligence","Files analyzed or verified by the scanner");
+        ImGui::TextDisabled("SHA-256 and signature results are shown only when available.");
+        static char fileIntelSearch[320]{};
+        ImGui::SetNextItemWidth(460);
+        ImGui::InputTextWithHint("##fileIntelSearch","Search path, hash or signature...",
+            fileIntelSearch,sizeof(fileIntelSearch));
+        ImGui::SameLine();
+        if(ImGui::Button("OPEN BINARY LAB##intel"))page=6;
+        std::vector<FileResult> snapshot;
+        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=files;}
+        ImGui::Text("Verified file entries: %zu",snapshot.size());
+        ImGui::Separator();
+        if(ImGui::BeginTable("##fileIntelTable",3,
+            ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))){
+            ImGui::TableSetupColumn("File path",ImGuiTableColumnFlags_WidthStretch,3);
+            ImGui::TableSetupColumn("SHA-256",ImGuiTableColumnFlags_WidthStretch,2);
+            ImGui::TableSetupColumn("Authenticode",ImGuiTableColumnFlags_WidthStretch,2);
+            ImGui::TableHeadersRow();
+            std::string query=fileIntelSearch;
+            std::transform(query.begin(),query.end(),query.begin(),
+                [](unsigned char c){return (char)std::tolower(c);});
+            for(const auto& f:snapshot){
+                std::string path=utf8(f.path);
+                std::string hay=path+" "+f.hash+" "+f.signature;
+                std::transform(hay.begin(),hay.end(),hay.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                if(!query.empty()&&hay.find(query)==std::string::npos)continue;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",path.c_str());
+                ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
+                ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
+            }
+            ImGui::EndTable();
+        }
     } else if(page==6) {
         binaryInspector::draw();
     } else if(page==4) {
