@@ -3215,10 +3215,27 @@ static Report analyze(const std::wstring& path){
     const auto sz=fs::file_size(path,ec);
     if(ec){r.status="Cannot read file metadata.";return r;}
     r.bytes=sz;
-    if(sz>128ull*1024*1024){r.status="File exceeds 128 MiB local inspection limit.";return r;}
+    // Bounded analysis for large installers. Read enough of the file to
+    // inspect the PE headers, sections, imports, and representative strings
+    // without allocating memory proportional to an arbitrary file size.
+    // SHA-256 below still covers the entire original file.
+    constexpr uint64_t maxAnalysisBytes=256ull*1024*1024;
+    const size_t bytesToRead=static_cast<size_t>(
+        (std::min)(static_cast<uint64_t>(sz),maxAnalysisBytes));
     std::ifstream f(fs::path(path),std::ios::binary);
     if(!f){r.status="Cannot open file (access denied or missing).";return r;}
-    std::vector<unsigned char> b((std::istreambuf_iterator<char>(f)),{});
+    std::vector<unsigned char> b(bytesToRead);
+    f.read(reinterpret_cast<char*>(b.data()),
+           static_cast<std::streamsize>(bytesToRead));
+    b.resize(static_cast<size_t>(f.gcount()));
+    if(b.empty() && sz>0){
+        r.status="Unable to read binary data.";
+        return r;
+    }
+    if(static_cast<uint64_t>(sz)>maxAnalysisBytes)
+        r.notes.push_back(
+            "Large file: PE data and strings are analyzed from the first "
+            "256 MiB; SHA-256 covers the full file.");
     r.sha256=sha256(path);
     r.head.assign(b.begin(),b.begin()+(std::min)(b.size(),size_t(4096)));
     r.format="Unknown / data";
@@ -3833,13 +3850,12 @@ static void renderUI() {
                           IM_COL32(112,164,232,190),1.f);
         ImGui::Dummy(ImVec2(0,29.f));
     }
-    // Shared across every page: measured completed stages, never timer-based.
-    if(scanning || done){
-        const int percent=inspectionDisplayPercent();
+    // Only Dashboard shows progress; remove the bar once it reaches 100%.
+    // All other pages retain the locked/unlocking overlay until completion.
+    if(page==0 && (scanning || done) && inspectionDisplayPercent()<100){
         drawAtlasProgress(false);
         ImGui::TextDisabled("%s",
-            done ? (percent==100 ? "INSPECTION COMPLETE" :
-                "SCAN COMPLETE - PREPARING RESULTS") :
+            done ? "SCAN COMPLETE - PREPARING RESULTS" :
                 "FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
@@ -3967,8 +3983,6 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING");
-            const int percent=inspectionDisplayPercent();
-            drawAtlasProgress(true);
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else{
             if(accentButton("START FULL INSPECTION",ImVec2(220,42)))startScan();
