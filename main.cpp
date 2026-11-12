@@ -2011,6 +2011,67 @@ static std::vector<Record> inspectTemporaryExecutables(
     return out;
 }
 
+
+// Explicit filename-based FiveM screening rule requested by the operator.
+// A name match is DETECTED as a rule hit, never as proof of malware.
+// Match the filename only (not parent directories), case-insensitively.
+static bool isCheatNameRuleMatch(const std::wstring& filename){
+    const std::wstring name=lowerPath(fs::path(filename).filename().wstring());
+    return name.find(L"cheat")!=std::wstring::npos ||
+           name.find(L"external")!=std::wstring::npos;
+}
+static std::vector<Record> inspectCheatNamedProcesses(
+    std::vector<Process>& items){
+    std::vector<Record> out;
+    for(auto& proc:items){
+        if(cancelRequested)break;
+        if(!isCheatNameRuleMatch(proc.name) &&
+           (proc.path.empty() || !isCheatNameRuleMatch(proc.path)))continue;
+        proc.suspicious=true;
+        const std::string note=
+            "DETECTED - NAME RULE | Process filename contains CHEAT or EXTERNAL. "
+            "PID: "+std::to_string(proc.pid)+
+            " | Path: "+utf8(proc.path)+
+            " | Why: the operator enabled a broad FiveM cheat-name rule. "
+            "This is a filename match, NOT confirmed malware or proof of cheating.";
+        if(!proc.assessment.empty())proc.assessment+=" | ";
+        proc.assessment+="DETECTED: CHEAT/EXTERNAL filename rule (name only)";
+        out.push_back({"FiveM Cheat Name Detection",utf8(proc.name),note});
+    }
+    return out;
+}
+static std::vector<Record> inspectCheatNamedModules(
+    const std::vector<Process>& items){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0;
+    for(const auto& proc:items){
+        if(cancelRequested || checked>=120)break;
+        if(!proc.pid || proc.pid==4)continue;
+        ++checked;
+        HANDLE snap=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,proc.pid);
+        if(snap==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W m{};m.dwSize=sizeof(m);
+        if(Module32FirstW(snap,&m)){
+            do{
+                if(cancelRequested)break;
+                if(!isCheatNameRuleMatch(m.szModule))continue;
+                const std::wstring key=std::to_wstring(proc.pid)+L"|"+lowerPath(m.szExePath);
+                if(!seen.insert(key).second)continue;
+                out.push_back({"FiveM Cheat Name Detection",utf8(m.szModule),
+                    "DETECTED - NAME RULE | Loaded module filename contains CHEAT "
+                    "or EXTERNAL. Process: "+utf8(proc.name)+
+                    " | PID: "+std::to_string(proc.pid)+
+                    " | Module: "+utf8(m.szExePath)+
+                    " | This is a name match only, not confirmed injection or malware."});
+            }while(Module32NextW(snap,&m));
+        }
+        CloseHandle(snap);
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -2067,6 +2128,8 @@ static void scanWorker() {
         auto windowVisibility=inspectDesktopWindowVisibility(hwnd);
         auto logon=inspectLogonConfiguration();
         auto hosts=inspectHostsFile();
+        auto cheatNameProcesses=inspectCheatNamedProcesses(p);
+        auto cheatNameModules=inspectCheatNamedModules(p);
         auto peFindings=inspectPeStructure(p);
         auto provenance=inspectExecutableProvenance(p);
         auto loadedModules=inspectLoadedModuleProvenance(p);
@@ -2093,6 +2156,8 @@ static void scanWorker() {
         services.insert(services.end(),hosts.begin(),hosts.end());
         services.insert(services.end(),peFindings.begin(),peFindings.end());
         services.insert(services.end(),provenance.begin(),provenance.end());
+        services.insert(services.end(),cheatNameProcesses.begin(),cheatNameProcesses.end());
+        services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
