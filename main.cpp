@@ -2066,6 +2066,28 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
+    // Custom frameless title bar: drag area, minimize and close only.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.057f,.078f,1.f));
+    ImGui::BeginChild("##customTitleBar",ImVec2(0,42),ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+    const float controls=104.f;
+    const float dragWidth=(std::max)(40.f,ImGui::GetContentRegionAvail().x-controls);
+    ImGui::InvisibleButton("##windowDrag",ImVec2(dragWidth,40));
+    if(ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left,3.f)) {
+        ReleaseCapture();
+        SendMessageW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,0);
+    }
+    ImGui::SameLine(0,0);
+    if(ImGui::Button("-##minimize",ImVec2(48,36)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,4);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.74f,.15f,.19f,1.f));
+    if(ImGui::Button("X##close",ImVec2(48,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::PopStyleColor();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::Dummy(ImVec2(0,4));
     const float sidebar=254.f;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16,17));
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.066f,.088f,1.f));
@@ -2415,7 +2437,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                   L"SyncPCChecker",nullptr};
     RegisterClassExW(&wc);
     hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
-                       WS_OVERLAPPEDWINDOW,100,100,1200,780,nullptr,nullptr,inst,nullptr);
+                       WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU,100,100,1200,780,nullptr,nullptr,inst,nullptr);
     if(!hwnd || !initD3D(hwnd))return 1;
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
     IMGUI_CHECKVERSION();ImGui::CreateContext();
