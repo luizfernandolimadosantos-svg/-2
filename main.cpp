@@ -68,6 +68,64 @@ static std::atomic<bool> scanCancelled{false};
 static std::atomic<int> completedStages{0};
 static std::atomic<int> totalStages{4};
 static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
+static std::wstring executablePath();
+static int accentIndex=0, themeIndex=0, densityIndex=1;
+static float interfaceScale=1.0f;
+static bool highlightSuspicious=true, showSecurityWarnings=true;
+static ImVec4 customAccent(.98f,.43f,.15f,1.f);
+static bool settingsNotice=false;
+static const char* accentNames[]={"Orange","Red","Blue","Purple","Green","Custom"};
+static const char* themeNames[]={"Carbon Ember","Dark Graphite","Midnight"};
+static const char* densityNames[]={"Compact","Comfortable","Spacious"};
+static ImVec4 accentColor() {
+    static const ImVec4 palette[]={
+        ImVec4(.98f,.43f,.15f,1),ImVec4(.92f,.27f,.31f,1),
+        ImVec4(.29f,.57f,.98f,1),ImVec4(.67f,.42f,.95f,1),
+        ImVec4(.27f,.77f,.54f,1)};
+    return accentIndex==5?customAccent:palette[std::clamp(accentIndex,0,4)];
+}
+static fs::path settingsPath() {
+    wchar_t appdata[32768]{};
+    DWORD n=GetEnvironmentVariableW(L"APPDATA",appdata,32768);
+    if(n>0 && n<32768) return fs::path(appdata)/L"MacaquitoScanner"/L"settings.ini";
+    return fs::path(executablePath()).parent_path()/L"settings.ini";
+}
+static void saveSettings() {
+    try {
+        auto path=settingsPath();
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path,std::ios::trunc);
+        if(!out) {settingsNotice=false;return;}
+        out<<"accent="<<accentIndex<<"\n"<<"theme="<<themeIndex<<"\n"
+           <<"density="<<densityIndex<<"\n"<<"scale="<<interfaceScale<<"\n"
+           <<"highlight="<<highlightSuspicious<<"\n"
+           <<"warnings="<<showSecurityWarnings<<"\n"
+           <<"custom_r="<<customAccent.x<<"\n"
+           <<"custom_g="<<customAccent.y<<"\n"
+           <<"custom_b="<<customAccent.z<<"\n";
+        settingsNotice=(bool)out;
+    } catch(...) {settingsNotice=false;}
+}
+static void loadSettings() {
+    std::ifstream in(settingsPath());
+    std::string line;
+    try {
+        while(std::getline(in,line)) {
+            auto pos=line.find('=');
+            if(pos==std::string::npos)continue;
+            auto key=line.substr(0,pos),v=line.substr(pos+1);
+            if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
+            else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
+            else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
+            else if(key=="scale")interfaceScale=std::clamp(std::stof(v),.8f,1.4f);
+            else if(key=="highlight")highlightSuspicious=(v=="1");
+            else if(key=="warnings")showSecurityWarnings=(v=="1");
+            else if(key=="custom_r")customAccent.x=std::clamp(std::stof(v),0.f,1.f);
+            else if(key=="custom_g")customAccent.y=std::clamp(std::stof(v),0.f,1.f);
+            else if(key=="custom_b")customAccent.z=std::clamp(std::stof(v),0.f,1.f);
+        }
+    } catch(...) {}
+}
 static bool showUnavailable=true;
 static char fileInput[2048]="";
 static char searchInput[256]="";
@@ -677,18 +735,18 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     return DefWindowProcW(h,msg,w,l);
 }
 
-static ImVec4 orange(){return ImVec4(.98f,.43f,.15f,1.f);}
+static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
     st.WindowRounding=0; st.ChildRounding=12; st.FrameRounding=7;
     st.PopupRounding=9; st.ScrollbarRounding=9;
-    st.WindowPadding=ImVec2(18,18);st.FramePadding=ImVec2(11,8);
-    st.ItemSpacing=ImVec2(11,10);st.ItemInnerSpacing=ImVec2(9,6);
+    st.WindowPadding=ImVec2(18,18);st.FramePadding=ImVec2(11,densityIndex==0?5.f:densityIndex==2?12.f:8.f);
+    st.ItemSpacing=ImVec2(11,densityIndex==0?5.f:densityIndex==2?15.f:10.f);st.ItemInnerSpacing=ImVec2(9,6);
     st.ScrollbarSize=11;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.047f,.052f,.066f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.080f,.088f,.109f,1);
+    c[ImGuiCol_WindowBg]=themeIndex==2?ImVec4(.028f,.031f,.075f,1):themeIndex==1?ImVec4(.080f,.083f,.092f,1):ImVec4(.047f,.052f,.066f,1);
+    c[ImGuiCol_ChildBg]=themeIndex==2?ImVec4(.048f,.056f,.108f,1):themeIndex==1?ImVec4(.11f,.12f,.13f,1):ImVec4(.080f,.088f,.109f,1);
     c[ImGuiCol_PopupBg]=ImVec4(.105f,.115f,.140f,1);
     c[ImGuiCol_Border]=ImVec4(.18f,.20f,.24f,1);
     c[ImGuiCol_Text]=ImVec4(.94f,.95f,.97f,1);
@@ -704,14 +762,14 @@ static void applyTheme() {
     c[ImGuiCol_CheckMark]=orange();
     c[ImGuiCol_SliderGrab]=orange();
     c[ImGuiCol_Tab]=ImVec4(.12f,.14f,.18f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.27f,.20f,.17f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.29f,.19f,.14f,1);
+    c[ImGuiCol_TabHovered]=orange();
+    c[ImGuiCol_TabSelected]=ImVec4(orange().x*.5f,orange().y*.5f,orange().z*.5f,1);
     c[ImGuiCol_TableRowBgAlt]=ImVec4(.12f,.13f,.16f,.55f);
 }
 static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
-    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.96f,.39f,.11f,1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1,.49f,.19f,1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.83f,.30f,.07f,1));
+    ImGui::PushStyleColor(ImGuiCol_Button,orange());
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(std::min(1.f,orange().x+.12f),std::min(1.f,orange().y+.12f),std::min(1.f,orange().z+.12f),1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(orange().x*.8f,orange().y*.8f,orange().z*.8f,1));
     ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.08f,.08f,.10f,1));
     bool clicked=ImGui::Button(text,size);
     ImGui::PopStyleColor(4);
@@ -766,6 +824,189 @@ static void modulesList() {
         ImGui::PopID();
     }
 }
+
+// Read-only process details. The module list is a snapshot and may change after collection.
+struct ModuleReview {
+    std::wstring name,path;
+    std::string assessment;
+    bool suspicious=false;
+};
+static Process selectedProcess{};
+static std::vector<ModuleReview> selectedModules;
+static bool detailsOpen=false;
+static std::string selectedHash,selectedSignature;
+static std::string moduleNote(const std::wstring& name,const std::wstring& path) {
+    if(path.empty())return "Module path not exposed; no conclusion";
+    std::wstring low=lowerPath(path);
+    std::wstring nm=lowerPath(name);
+    std::string reason;
+    if(pathContains(low,L"\\appdata\\local\\temp\\") ||
+       pathContains(low,L"\\windows\\temp\\"))appendWarning(reason,"Module loaded from a temporary directory");
+    if(pathContains(low,L"\\downloads\\"))appendWarning(reason,"Module loaded from Downloads");
+    if(pathContains(low,L"\\appdata\\roaming\\"))appendWarning(reason,"Module loaded from a user-writable profile directory");
+    if((nm==L"kernel32.dll"||nm==L"ntdll.dll"||nm==L"user32.dll"||
+        nm==L"advapi32.dll"||nm==L"kernelbase.dll") &&
+        !startsWithPath(low,windowsRoot()))
+        appendWarning(reason,"Windows system DLL name outside the Windows directory");
+    return reason.empty()?"No path-based review indicators observed":reason;
+}
+static std::vector<ModuleReview> inspectProcessModules(DWORD pid) {
+    std::vector<ModuleReview> out;
+    HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid);
+    if(snap==INVALID_HANDLE_VALUE)return out;
+    MODULEENTRY32W entry{};entry.dwSize=sizeof(entry);
+    if(Module32FirstW(snap,&entry)) {
+        do {
+            ModuleReview m;
+            m.name=entry.szModule;
+            m.path=entry.szExePath;
+            m.assessment=moduleNote(m.name,m.path);
+            m.suspicious=m.assessment!="No path-based review indicators observed";
+            out.push_back(std::move(m));
+        }while(Module32NextW(snap,&entry));
+    }
+    CloseHandle(snap);
+    return out;
+}
+static void selectProcessDetails(const Process& p) {
+    selectedProcess=p;
+    selectedModules=inspectProcessModules(p.pid);
+    selectedHash.clear();
+    selectedSignature.clear();
+    detailsOpen=true;
+}
+static void drawProcessDetails() {
+    if(!detailsOpen)return;
+    ImGui::SetNextWindowSize(ImVec2(1020,680),ImGuiCond_FirstUseEver);
+    if(!ImGui::Begin("Process Details - Read Only",&detailsOpen)) {
+        ImGui::End();return;
+    }
+    ImGui::Text("Process: %s",utf8(selectedProcess.name).c_str());
+    ImGui::SameLine();ImGui::TextDisabled("PID: %lu | Parent PID: %lu",
+        (unsigned long)selectedProcess.pid,(unsigned long)selectedProcess.parent);
+    ImGui::TextWrapped("Executable: %s",utf8(selectedProcess.path).c_str());
+    if(selectedProcess.suspicious)
+        ImGui::TextColored(ImVec4(1.f,.44f,.43f,1.f),
+            "Review indicator: %s",selectedProcess.assessment.c_str());
+    else ImGui::TextDisabled("%s",selectedProcess.assessment.c_str());
+    if(isResolvedPath(selectedProcess.path)) {
+        if(ImGui::Button("Calculate executable SHA-256 and signature")) {
+            selectedHash=sha256(selectedProcess.path);
+            selectedSignature=signatureStatus(selectedProcess.path);
+        }
+        if(!selectedHash.empty())ImGui::TextWrapped("SHA-256: %s",selectedHash.c_str());
+        if(!selectedSignature.empty())ImGui::TextWrapped("Signature: %s",selectedSignature.c_str());
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("Refresh loaded modules"))
+        selectedModules=inspectProcessModules(selectedProcess.pid);
+    ImGui::Separator();
+    ImGui::Text("Loaded modules: %zu",selectedModules.size());
+    ImGui::TextDisabled("Read-only module inventory. Inaccessible modules are not evidence of malware.");
+    if(selectedModules.empty())
+        ImGui::TextDisabled("No module list available (protected, exited, or access denied).");
+    if(ImGui::BeginTable("detailModules",3,ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
+        ImVec2(0,-1))) {
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("Module",ImGuiTableColumnFlags_WidthStretch,1.2f);
+        ImGui::TableSetupColumn("Full path",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,2.2f);
+        ImGui::TableHeadersRow();
+        for(const auto& m:selectedModules) {
+            ImGui::TableNextRow();
+            if(m.suspicious && highlightSuspicious)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(m.path).c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",m.assessment.c_str());
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+// Stopped automatic services can warrant review, but many are trigger-started by design.
+struct ServiceReview {
+    std::wstring name,display;
+    DWORD startType=SERVICE_DEMAND_START;
+    DWORD currentState=SERVICE_STOPPED;
+    bool review=false;
+    std::string assessment;
+};
+static std::vector<ServiceReview> inspectServiceStates() {
+    std::vector<ServiceReview> result;
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE|SC_MANAGER_CONNECT);
+    if(!scm)return result;
+    DWORD needed=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_WIN32,SERVICE_STATE_ALL,
+        nullptr,0,&needed,&count,&resume,nullptr);
+    if(GetLastError()==ERROR_MORE_DATA && needed && needed<32*1024*1024) {
+        std::vector<BYTE> buffer(needed+4096);
+        resume=0;
+        if(EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_WIN32,SERVICE_STATE_ALL,
+            buffer.data(),(DWORD)buffer.size(),&needed,&count,&resume,nullptr)) {
+            auto rows=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+            for(DWORD i=0;i<count;i++) {
+                ServiceReview item;
+                item.name=rows[i].lpServiceName;
+                item.display=rows[i].lpDisplayName;
+                item.currentState=rows[i].ServiceStatusProcess.dwCurrentState;
+                SC_HANDLE service=OpenServiceW(scm,item.name.c_str(),SERVICE_QUERY_CONFIG);
+                if(service) {
+                    DWORD bytes=0;
+                    QueryServiceConfigW(service,nullptr,0,&bytes);
+                    if(bytes && bytes<65536) {
+                        std::vector<BYTE> cfg(bytes);
+                        if(QueryServiceConfigW(service,
+                            reinterpret_cast<QUERY_SERVICE_CONFIGW*>(cfg.data()),bytes,&bytes))
+                            item.startType=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(cfg.data())->dwStartType;
+                    }
+                    CloseServiceHandle(service);
+                }
+                item.review=(item.startType==SERVICE_AUTO_START &&
+                    item.currentState==SERVICE_STOPPED);
+                item.assessment=item.review?
+                    "Automatic-start service is stopped; verify expected configuration":
+                    "No stopped automatic-start indicator";
+                result.push_back(std::move(item));
+            }
+        }
+    }
+    CloseServiceHandle(scm);
+    return result;
+}
+static std::vector<ServiceReview> serviceReviews;
+static void drawServiceReviews() {
+    if(serviceReviews.empty())serviceReviews=inspectServiceStates();
+    if(ImGui::Button("Refresh service states"))
+        serviceReviews=inspectServiceStates();
+    ImGui::SameLine();
+    ImGui::TextDisabled("Stopped automatic-start services are review candidates, not confirmed threats.");
+    if(ImGui::BeginTable("serviceReviewTable",4,ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
+        ImVec2(0,-1))) {
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("Service",ImGuiTableColumnFlags_WidthStretch,1.5f);
+        ImGui::TableSetupColumn("Display name",ImGuiTableColumnFlags_WidthStretch,2.f);
+        ImGui::TableSetupColumn("State",ImGuiTableColumnFlags_WidthFixed,110);
+        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,110);
+        ImGui::TableHeadersRow();
+        for(const auto& item:serviceReviews) {
+            ImGui::TableNextRow();
+            if(item.review && highlightSuspicious)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(item.name).c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(item.display).c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(item.currentState==SERVICE_RUNNING?"Running":
+                item.currentState==SERVICE_STOPPED?"Stopped":"Other");
+            ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s",item.assessment.c_str());
+        }
+        ImGui::EndTable();
+    }
+}
+
 static void processTable(float height) {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.68f);
     ImGui::InputTextWithHint("##search","Search processes, paths, or assessments...",searchInput,sizeof(searchInput));
@@ -783,7 +1024,7 @@ static void processTable(float height) {
     const ImGuiTableFlags flags=ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
         ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp;
-    if(ImGui::BeginTable("processes",5,flags,ImVec2(0,height))) {
+    if(ImGui::BeginTable("processes",6,flags,ImVec2(0,height))) {
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,64);
         ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,68);
@@ -802,17 +1043,21 @@ static void processTable(float height) {
                 [](unsigned char c){return (char)std::tolower(c);});
             if(combined.find(q)==std::string::npos)continue;
             ImGui::TableNextRow();
-            if(p.suspicious)
+            if(p.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
             ImGui::TableSetColumnIndex(4);
-            if(p.suspicious)
+            if(p.suspicious && highlightSuspicious)
                 ImGui::TextColored(ImVec4(1.f,.72f,.68f,1.f),"%s",p.assessment.c_str());
             else
                 ImGui::TextDisabled("%s",p.assessment.c_str());
+            ImGui::TableSetColumnIndex(5);
+            ImGui::PushID((int)p.pid);
+            if(ImGui::SmallButton("Show Details"))selectProcessDetails(p);
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -854,8 +1099,8 @@ static void renderUI() {
         ImGui::PushID(i);
         const bool selected=(page==i);
         if(selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.35f,.20f,.14f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,.57f,.30f,1));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(orange().x*.34f,orange().y*.34f,orange().z*.34f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,orange());
         }
         const bool clicked=ImGui::Button(names[i],ImVec2(-1,43));
         if(selected)ImGui::PopStyleColor(2);
@@ -937,6 +1182,10 @@ static void renderUI() {
                 processTable(-1.f);
                 ImGui::EndTabItem();
             }
+            if(ImGui::BeginTabItem("Service Review")) {
+                drawServiceReviews();
+                ImGui::EndTabItem();
+            }
             if(ImGui::BeginTabItem("File Integrity")) {
                 ImGui::InputTextWithHint("##file","Select a file to verify...",fileInput,sizeof(fileInput));
                 ImGui::SameLine();if(ImGui::Button("Browse"))chooseFile();
@@ -978,16 +1227,51 @@ static void renderUI() {
         ImGui::TextWrapped("The scanner will not generate synthetic events or timestamps.");
         ImGui::EndChild();
     } else if(page==4) {
-        sectionTitle("SETTINGS","Single full inspection. No scan profiles.");
-        ImGui::BeginChild("settings",ImVec2(0,230),ImGuiChildFlags_Borders);
-        ImGui::Text("Detection");
-        ImGui::TextDisabled("Offline Authenticode verification and read-only inventory.");
+        sectionTitle("APPEARANCE & SETTINGS","Customize the scanner interface. Changes apply immediately.");
+        ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
+        ImGui::TextColored(orange(),"APPEARANCE");
         ImGui::Separator();
-        ImGui::Text("Privacy");
-        ImGui::TextDisabled("Results are collected locally. CSV export is manual.");
-        ImGui::Separator();
-        ImGui::Text("Performance");
-        ImGui::TextDisabled("System inventory runs in a background worker.");
+        ImGui::Spacing();
+        ImGui::Text("Accent Color");
+        ImGui::SetNextItemWidth(320);
+        if(ImGui::Combo("##accent",&accentIndex,accentNames,IM_ARRAYSIZE(accentNames)))applyTheme();
+        if(accentIndex==5) {
+            if(ImGui::ColorEdit3("Custom accent",(float*)&customAccent,ImGuiColorEditFlags_NoInputs))
+                applyTheme();
+        }
+        ImGui::Spacing();
+        ImGui::Text("Theme");
+        ImGui::SetNextItemWidth(320);
+        if(ImGui::Combo("##theme",&themeIndex,themeNames,IM_ARRAYSIZE(themeNames)))applyTheme();
+        ImGui::Spacing();
+        ImGui::Text("Interface Scale");
+        ImGui::SetNextItemWidth(320);
+        if(ImGui::SliderFloat("##scale",&interfaceScale,.8f,1.4f,"%.2fx"))
+            ImGui::GetIO().FontGlobalScale=interfaceScale;
+        ImGui::Spacing();
+        ImGui::Text("Table Density");
+        ImGui::SetNextItemWidth(320);
+        if(ImGui::Combo("##density",&densityIndex,densityNames,IM_ARRAYSIZE(densityNames)))
+            applyTheme();
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        ImGui::TextColored(orange(),"PROCESS REVIEW");
+        ImGui::Checkbox("Highlight suspicious processes in red",&highlightSuspicious);
+        ImGui::Checkbox("Show English security assessments",&showSecurityWarnings);
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        ImGui::TextColored(orange(),"PREFERENCES");
+        if(accentButton("Save Settings",ImVec2(170,42)))saveSettings();
+        ImGui::SameLine();
+        if(ImGui::Button("Restore Defaults",ImVec2(170,42))) {
+            accentIndex=0;themeIndex=0;densityIndex=1;interfaceScale=1.f;
+            highlightSuspicious=true;showSecurityWarnings=true;
+            customAccent=ImVec4(.98f,.43f,.15f,1.f);
+            ImGui::GetIO().FontGlobalScale=1.f;
+            applyTheme();
+            saveSettings();
+        }
+        if(settingsNotice)ImGui::TextColored(ImVec4(.35f,.85f,.55f,1),"Settings saved successfully.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Preferences are stored locally in APPDATA\\MacaquitoScanner\\settings.ini");
         ImGui::EndChild();
     } else if(page==5) {
         sectionTitle("DIGITAL IDENTITY","Application integrity and developer information");
@@ -1012,6 +1296,7 @@ static void renderUI() {
     }
     ImGui::EndChild();
     ImGui::End();
+    drawProcessDetails();
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,nullptr,nullptr,nullptr,nullptr,
@@ -1023,7 +1308,9 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
     IMGUI_CHECKVERSION();ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
+    loadSettings();
     applyTheme();
+    ImGui::GetIO().FontGlobalScale=interfaceScale;
     // Use Windows' modern UI font when available; fallback to the built-in font.
     ImGuiIO& io=ImGui::GetIO();
     ImFontConfig fontCfg{};
