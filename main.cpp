@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 #include <commdlg.h>
 #include <d3d11.h>
 #include <wintrust.h>
@@ -12,6 +13,8 @@
 #include <ws2tcpip.h>
 #include <winreg.h>
 #include <cctype>
+#include <cwctype>
+#include <unordered_set>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -37,9 +40,10 @@
 #pragma comment(lib,"advapi32.lib")
 #pragma comment(lib,"iphlpapi.lib")
 #pragma comment(lib,"ws2_32.lib")
+#pragma comment(lib,"psapi.lib")
 
 namespace fs=std::filesystem;
-struct Process { DWORD pid; DWORD parent; std::wstring name,path; };
+struct Process { DWORD pid; DWORD parent; std::wstring name,path; std::string assessment; bool suspicious=false; };
 struct Record { std::string category,name,detail; };
 struct FileResult { std::wstring path; std::string hash,signature; };
 static HWND hwnd=nullptr;
@@ -91,14 +95,60 @@ static std::wstring executablePath() {
     DWORD n=GetModuleFileNameW(nullptr,buf,32768);
     return n?std::wstring(buf,n):L"";
 }
+// Query several documented Windows APIs without bypassing process protection.
+static bool isResolvedPath(const std::wstring& path) {
+    return path.size()>2 && path[1]==L':' && path[2]==L'\\';
+}
+static std::wstring devicePathToDos(const std::wstring& nativePath) {
+    if(nativePath.empty()) return {};
+    wchar_t drives[512]{};
+    DWORD n=GetLogicalDriveStringsW(512,drives);
+    if(n==0 || n>=512)return nativePath;
+    for(const wchar_t* drive=drives;*drive;drive+=wcslen(drive)+1) {
+        wchar_t device[1024]{};
+        wchar_t letter[3]={drive[0],L':',0};
+        if(!QueryDosDeviceW(letter,device,1024))continue;
+        const size_t prefix=wcslen(device);
+        if(nativePath.size()>=prefix &&
+           _wcsnicmp(nativePath.c_str(),device,prefix)==0 &&
+           (nativePath.size()==prefix || nativePath[prefix]==L'\\')) {
+            return std::wstring(letter)+nativePath.substr(prefix);
+        }
+    }
+    return nativePath;
+}
 static std::wstring processPath(DWORD pid) {
+    if(pid==0)return L"[Idle process - no executable image]";
+    if(pid==4)return L"[Windows kernel process - protected image]";
     HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
-    if(!h) return L"Unavailable";
-    wchar_t buf[32768]{};
-    DWORD n=32768;
-    bool ok=QueryFullProcessImageNameW(h,0,buf,&n)!=0;
-    CloseHandle(h);
-    return ok?std::wstring(buf,n):L"Unavailable";
+    DWORD openError=h?ERROR_SUCCESS:GetLastError();
+    if(h) {
+        wchar_t buffer[32768]{};
+        DWORD length=32768;
+        if(QueryFullProcessImageNameW(h,0,buffer,&length)) {
+            CloseHandle(h);
+            return std::wstring(buffer,length);
+        }
+        // PSAPI may expose a native device path when the first query fails.
+        DWORD chars=GetProcessImageFileNameW(h,buffer,32768);
+        CloseHandle(h);
+        if(chars)return devicePathToDos(std::wstring(buffer,chars));
+    }
+    // A module snapshot can sometimes resolve the main image independently.
+    HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid);
+    if(snap!=INVALID_HANDLE_VALUE) {
+        MODULEENTRY32W module{};module.dwSize=sizeof(module);
+        if(Module32FirstW(snap,&module)) {
+            std::wstring result=module.szExePath;
+            CloseHandle(snap);
+            if(!result.empty())return result;
+        } else CloseHandle(snap);
+    }
+    if(openError==ERROR_ACCESS_DENIED)
+        return L"[Protected process - Windows denied image path access]";
+    if(openError==ERROR_INVALID_PARAMETER)
+        return L"[Process exited or is not queryable]";
+    return L"[Image path not exposed by Windows APIs]";
 }
 static std::vector<Process> enumerateProcesses() {
     std::vector<Process> result;
@@ -113,6 +163,68 @@ static std::vector<Process> enumerateProcesses() {
     }
     CloseHandle(snap);
     return result;
+}
+// Conservative, explainable checks. A warning is an indicator, not a malware verdict.
+static std::wstring lowerPath(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return (wchar_t)towlower(c);});
+    return value;
+}
+static bool pathContains(const std::wstring& path,const wchar_t* segment) {
+    return path.find(segment)!=std::wstring::npos;
+}
+static bool startsWithPath(const std::wstring& path,const std::wstring& root) {
+    if(root.empty() || path.size()<root.size())return false;
+    if(path.compare(0,root.size(),root)!=0)return false;
+    return path.size()==root.size() || root.back()==L'\\' || path[root.size()]==L'\\';
+}
+static std::wstring windowsRoot() {
+    wchar_t buffer[MAX_PATH]{};
+    UINT count=GetWindowsDirectoryW(buffer,MAX_PATH);
+    if(!count || count>=MAX_PATH)return L"c:\\windows";
+    return lowerPath(std::wstring(buffer,count));
+}
+static void appendWarning(std::string& warnings,const char* warning) {
+    if(!warnings.empty())warnings+=" | ";
+    warnings+=warning;
+}
+static void assessProcess(Process& process,const std::wstring& winRoot) {
+    process.suspicious=false;
+    process.assessment="No suspicious path indicators observed";
+    if(process.path.empty() || process.path[0]==L'[') {
+        process.assessment="Executable path inaccessible; no conclusion";
+        return;
+    }
+    const std::wstring path=lowerPath(process.path);
+    const std::wstring name=lowerPath(process.name);
+    const bool inWindows=startsWithPath(path,winRoot);
+    std::string warnings;
+    if(pathContains(path,L"\\appdata\\local\\temp\\") ||
+       pathContains(path,L"\\windows\\temp\\") ||
+       pathContains(path,L"\\temp\\")) {
+        appendWarning(warnings,"Executable running from a temporary directory");
+    }
+    if(pathContains(path,L"\\downloads\\") ||
+       pathContains(path,L"\\recycle.bin\\")) {
+        appendWarning(warnings,"Executable launched from a user download or recycle location");
+    }
+    // Only names that are normally Windows-owned are checked for impersonation.
+    static const std::unordered_set<std::wstring> systemNames={
+        L"lsass.exe",L"services.exe",L"winlogon.exe",L"smss.exe",
+        L"csrss.exe",L"wininit.exe",L"svchost.exe",L"spoolsv.exe"
+    };
+    if(systemNames.count(name) && !inWindows)
+        appendWarning(warnings,"Windows system process name used outside the Windows directory");
+    if(pathContains(path,L".exe.exe") || pathContains(path,L".pdf.exe") ||
+       pathContains(path,L".jpg.exe") || pathContains(path,L".txt.exe"))
+        appendWarning(warnings,"Executable has a potentially misleading double extension");
+    DWORD attrs=GetFileAttributesW(process.path.c_str());
+    if(attrs!=INVALID_FILE_ATTRIBUTES && (attrs&FILE_ATTRIBUTE_REPARSE_POINT))
+        appendWarning(warnings,"Executable path is a reparse point; verify target");
+    if(!warnings.empty()) {
+        process.suspicious=true;
+        process.assessment=warnings+"; manual review recommended";
+    }
 }
 static std::string sha256(const std::wstring& path) {
     HANDLE f=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
@@ -338,6 +450,11 @@ static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
+        const std::wstring winRoot=windowsRoot();
+        for(auto& proc:p) {
+            if(cancelRequested)break;
+            assessProcess(proc,winRoot);
+        }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=1;
         stage=2;
@@ -385,16 +502,16 @@ static std::string csvQuote(const std::string& s) {
 static void exportCsv() {
     std::ofstream out("MacaquitoScanner_Report.csv",std::ios::binary);
     if(!out){status="Could not write CSV";return;}
-    out<<"Type,PID,ParentPID,Name,Path,SHA256,Signature\n";
+    out<<"Type,PID,ParentPID,Name,Path,SHA256,Signature,ReviewFlag,SecurityAssessment\n";
     std::lock_guard<std::mutex> lock(dataMutex);
     for(const auto& p:processes)
         out<<"Process,"<<p.pid<<","<<p.parent<<","<<csvQuote(utf8(p.name))<<","
-           <<csvQuote(utf8(p.path))<<",,\n";
+           <<csvQuote(utf8(p.path))<<",,,"<<(p.suspicious?"REVIEW":"NONE")<<","<<csvQuote(p.assessment)<<"\n";
     for(const auto& r:records)
-        out<<csvQuote(r.category)<<",,,"<<csvQuote(r.name)<<","<<csvQuote(r.detail)<<",,\n";
+        out<<csvQuote(r.category)<<",,,"<<csvQuote(r.name)<<","<<csvQuote(r.detail)<<",,,,\n";
     for(const auto& f:files)
         out<<"File,,,"<<csvQuote(utf8(fs::path(f.path).filename().wstring()))<<","
-           <<csvQuote(utf8(f.path))<<","<<csvQuote(f.hash)<<","<<csvQuote(f.signature)<<"\n";
+           <<csvQuote(utf8(f.path))<<","<<csvQuote(f.hash)<<","<<csvQuote(f.signature)<<",,\n";
     status="CSV saved: MacaquitoScanner_Report.csv";
 }
 
@@ -439,14 +556,14 @@ static void exportHtml() {
           "margin:40px auto;max-width:1100px;padding:0 18px}h1,h2{color:#ff8739}"
           "table{width:100%;border-collapse:collapse;margin:16px 0 36px}"
           "td,th{border-bottom:1px solid #34363e;padding:9px;text-align:left;word-break:break-word}"
-          "th{background:#22252d}small{color:#9da0a9}</style></head><body>"
+          "th{background:#22252d}tr.review{background:#67252b}small{color:#9da0a9}</style></head><body>"
           "<h1>Macaquito Scanner</h1><p>Developer: Mudin</p>"
           "<small>Read-only inventory. An inventory entry is not a threat finding.</small>";
     out<<"<h2>Processes ("<<processes.size()<<")</h2><table><tr>"
-          "<th>PID</th><th>Parent</th><th>Name</th><th>Path</th></tr>";
+          "<th>PID</th><th>Parent</th><th>Name</th><th>Path</th><th>Security assessment</th></tr>";
     for(const auto& p:processes)
-        out<<"<tr><td>"<<p.pid<<"</td><td>"<<p.parent<<"</td><td>"
-           <<htmlEscape(utf8(p.name))<<"</td><td>"<<htmlEscape(utf8(p.path))<<"</td></tr>";
+        out<<(p.suspicious?"<tr class=\"review\"><td>":"<tr><td>")<<p.pid<<"</td><td>"<<p.parent<<"</td><td>"
+           <<htmlEscape(utf8(p.name))<<"</td><td>"<<htmlEscape(utf8(p.path))<<"</td><td>"<<htmlEscape(p.assessment)<<"</td></tr>";
     out<<"</table><h2>System Inventory ("<<records.size()<<")</h2><table>"
           "<tr><th>Category</th><th>Name</th><th>Detail</th></tr>";
     for(const auto& r:records)
@@ -470,7 +587,9 @@ static void exportJson() {
         const auto& p=processes[i];
         out<<"    {\"pid\": "<<p.pid<<", \"parent\": "<<p.parent
            <<", \"name\": "<<jsonEscape(utf8(p.name))
-           <<", \"path\": "<<jsonEscape(utf8(p.path))<<"}"
+           <<", \"path\": "<<jsonEscape(utf8(p.path))
+           <<", \"review\": "<<(p.suspicious?"true":"false")
+           <<", \"assessment\": "<<jsonEscape(p.assessment)<<"}"
            <<(i+1<processes.size()?",":"")<<"\n";
     }
     out<<"  ],\n  \"records\": [\n";
@@ -648,30 +767,52 @@ static void modulesList() {
     }
 }
 static void processTable(float height) {
-    ImGui::InputTextWithHint("##search","Search processes or paths...",searchInput,sizeof(searchInput));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.68f);
+    ImGui::InputTextWithHint("##search","Search processes, paths, or assessments...",searchInput,sizeof(searchInput));
     ImGui::SameLine();ImGui::Checkbox("Show inaccessible paths",&showUnavailable);
-    if(ImGui::BeginTable("processes",4,ImGuiTableFlags_BordersInnerH|
-        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
-        ImVec2(0,height))) {
+    size_t flagged=0;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& p:processes)if(p.suspicious)++flagged;
+    }
+    if(flagged)
+        ImGui::TextColored(ImVec4(1.f,.43f,.40f,1.f),
+            "%zu process(es) with review indicators. Red does not mean confirmed malware.",flagged);
+    else
+        ImGui::TextDisabled("No path-based review indicators found. This does not guarantee safety.");
+    const ImGuiTableFlags flags=ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
+        ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp;
+    if(ImGui::BeginTable("processes",5,flags,ImVec2(0,height))) {
         ImGui::TableSetupScrollFreeze(0,1);
-        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
-        ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,75);
-        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthFixed,190);
-        ImGui::TableSetupColumn("Executable path");
+        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,64);
+        ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,68);
+        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1.2f);
+        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& p:processes) {
-            if(!showUnavailable&&p.path==L"Unavailable")continue;
-            auto name=utf8(p.name),path=utf8(p.path);
-            std::string combined=name+" "+path,q=searchInput;
-            std::transform(combined.begin(),combined.end(),combined.begin(),[](unsigned char c){return (char)tolower(c);});
-            std::transform(q.begin(),q.end(),q.begin(),[](unsigned char c){return (char)tolower(c);});
+            if(!showUnavailable&&(!p.path.empty() && p.path[0]==L'['))continue;
+            const std::string name=utf8(p.name),path=utf8(p.path);
+            std::string combined=name+" "+path+" "+p.assessment,q=searchInput;
+            std::transform(combined.begin(),combined.end(),combined.begin(),
+                [](unsigned char c){return (char)std::tolower(c);});
+            std::transform(q.begin(),q.end(),q.begin(),
+                [](unsigned char c){return (char)std::tolower(c);});
             if(combined.find(q)==std::string::npos)continue;
             ImGui::TableNextRow();
+            if(p.suspicious)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
+            ImGui::TableSetColumnIndex(4);
+            if(p.suspicious)
+                ImGui::TextColored(ImVec4(1.f,.72f,.68f,1.f),"%s",p.assessment.c_str());
+            else
+                ImGui::TextDisabled("%s",p.assessment.c_str());
         }
         ImGui::EndTable();
     }
@@ -783,7 +924,7 @@ static void renderUI() {
         modulesList();
     } else if(page==2) {
         sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
-                     "Inventory is not a threat finding. No automated threat rules are enabled.");
+                     "Process inventory with explainable path-based review indicators.");
         if(ImGui::Button("Export CSV",ImVec2(120,38)))exportCsv();
         ImGui::SameLine();if(ImGui::Button("Export HTML",ImVec2(120,38)))exportHtml();
         ImGui::SameLine();if(ImGui::Button("Export JSON",ImVec2(120,38)))exportJson();
@@ -792,8 +933,8 @@ static void renderUI() {
         ImGui::Spacing();
         if(ImGui::BeginTabBar("results")) {
             if(ImGui::BeginTabItem("Findings")) {
-                ImGui::TextDisabled("No threat classification is implemented. Process inventory:");
-                processTable(370);
+                ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
+                processTable(-1.f);
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("File Integrity")) {
