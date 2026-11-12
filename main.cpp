@@ -2169,6 +2169,123 @@ static std::vector<Record> inspectArtifactLocations(){
     return out;
 }
 
+
+// Engine 4: local indicator matching + read-only historical execution evidence.
+// Indicator lists are optional. No network calls, no system changes.
+static std::vector<Record> inspectAdditionalEvidence(
+    const std::vector<Process>& processes){
+    std::vector<Record> result;
+    std::unordered_set<std::wstring> paths;
+    for(const auto& p:processes)
+        if(!p.path.empty() && p.path[0]!=L'[')paths.insert(p.path);
+    wchar_t temp[MAX_PATH]={},win[MAX_PATH]={};
+    DWORD tn=GetTempPathW(MAX_PATH,temp);
+    UINT wn=GetWindowsDirectoryW(win,MAX_PATH);
+    std::vector<fs::path> roots;
+    if(tn && tn<MAX_PATH)roots.push_back(fs::path(temp));
+    if(wn && wn<MAX_PATH)roots.push_back(fs::path(win)/L"Prefetch");
+    wchar_t profile[MAX_PATH]={};
+    DWORD pn=GetEnvironmentVariableW(L"USERPROFILE",profile,MAX_PATH);
+    if(pn && pn<MAX_PATH){
+        roots.push_back(fs::path(profile)/L"Desktop");
+        roots.push_back(fs::path(profile)/L"Downloads");
+    }
+    // Optional plain-text SHA-256 database beside the scanner executable.
+    // One 64-character hex digest per line, optionally followed by a comment.
+    std::unordered_set<std::string> knownHashes;
+    wchar_t self[MAX_PATH]={};
+    if(GetModuleFileNameW(nullptr,self,MAX_PATH)){
+        std::ifstream db(fs::path(self).parent_path()/L"threat-hashes.txt");
+        std::string line;
+        while(knownHashes.size()<20000 && std::getline(db,line)){
+            if(line.size()<64)continue;
+            const std::string h=line.substr(0,64);
+            if(std::all_of(h.begin(),h.end(),[](unsigned char c){
+                return std::isxdigit(c)!=0;})){
+                std::string normalized=h;
+                std::transform(normalized.begin(),normalized.end(),
+                    normalized.begin(),[](unsigned char c){return (char)std::tolower(c);});
+                knownHashes.insert(normalized);
+            }
+        }
+    }
+    size_t visited=0;
+    for(const auto& root:roots){
+        if(cancelRequested || visited>=9000)break;
+        std::error_code ec;
+        fs::recursive_directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,ec),end;
+        while(it!=end && !cancelRequested && visited<9000){
+            if(it.depth()>3 || it->is_symlink(ec))it.disable_recursion_pending();
+            std::error_code fileEc;
+            if(it->is_regular_file(fileEc) && !fileEc){
+                const auto path=it->path();
+                const std::wstring ext=lowerPath(path.extension().wstring());
+                if(ext==L".exe" || ext==L".dll" || ext==L".sys")
+                    paths.insert(path.wstring());
+                if(ext==L".pf"){
+                    const std::wstring name=lowerPath(path.filename().wstring());
+                    if(name.find(L"cheat")!=std::wstring::npos ||
+                       name.find(L"external")!=std::wstring::npos){
+                        result.push_back({"Execution Artifact",utf8(path.filename().wstring()),
+                            "DETECTED - NAME RULE | Prefetch filename contains CHEAT or "
+                            "EXTERNAL. Path: "+utf8(path.wstring())+
+                            " | Prefetch is historical execution-related evidence, "
+                            "not proof of cheating or malware."});
+                    }
+                }
+            }
+            ++visited;
+            it.increment(ec);
+            if(ec)ec.clear();
+        }
+    }
+    size_t hashed=0, signedChecked=0;
+    for(const auto& path:paths){
+        if(cancelRequested || hashed>=350)break;
+        std::error_code ec;
+        const fs::path file(path);
+        if(!fs::is_regular_file(file,ec) || ec)continue;
+        const auto size=fs::file_size(file,ec);
+        if(ec || size>100ull*1024*1024)continue;
+        const std::wstring ext=lowerPath(file.extension().wstring());
+        if(ext!=L".exe" && ext!=L".dll" && ext!=L".sys")continue;
+        ++hashed;
+        const std::string digest=sha256(path);
+        if(!digest.empty() && !knownHashes.empty()){
+            std::string key=digest;
+            std::transform(key.begin(),key.end(),key.begin(),
+                [](unsigned char c){return (char)std::tolower(c);});
+            if(knownHashes.count(key))
+                result.push_back({"Known Hash Indicator",utf8(file.filename().wstring()),
+                    "DETECTED - SHA256 MATCH | Hash: "+key+
+                    " | Path: "+utf8(path)+
+                    " | Matched local threat-hashes.txt. Verify the indicator source."});
+        }
+        if(signedChecked<90){
+            ++signedChecked;
+            const std::string signature=signatureStatus(path);
+            if(signature.find("Valid")==std::string::npos &&
+               (isCheatNameRuleMatch(file.filename().wstring()) ||
+                lowerPath(path).find(L"\\temp\\")!=std::wstring::npos)){
+                result.push_back({"Signature Review",utf8(file.filename().wstring()),
+                    "NEEDS REVIEW | Signature: "+signature+
+                    " | Path: "+utf8(path)+
+                    " | An absent or invalid signature alone does not prove malware."});
+            }
+        }
+    }
+    if(visited>=9000)
+        result.push_back({"Scan Coverage","Artifact traversal limit",
+            "INFO | Historical artifact inspection reached its 9000-entry "
+            "safety limit. Some files were not inspected."});
+    if(hashed>=350)
+        result.push_back({"Scan Coverage","Hash inspection limit",
+            "INFO | SHA-256 inspection reached its 350-file safety limit. "
+            "Some files were not hashed."});
+    return result;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -2228,6 +2345,7 @@ static void scanWorker() {
         auto cheatNameProcesses=inspectCheatNamedProcesses(p);
         auto cheatNameModules=inspectCheatNamedModules(p);
         auto artifactLocations=inspectArtifactLocations();
+        auto additionalEvidence=inspectAdditionalEvidence(p);
         auto peFindings=inspectPeStructure(p);
         auto provenance=inspectExecutableProvenance(p);
         auto loadedModules=inspectLoadedModuleProvenance(p);
@@ -2257,6 +2375,7 @@ static void scanWorker() {
         services.insert(services.end(),cheatNameProcesses.begin(),cheatNameProcesses.end());
         services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
         services.insert(services.end(),artifactLocations.begin(),artifactLocations.end());
+        services.insert(services.end(),additionalEvidence.begin(),additionalEvidence.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
@@ -5006,7 +5125,25 @@ static void renderUI() {
         ImGui::TextDisabled("Read-only evidence from the last full scan. "
             "Inventory entries are not confirmed threats.");
         static int artifactType=0;
+        static int artifactStatusFilter=0;
         static char artifactSearch[320]{};
+        const char* artifactStatusNames[]={
+            "All files","Suspect","Detected","No indicators"};
+        for(int f=0;f<4;++f){
+            ImGui::PushID(10000+f);
+            const bool active=artifactStatusFilter==f;
+            if(active){
+                ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.28f,.28f,.28f,1.f));
+                ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.f,1.f,1.f,1.f));
+            }
+            if(ImGui::Button(artifactStatusNames[f],
+                ImVec2(f==0?132.f:f==3?133.f:105.f,34.f)))
+                artifactStatusFilter=f;
+            if(active)ImGui::PopStyleColor(2);
+            ImGui::PopID();
+            if(f<3)ImGui::SameLine(0,7);
+        }
+        ImGui::Dummy(ImVec2(0,7));
         const char* types[]={"All artifacts","EXE","DLL","SYS","Prefetch",
                              "Scripts / shortcuts","Cheat / External name matches"};
         ImGui::SetNextItemWidth(215);
@@ -5025,7 +5162,11 @@ static void renderUI() {
                    r.category=="Executable Location" ||
                    r.category=="Executable Provenance" ||
                    r.category=="Module Provenance" ||
-                   r.category=="Module Signature")
+                   r.category=="Module Signature" ||
+                   r.category=="Known Hash Indicator" ||
+                   r.category=="Signature Review" ||
+                   r.category=="Execution Artifact" ||
+                   r.category=="Scan Coverage")
                     snapshot.push_back(r);
             }
         }
@@ -5056,11 +5197,26 @@ static void renderUI() {
                       (r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
                        r.category=="FiveM Cheat Name Detection"));
                 if(!matchType)continue;
+                const bool detected=
+                    isDetectedRecord(r) ||
+                    r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
+                    r.category=="FiveM Cheat Name Detection";
+                const bool suspect=!detected &&
+                    (isSuspectRecord(r) ||
+                     r.detail.find("NEEDS REVIEW")!=std::string::npos ||
+                     r.detail.find("REVIEW:")!=std::string::npos);
+                if(artifactStatusFilter==1 && !suspect)continue;
+                if(artifactStatusFilter==2 && !detected)continue;
+                if(artifactStatusFilter==3 && (detected||suspect))continue;
                 std::string hay=r.category+" "+r.name+" "+r.detail;
                 std::transform(hay.begin(),hay.end(),hay.begin(),
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&hay.find(query)==std::string::npos)continue;
                 ImGui::TableNextRow();
+                if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    IM_COL32(65,65,65,180));
+                else if(suspect)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    IM_COL32(44,44,44,150));
                 ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",r.category.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
