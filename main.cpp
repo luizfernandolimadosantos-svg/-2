@@ -2749,50 +2749,68 @@ static void renderUI() {
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0,17));
     float available=ImGui::GetContentRegionAvail().x;
-    float metricWidth=(available-24.f)/3.f;
     if(page==0) {
-        sectionTitle("Endpoint Overview","Run an inspection and review collected system evidence");
-        ImGui::BeginChild("scanControls",ImVec2(0,scanning?151:125),ImGuiChildFlags_Borders);
-        ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.84f,.65f,1):
-            ImVec4(.70f,.76f,.84f,1),"%s",stateText());
-        ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-        if(scanning) {
-            const int idx=(std::min)(stage.load(),5);
-            ImGui::TextDisabled("Collecting: %s",stages[idx]);
+        // Rebuilt command center; no legacy metric() tiles.
+        const ImVec4 pale(.93f,.96f,1,1),quiet(.52f,.61f,.73f,1),accent(.48f,.70f,1,1);
+        const float full=ImGui::GetContentRegionAvail().x;
+        const bool side=full>=790.f;
+        const float rightWidth=side?270.f:0.f;
+        const float heroWidth=side?full-rightWidth-12.f:full;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.075f,.105f,1));
+        ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,205),ImGuiChildFlags_Borders);
+        ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
+        ImGui::Dummy(ImVec2(0,8));
+        ImGui::SetWindowFontScale(1.5f);
+        ImGui::TextColored(pale,"System Inspection");
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
+        ImGui::Dummy(ImVec2(0,14));
+        if(scanning){
+            ImGui::TextColored(accent,"INSPECTION RUNNING");
             const int total=(std::max)(1,totalStages.load());
-            ImGui::ProgressBar(completedStages.load()/(float)total,ImVec2(-1,12));
-
-            if(ImGui::Button("Cancel Scan",ImVec2(160,31)))cancelRequested=true;
-        } else {
-            if(accentButton("Start Full Scan",ImVec2(210,39))) {
-                startScan();
-                status="Full inspection running";
-            }
-            ImGui::SameLine();
-            if(ImGui::Button("View Results",ImVec2(150,39)))page=2;
+            ImGui::ProgressBar(completedStages.load()/(float)total,ImVec2(-1,10));
+            if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
+        }else{
+            if(accentButton("START FULL INSPECTION",ImVec2(220,42)))startScan();
+            ImGui::SameLine(0,8);
+            if(ImGui::Button("VIEW RESULTS",ImVec2(130,42)))page=2;
         }
         ImGui::EndChild();
-        ImGui::Dummy(ImVec2(0,9));
-        if(defenderAlerts.load()>0) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.20f,.105f,.105f,1));
-            ImGui::BeginChild("##defenderBanner",ImVec2(0,67),ImGuiChildFlags_Borders);
-            ImGui::TextColored(ImVec4(1.f,.54f,.47f,1),
-                "DEFENDER SECURITY EVENTS  /  %d recorded",defenderAlerts.load());
-            ImGui::SameLine(0,18);
-            if(ImGui::SmallButton("Investigate events"))page=3;
-            ImGui::TextDisabled("Historical Windows events; verify current protection status.");
+        ImGui::PopStyleColor();
+        if(side){
+            ImGui::SameLine(0,12);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.082f,.11f,1));
+            ImGui::BeginChild("##liveCounters",ImVec2(rightWidth,205),ImGuiChildFlags_Borders);
+            ImGui::TextColored(accent,"LIVE TELEMETRY");
+            ImGui::Separator();
+            ImGui::TextColored(quiet,"PROCESSES");ImGui::SameLine(145);ImGui::Text("%zu",processCount.load());
+            ImGui::TextColored(quiet,"SYSTEM RECORDS");ImGui::SameLine(145);ImGui::Text("%zu",recordCount.load());
+            ImGui::TextColored(quiet,"FILES VERIFIED");ImGui::SameLine(145);ImGui::Text("%zu",fileCount.load());
+            ImGui::TextColored(quiet,"DEFENDER EVENTS");ImGui::SameLine(145);ImGui::Text("%d",defenderAlerts.load());
+            ImGui::Separator();
+            ImGui::TextColored(quiet,"%s",stateText());
             ImGui::EndChild();
             ImGui::PopStyleColor();
-            ImGui::Dummy(ImVec2(0,8));
+        }else{
+            ImGui::TextColored(quiet,"PROCESSES: %zu   RECORDS: %zu   FILES: %zu",
+                processCount.load(),recordCount.load(),fileCount.load());
         }
-        metric("Processes",std::to_string(processCount.load()),metricWidth);
-        ImGui::SameLine();
-        metric("System Records",std::to_string(recordCount.load()),metricWidth);
-        ImGui::SameLine();
-        metric("Files Verified",std::to_string(fileCount.load()),metricWidth);
-        ImGui::Dummy(ImVec2(0,9));
-        sectionTitle("INSPECTION MODULES","Select Open investigation to view collected evidence");
-        ImGui::BeginChild("dashboardModules",ImVec2(0,0),ImGuiChildFlags_None);
+        ImGui::Dummy(ImVec2(0,16));
+        if(defenderAlerts.load()>0){
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.18f,.09f,.11f,1));
+            ImGui::BeginChild("##defenderNotice",ImVec2(0,68),ImGuiChildFlags_Borders);
+            ImGui::TextColored(ImVec4(1,.60f,.58f,1),"DEFENDER EVENTS: %d",defenderAlerts.load());
+            ImGui::TextDisabled("Historical alerts; review current protection status separately.");
+            ImGui::SameLine();
+            if(ImGui::SmallButton("OPEN EVENTS"))page=3;
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0,10));
+        }
+        ImGui::TextColored(accent,"INVESTIGATION MODULES");
+        ImGui::TextColored(quiet,"Select a module to inspect collected evidence");
+        ImGui::Dummy(ImVec2(0,8));
+        ImGui::BeginChild("##dashboardModulesNew",ImVec2(0,0),ImGuiChildFlags_None);
         modulesList();
         ImGui::EndChild();
     } else if(page==2) {
