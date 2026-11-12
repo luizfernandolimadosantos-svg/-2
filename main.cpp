@@ -376,7 +376,8 @@ static void assessProcess(Process& process,const std::wstring& winRoot) {
         appendWarning(warnings,"Executable resides in a user Startup folder");
     if(pathContains(path,L"\\users\\public\\") && !inWindows)
         appendWarning(warnings,"Executable is located in a shared user-writable directory");
-    if(pathContains(path,L"\\programdata\\") && !inWindows)
+    if(pathContains(path,L"\\programdata\\") && !inWindows &&
+       !pathContains(path,L"\\programdata\\microsoft\\windows defender\\"))
         appendWarning(warnings,"Executable is located in ProgramData; verify publisher and purpose");
     if(path.rfind(L"\\\\",0)==0)
         appendWarning(warnings,"Executable path is a network location");
@@ -917,6 +918,77 @@ static std::vector<Record> inspectHostsFile() {
     return out;
 }
 
+
+// Read-only PE structural inspection. Heuristics are not malware signatures.
+static std::vector<Record> inspectPeStructure(const std::vector<Process>& items) {
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> visited;
+    size_t examined=0;
+    for(const auto& p:items) {
+        if(cancelRequested || examined>=220)break;
+        if(p.path.empty() || p.path[0]==L'[' || !visited.insert(lowerPath(p.path)).second)continue;
+        HANDLE file=CreateFileW(p.path.c_str(),GENERIC_READ,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);
+        if(file==INVALID_HANDLE_VALUE)continue;
+        ++examined;
+        LARGE_INTEGER length{};
+        if(!GetFileSizeEx(file,&length) || length.QuadPart<512 || length.QuadPart>1024LL*1024*1024) {
+            CloseHandle(file);continue;
+        }
+        const DWORD readSize=(DWORD)std::min<LONGLONG>(length.QuadPart,1024*1024);
+        std::vector<BYTE> buffer(readSize);
+        DWORD read=0;
+        const bool success=ReadFile(file,buffer.data(),readSize,&read,nullptr)!=FALSE;
+        CloseHandle(file);
+        if(!success || read<sizeof(IMAGE_DOS_HEADER))continue;
+        IMAGE_DOS_HEADER dos{};
+        std::memcpy(&dos,buffer.data(),sizeof(dos));
+        if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)continue;
+        const size_t peOffset=(size_t)dos.e_lfanew;
+        if(peOffset>read || read-peOffset<sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER))continue;
+        DWORD magic=0;
+        std::memcpy(&magic,buffer.data()+peOffset,sizeof(magic));
+        if(magic!=IMAGE_NT_SIGNATURE)continue;
+        IMAGE_FILE_HEADER header{};
+        std::memcpy(&header,buffer.data()+peOffset+sizeof(DWORD),sizeof(header));
+        if(header.NumberOfSections==0 || header.NumberOfSections>96)continue;
+        const size_t sectionsAt=peOffset+sizeof(DWORD)+sizeof(header)+(size_t)header.SizeOfOptionalHeader;
+        if(sectionsAt>read || header.NumberOfSections>(read-sectionsAt)/sizeof(IMAGE_SECTION_HEADER))continue;
+        for(WORD i=0;i<header.NumberOfSections;i++) {
+            IMAGE_SECTION_HEADER section{};
+            std::memcpy(&section,buffer.data()+sectionsAt+(size_t)i*sizeof(section),sizeof(section));
+            const DWORD mask=IMAGE_SCN_MEM_EXECUTE|IMAGE_SCN_MEM_WRITE;
+            if((section.Characteristics&mask)!=mask)continue;
+            char sectionName[9]{};
+            std::memcpy(sectionName,section.Name,8);
+            findings.push_back({"PE Review",utf8(p.path),
+                std::string("SUSPECT | Writable and executable PE section: ")+sectionName+
+                " | PID "+std::to_string(p.pid)+
+                " | This is a structural indicator, not a malware verdict"});
+            if(findings.size()>=256)return findings;
+        }
+    }
+    return findings;
+}
+
+// Categories are based on evidence; unknown information must not be called clean.
+static bool isDetectedRecord(const Record& r) {
+    return r.category=="Defender Detection" || r.category=="Defender Threat" ||
+           r.detail.find("DETECTED |")!=std::string::npos;
+}
+static bool isSuspectRecord(const Record& r) {
+    return r.category=="PE Review" ||
+           r.detail.find("SUSPECT |")!=std::string::npos ||
+           r.detail.find("REVIEW:")!=std::string::npos;
+}
+static const char* evidenceLabel(const Record& r) {
+    return isDetectedRecord(r)?"DETECTED":isSuspectRecord(r)?"SUSPECT":"UNKNOWN";
+}
+static void tintEvidenceRow(const Record& r) {
+    if(isDetectedRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(137,33,43,190));
+    else if(isSuspectRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(129,92,17,175));
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -949,6 +1021,7 @@ static void scanWorker() {
         auto ifeo=inspectImageExecutionOptions();
         auto logon=inspectLogonConfiguration();
         auto hosts=inspectHostsFile();
+        auto peFindings=inspectPeStructure(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -962,6 +1035,7 @@ static void scanWorker() {
         services.insert(services.end(),ifeo.begin(),ifeo.end());
         services.insert(services.end(),logon.begin(),logon.end());
         services.insert(services.end(),hosts.begin(),hosts.end());
+        services.insert(services.end(),peFindings.begin(),peFindings.end());
         completedStages=6;
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
@@ -1276,7 +1350,7 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(full>780.f && i%2)ImGui::SameLine(0,gap);
-        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,150),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,135),ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar);
         ImGui::TextColored(m.implemented?orange():ImVec4(.70f,.72f,.76f,1),"%s",m.title);
         ImGui::SameLine();
         ImGui::TextDisabled("  %s",m.implemented?"AVAILABLE":"PLANNED");
@@ -1363,6 +1437,7 @@ static void modulesList() {
                             if(!moduleMatches(m.categories,r.category) ||
                                !moduleSearchMatches(r.category+" "+r.name+" "+r.detail))continue;
                             ImGui::TableNextRow();
+                            tintEvidenceRow(r);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
                             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
@@ -1548,7 +1623,7 @@ static void drawProcessDetails() {
         for(const auto& m:selectedModules) {
             ImGui::TableNextRow();
             if(m.suspicious && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(m.path).c_str());
             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",m.assessment.c_str());
@@ -1642,7 +1717,7 @@ static void drawServiceReviews() {
         for(const auto& item:serviceReviews) {
             ImGui::TableNextRow();
             if(item.review && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(item.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(item.display).c_str());
             ImGui::TableSetColumnIndex(2);
@@ -1699,7 +1774,7 @@ static void processTable(float height) {
     }
     if(flagged)
         ImGui::TextColored(ImVec4(1.f,.43f,.40f,1.f),
-            "%zu process(es) with review indicators. Red does not mean confirmed malware.",flagged);
+            "%zu SUSPECT process(es). Yellow indicates review, not confirmed malware.",flagged);
     else
         ImGui::TextDisabled("No path-based review indicators found. This does not guarantee safety.");
     const ImGuiTableFlags flags=ImGuiTableFlags_BordersInnerH|
@@ -1726,7 +1801,7 @@ static void processTable(float height) {
             if(combined.find(q)==std::string::npos)continue;
             ImGui::TableNextRow();
             if(p.suspicious && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,190));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
@@ -1799,8 +1874,9 @@ static void recordsTable() {
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& r:records) {
             ImGui::TableNextRow();
+            tintEvidenceRow(r);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
-            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::Text("%s | %s",r.name.c_str(),evidenceLabel(r));
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.detail.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
             if(ImGui::SmallButton("Show Details"))openEvidenceDetails(r.category,r.name,r.detail);
@@ -1918,7 +1994,9 @@ static void renderUI() {
             if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
         } else {
             ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-            if(accentButton("Start Full Scan",ImVec2(210,42))) { startScan(); status="New full inspection started"; }
+            if(accentButton("Start Full Scan",ImVec2(210,42))) {
+                startScan();status="Full inspection running";page=2;
+            }
         }
         ImGui::EndChild();
         ImGui::Spacing();
@@ -1929,10 +2007,7 @@ static void renderUI() {
     } else if(page==2) {
         sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
                      "Process inventory with explainable path-based review indicators.");
-        if(ImGui::Button("Export CSV",ImVec2(120,38)))exportCsv();
-        ImGui::SameLine();if(ImGui::Button("Export HTML",ImVec2(120,38)))exportHtml();
-        ImGui::SameLine();if(ImGui::Button("Export JSON",ImVec2(120,38)))exportJson();
-        ImGui::SameLine();ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
+        ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
                           processCount.load(),recordCount.load(),fileCount.load());
         ImGui::Spacing();
         if(ImGui::BeginTabBar("results")) {
