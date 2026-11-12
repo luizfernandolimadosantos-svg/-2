@@ -605,40 +605,71 @@ static std::vector<Record> enumerateUdp() {
 
 // IPv6 TCP owner inventory. Endpoints are read using the Windows IP Helper API.
 static std::vector<Record> enumerateTcp6() {
+    // Windows TCP_OWNER_PID IPv6 row layout, defined locally to avoid
+    // SDK-dependent MIB_TCP6ROW_OWNER_PID declarations.
+    struct Tcp6OwnerRow {
+        UCHAR localAddress[16];
+        DWORD localScope;
+        DWORD localPort;
+        UCHAR remoteAddress[16];
+        DWORD remoteScope;
+        DWORD remotePort;
+        DWORD state;
+        DWORD pid;
+    };
+    static_assert(sizeof(Tcp6OwnerRow) == 56, "Unexpected TCP IPv6 row layout");
+
     std::vector<Record> out;
     DWORD bytes = 0;
-    DWORD rc = GetExtendedTcpTable(nullptr, &bytes, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
-    if (rc != ERROR_INSUFFICIENT_BUFFER || bytes < sizeof(DWORD) || bytes > 32u * 1024u * 1024u)
-        return out;
+    DWORD rc = GetExtendedTcpTable(nullptr, &bytes, FALSE, AF_INET6,
+                                    TCP_TABLE_OWNER_PID_ALL, 0);
+    if (rc != ERROR_INSUFFICIENT_BUFFER || bytes < sizeof(DWORD) ||
+        bytes > 32u * 1024u * 1024u) return out;
 
     std::vector<BYTE> buffer(bytes);
-    rc = GetExtendedTcpTable(buffer.data(), &bytes, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+    rc = GetExtendedTcpTable(buffer.data(), &bytes, FALSE, AF_INET6,
+                             TCP_TABLE_OWNER_PID_ALL, 0);
     if (rc != NO_ERROR || bytes < sizeof(DWORD) || bytes > buffer.size())
         return out;
 
     DWORD count = 0;
     std::memcpy(&count, buffer.data(), sizeof(count));
-    const size_t headerSize = sizeof(DWORD);
-    const size_t rowSize = sizeof(MIB_TCP6ROW_OWNER_PID);
-    if (count > (static_cast<size_t>(bytes) - headerSize) / rowSize)
+    constexpr size_t offset = sizeof(DWORD);
+    if (count > (static_cast<size_t>(bytes) - offset) / sizeof(Tcp6OwnerRow))
         return out;
 
+    auto addressText = [](const UCHAR raw[16], DWORD scope) -> std::string {
+        SOCKADDR_IN6 addr{};
+        addr.sin6_family = AF_INET6;
+        addr.sin6_scope_id = scope;
+        std::memcpy(&addr.sin6_addr, raw, 16);
+        char text[128]{};
+        DWORD len = static_cast<DWORD>(sizeof(text));
+        if (WSAAddressToStringA(reinterpret_cast<LPSOCKADDR>(&addr),
+                                sizeof(addr), nullptr, text, &len) != 0)
+            return "[IPv6 address unavailable]";
+        return text;
+    };
+
+    WSADATA winsockData{};
+    const bool winsockReady = (WSAStartup(MAKEWORD(2, 2), &winsockData) == 0);
+    if (!winsockReady) return out;
+
     for (DWORD i = 0; i < count && !cancelRequested; ++i) {
-        MIB_TCP6ROW_OWNER_PID e{};
-        std::memcpy(&e, buffer.data() + headerSize + static_cast<size_t>(i) * rowSize, rowSize);
+        Tcp6OwnerRow entry{};
+        std::memcpy(&entry, buffer.data() + offset +
+                    static_cast<size_t>(i) * sizeof(entry), sizeof(entry));
 
-        char local[INET6_ADDRSTRLEN]{};
-        char remote[INET6_ADDRSTRLEN]{};
-        if (!InetNtopA(AF_INET6, e.ucLocalAddr, local, sizeof(local)) ||
-            !InetNtopA(AF_INET6, e.ucRemoteAddr, remote, sizeof(remote)))
-            continue;
-
+        const std::string local = addressText(entry.localAddress, entry.localScope);
+        const std::string remote = addressText(entry.remoteAddress, entry.remoteScope);
         std::ostringstream detail;
-        detail << "[" << local << "]:" << ntohs(static_cast<u_short>(e.dwLocalPort))
-               << " -> [" << remote << "]:" << ntohs(static_cast<u_short>(e.dwRemotePort))
-               << " | state " << e.dwState;
-        out.push_back({"Network IPv6", "PID " + std::to_string(e.dwOwningPid), detail.str()});
+        detail << "[" << local << "]:" << ntohs(static_cast<u_short>(entry.localPort))
+               << " -> [" << remote << "]:" << ntohs(static_cast<u_short>(entry.remotePort))
+               << " | state " << entry.state;
+        out.push_back({"Network IPv6", "PID " + std::to_string(entry.pid),
+                       detail.str()});
     }
+    WSACleanup();
     return out;
 }
 
