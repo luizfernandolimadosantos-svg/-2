@@ -4435,10 +4435,6 @@ static void renderUI() {
         }
         if(scanning)ImGui::TextDisabled("Scan in progress. Previous timeline remains visible.");
         ImGui::Text("Timeline records: %zu",timelineCount.load());
-        ImGui::SameLine();
-        if(ImGui::Button("Start Full Scan",ImVec2(165,32))) {
-            if(!scanning)startScan();
-        }
         ImGui::Spacing();
         static char timelineSearch[180]{};
         static bool onlyTimelineAlerts=false;
@@ -4527,7 +4523,6 @@ static void renderUI() {
         ImGui::InputTextWithHint("##specialEvidenceSearch","Search evidence, names or paths...",
             activeSearch,256);
         ImGui::SameLine();
-        if(ImGui::Button("RUN FULL SCAN##evidence")&&!scanning)startScan();
         std::vector<Record> snapshot;
         {std::lock_guard<std::mutex> lock(dataMutex);snapshot=records;}
         size_t shown=0;
