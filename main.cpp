@@ -295,6 +295,72 @@ static ImVec4 accentColor() {
         default:return ImVec4(1.f,1.f,1.f,1.f);
     }
 }
+static int displayLanguage=0; // 0 English, 1 Português (Brasil)
+static const char* localized(const char* english){
+    if(displayLanguage!=1 || !english)return english;
+    static const std::unordered_map<std::string,std::string> labels={
+        {"DASHBOARD","PAINEL"},
+        {"THREAT ANALYSIS","ANÁLISE DE AMEAÇAS"},
+        {"EVENT RECORDS","REGISTROS DE EVENTOS"},
+        {"BINARY LAB","LABORATÓRIO BINÁRIO"},
+        {"NETWORK","REDE"},
+        {"DRIVER AUDIT","AUDITORIA DE DRIVERS"},
+        {"ARTIFACT EXPLORER","EXPLORADOR DE ARTEFATOS"},
+        {"KERNEL MEMORY DUMP","DUMP DE MEMÓRIA"},
+        {"PREFERENCES","PREFERÊNCIAS"},
+        {"Workspace Preferences","Preferências do ambiente"},
+        {"Adjust appearance and investigation options","Ajuste a aparência e as opções de investigação"},
+        {"PERSONALIZATION  /  LOCAL SETTINGS","PERSONALIZAÇÃO  /  CONFIGURAÇÕES LOCAIS"},
+        {"Customize the scanner appearance and investigation workflow.","Personalize a aparência e o fluxo de investigação do scanner."},
+        {"LANGUAGE","IDIOMA"},
+        {"APPEARANCE","APARÊNCIA"},
+        {"INTERFACE DETAILS","DETALHES DA INTERFACE"},
+        {"PROCESS REVIEW","REVISÃO DE PROCESSOS"},
+        {"Scan Percentage Color","Cor da porcentagem do scan"},
+        {"Theme","Tema"},
+        {"Interface Scale","Escala da interface"},
+        {"Table Density","Densidade das tabelas"},
+        {"Window size (maximum 1920 x 1080)","Tamanho da janela (máximo 1920 x 1080)"},
+        {"Size is limited to the available desktop work area.","O tamanho é limitado à área disponível da tela."},
+        {"Custom percentage color","Cor personalizada da porcentagem"},
+        {"Animate scanner branding","Animar identidade visual do scanner"},
+        {"Monochrome rain across the window","Chuva monocromática na janela"},
+        {"Rain density","Densidade da chuva"},
+        {"Reduce motion (disable transition and unlock animations)","Reduzir movimento (desativar transições e animações)"},
+        {"Highlight navigation on hover","Destacar navegação ao passar o mouse"},
+        {"Button corners","Cantos dos botões"},
+        {"Scrollbar width","Largura da barra de rolagem"},
+        {"Highlight suspicious processes in red","Destacar processos suspeitos em vermelho"},
+        {"Show security assessment details","Mostrar detalhes da avaliação de segurança"},
+        {"Save Settings","Salvar configurações"},
+        {"Restore Defaults","Restaurar padrões"},
+        {"Settings saved successfully.","Configurações salvas com sucesso."},
+        {"Verify Scanner Executable","Verificar executável do scanner"},
+        {"FULL INSPECTION  /  PRESENTATION PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO VISUAL"},
+        {"SYSTEM INTEGRITY","INTEGRIDADE DO SISTEMA"},
+        {"EXECUTION ARTIFACTS","ARTEFATOS DE EXECUÇÃO"},
+        {"PROCESS ANALYSIS","ANÁLISE DE PROCESSOS"},
+        {"EVIDENCE CORRELATION","CORRELAÇÃO DE EVIDÊNCIAS"},
+        {"INSPECTION COMPLETE","INSPEÇÃO CONCLUÍDA"},
+        {"READY","PRONTO"},
+        {"INSPECTION FAILED","INSPEÇÃO FALHOU"},
+        {"INSPECTION CANCELLED","INSPEÇÃO CANCELADA"},
+        {"PREPARING RESULTS","PREPARANDO RESULTADOS"},
+        {"EVIDENCE COLLECTED - PRESENTING RESULTS","EVIDÊNCIAS COLETADAS - PREPARANDO RESULTADOS"},
+        {"FULL INSPECTION IN PROGRESS","INSPEÇÃO COMPLETA EM ANDAMENTO"},
+        {"START FULL INSPECTION","INICIAR INSPEÇÃO COMPLETA"},
+        {"GO TO DASHBOARD","IR PARA O PAINEL"},
+        {"RUN A FULL INSPECTION","EXECUTAR INSPEÇÃO COMPLETA"},
+        {"Results unlock after inspection completes at 100%.","Os resultados são liberados quando a inspeção chega a 100%."},
+        {"Run a full inspection to unlock this section.","Execute uma inspeção completa para liberar esta seção."},
+        {"SCAN COMPLETE - PREPARING RESULTS","SCAN CONCLUÍDO - PREPARANDO RESULTADOS"},
+        {"No scan results yet.","Ainda não há resultados de scan."},
+        {"Changes only the 0-100%% number; the interface stays monochrome.","Altera apenas o número de 0 a 100%%; a interface permanece monocromática."},
+        {"Animations are visual only; scanning is unaffected.","As animações são apenas visuais; a análise não é afetada."}
+    };
+    const auto it=labels.find(english);
+    return it!=labels.end()?it->second.c_str():english;
+}
 static fs::path settingsPath() {
     wchar_t appdata[32768]{};
     DWORD n=GetEnvironmentVariableW(L"APPDATA",appdata,32768);
@@ -307,7 +373,7 @@ static void saveSettings() {
         fs::create_directories(path.parent_path());
         std::ofstream out(path,std::ios::trunc);
         if(!out) {settingsNotice=false;return;}
-        out<<"accent="<<accentIndex<<"\n"<<"theme="<<themeIndex<<"\n"
+        out<<"language="<<displayLanguage<<"\n"<<"accent="<<accentIndex<<"\n"<<"theme="<<themeIndex<<"\n"
            <<"density="<<densityIndex<<"\n"<<"scale="<<interfaceScale<<"\n"
            <<"window="<<windowPreset<<"\n"
            <<"highlight="<<highlightSuspicious<<"\n"
@@ -326,7 +392,8 @@ static void loadSettings() {
             auto pos=line.find('=');
             if(pos==std::string::npos)continue;
             auto key=line.substr(0,pos),v=line.substr(pos+1);
-            if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
+            if(key=="language")displayLanguage=std::clamp(std::stoi(v),0,1);
+            else if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
             else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="scale")interfaceScale=std::clamp(std::stof(v),.8f,1.4f);
@@ -3396,16 +3463,21 @@ static void scanWorker() {
 }
 // Visual presentation pacing only; actual scan completion is never delayed.
 static double inspectionProgressStart=0.0;
-static constexpr double inspectionPresentationSeconds=270.0; // 4 min 30 sec presentation target
-static int inspectionDisplayPercent(){
+// Four sequential 120-second presentation windows (8 minutes total).
+// These are NOT measured scanning durations; the worker may finish earlier.
+static constexpr double inspectionPresentationSeconds=480.0;
+static double inspectionPresentationFraction(){
+    if(inspectionProgressStart<=0.0)return 0.0;
     const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionProgressStart);
-    const int paced=std::clamp(static_cast<int>(
-        elapsed*100.0/inspectionPresentationSeconds),0,100);
-    if(done)return paced; // Unlock only after both actual completion and presentation reach 100%.
-    const int total=(std::max)(1,totalStages.load());
-    const int measured=std::clamp(completedStages.load()*100/total,0,99);
-    return (std::min)(99,(std::min)(paced,measured));
+    return std::clamp(elapsed/inspectionPresentationSeconds,0.0,1.0);
 }
+static int inspectionDisplayPercent(){
+    // Exact 100% unlocks only after actual worker completion and presentation.
+    const double p=inspectionPresentationFraction();
+    if(scanFailed || scanCancelled || !done)return (std::min)(99,(int)(p*100.0));
+    return std::clamp((int)(p*100.0),0,100);
+}
+
 static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
@@ -5461,64 +5533,43 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
 }
 static void drawAtlasProgress(bool compact=false){
     const int verified=inspectionDisplayPercent();
-    const float fraction=smoothInspectionVisual(verified/100.f);
+    const float fraction=smoothInspectionVisual(
+        static_cast<float>(inspectionPresentationFraction()));
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled("FULL INSPECTION  /  VERIFIED PROGRESS");
+    ImGui::TextDisabled(localized("FULL INSPECTION  /  PRESENTATION PROGRESS"));
     ImGui::SameLine();
-    ImGui::Text("%.0f%%",fraction*100.f);
+    ImGui::Text("%.1f%%",fraction*100.f);
     drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
                                   compact?14.f:19.f);
     if(compact)return;
     ImGui::Spacing();
-    // Stage tracks reflect actual completed stages, with bounded interpolation
-    // while a stage is running. They never reach 100% before stage completion.
-    const int completed=std::clamp(completedStages.load(),0,6);
-    const int active=std::clamp(stage.load(),0,5);
+    // Four 2-minute sequential presentation windows, smoothly interpolated.
+    // These are intentionally labeled as presentation, not verified work.
     const char* names[]={
         "SYSTEM INTEGRITY","EXECUTION ARTIFACTS",
         "PROCESS ANALYSIS","EVIDENCE CORRELATION"
     };
-    // Existing worker: 1 process, 2 services, 3 startup, 4 network,
-    // 5 extensive integrity/artifacts, 6 publish results.
-    const int gates[]={2,4,5,6};
-    static float stageVisual[4]={0,0,0,0};
-    static double stageTime=-1.0;
-    static double lastStageScanStart=-1.0;
-    const double now=ImGui::GetTime();
-    if(lastStageScanStart!=inspectionProgressStart){
-        for(float& v:stageVisual)v=0.f;
-        lastStageScanStart=inspectionProgressStart;stageTime=now;
-    }
-    if(stageTime<0.0 || now<stageTime || now-stageTime>3.0)stageTime=now;
-    const float dt=std::clamp(static_cast<float>(now-stageTime),0.f,.1f);
-    stageTime=now;
+    const double elapsed=inspectionProgressStart>0.0 ?
+        (std::max)(0.0,ImGui::GetTime()-inspectionProgressStart):0.0;
     for(int i=0;i<4;++i){
-        const int begin=i==0?0:gates[i-1];
-        const int finish=gates[i];
-        float target=std::clamp((completed-begin)/(float)(finish-begin),0.f,1.f);
-        if(completed>=finish)target=1.f;
-        // No fabricated per-stage percentage: smooth only verified milestones.
-
-        if(completed==0 && !scanning)stageVisual[i]=0.f;
-        else if(target<stageVisual[i]-.4f)stageVisual[i]=0.f;
-        stageVisual[i]+=(std::max)(0.f,target-stageVisual[i])*
-                         (1.f-std::exp(-dt*5.f));
-        if(target==1.f && stageVisual[i]>.999f)stageVisual[i]=1.f;
-        ImGui::TextDisabled("%s",names[i]);
+        const float fractionStage=std::clamp(
+            static_cast<float>((elapsed-i*120.0)/120.0),0.f,1.f);
+        ImGui::TextDisabled("%s  /  %s",localized(names[i]),
+                            displayLanguage==1?"APRESENTAÇÃO":"PRESENTATION");
         ImGui::SameLine();
-        ImGui::Text("%.0f%%",stageVisual[i]*100.f);
-        drawProfessionalProgressTrack(names[i],names[i],stageVisual[i],
+        ImGui::Text("%.1f%%",fractionStage*100.f);
+        drawProfessionalProgressTrack(names[i],names[i],fractionStage,
                                       width,11.f);
         ImGui::Spacing();
     }
     const char* phase=scanFailed?"INSPECTION FAILED":
         scanCancelled?"INSPECTION CANCELLED":
-        done?(verified>=100?"INSPECTION COMPLETE":"PREPARING RESULTS"):
+        done?(verified>=100?"INSPECTION COMPLETE":"EVIDENCE COLLECTED - PRESENTING RESULTS"):
         scanning?(cancelRequested?"CANCELLING INSPECTION":
             stages[std::clamp(stage.load(),0,5)]):"READY";
-    ImGui::TextDisabled("%s",phase);
+    ImGui::TextDisabled("%s",localized(phase));
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Bars animate smoothly. Completion is gated by real scan stages and the presentation timer.");
+        ImGui::SetTooltip("Each presentation segment takes 2 minutes. Actual evidence collection runs independently; results unlock only after both finish.");
 }
 
 static void renderUI() {
@@ -5681,7 +5732,7 @@ static void renderUI() {
                 ImVec4(0.214f,0.214f,0.214f,1.f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
         }
-        if(ImGui::Button(nav[i],ImVec2(navWidth,39))){
+        if(ImGui::Button((std::string(localized(nav[i]))+"##nav"+std::to_string(i)).c_str(),ImVec2(navWidth,39))){
             if(page!=navPages[i]){
                 page=navPages[i];
                 navTransitionStart=uiNow;
@@ -5690,7 +5741,7 @@ static void renderUI() {
         }
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){
             ImGui::BeginTooltip();
-            ImGui::Text("%s",nav[i]);
+            ImGui::Text("%s",localized(nav[i]));
             ImGui::TextDisabled("Ctrl + %d",i+1);
             ImGui::EndTooltip();
         }
@@ -5771,7 +5822,7 @@ static void renderUI() {
     if(page==0 && (scanning || done) && inspectionDisplayPercent()<100){
         drawAtlasProgress(false);
         ImGui::TextDisabled("%s",
-            done ? "SCAN COMPLETE - PREPARING RESULTS" :
+            done ? "EVIDENCE COLLECTED - PRESENTING RESULTS" :
                 "FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
@@ -5876,7 +5927,7 @@ static void renderUI() {
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.327f,0.327f,0.327f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.430f,0.430f,0.430f,1.f));
         if(waitingForPresentation){
-            if(ImGui::Button("GO TO DASHBOARD",ImVec2(buttonWidth,45.f)))
+            if(ImGui::Button(localized("GO TO DASHBOARD"),ImVec2(buttonWidth,45.f)))
                 page=0;
         }else{
             ImGui::BeginDisabled();
@@ -5908,7 +5959,7 @@ static void renderUI() {
             ImGui::TextColored(accent,"EVIDENCE COLLECTED - PREPARING RESULTS");
             ImGui::TextDisabled("Results unlock at 100%%. Please wait.");
         }else{
-            if(accentButton("START FULL INSPECTION",
+            if(accentButton(localized("START FULL INSPECTION"),
                 ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
             if(ImGui::GetContentRegionAvail().x>145.f)ImGui::SameLine(0,8);
             if(ImGui::Button("VIEW RESULTS",
@@ -6479,23 +6530,29 @@ static void renderUI() {
     } else if(page==6) {
         binaryInspector::draw();
     } else if(page==4) {
-        sectionTitle("Workspace Preferences","Adjust appearance and investigation options");
+        sectionTitle(localized("Workspace Preferences"),"Adjust appearance and investigation options");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
-        ImGui::TextDisabled("PERSONALIZATION  /  LOCAL SETTINGS");
-        ImGui::TextWrapped("Customize the scanner appearance and investigation workflow.");
+        ImGui::TextDisabled(localized("PERSONALIZATION  /  LOCAL SETTINGS"));
+        ImGui::TextWrapped(localized("Customize the scanner appearance and investigation workflow."));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::TextColored(orange(),"LANGUAGE");
         ImGui::Separator();
-        ImGui::Text("Display language: English");
-        ImGui::TextDisabled("%s",XOR_STR("All interface labels and security assessments use English.").c_str());
+        ImGui::TextUnformatted(displayLanguage==1?"Idioma de exibição":"Display language");
+        ImGui::SetNextItemWidth(320);
+        const char* languages[]={"English","Português (Brasil)"};
+        if(ImGui::Combo("##display_language",&displayLanguage,languages,IM_ARRAYSIZE(languages)))
+            saveSettings();
+        ImGui::TextDisabled("%s",displayLanguage==1?
+            "O idioma altera os rótulos traduzidos; os dados técnicos permanecem no formato original.":
+            "Translated interface labels change immediately; technical evidence stays in its original format.");
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"APPEARANCE");
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("Scan Percentage Color");
-        ImGui::TextDisabled("Changes only the 0-100%% number; the interface stays monochrome.");
+        ImGui::Text(localized("Scan Percentage Color"));
+        ImGui::TextDisabled(localized("Changes only the 0-100%% number; the interface stays monochrome."));
         ImGui::SetNextItemWidth(320);
         ImGui::Combo("##accent",&accentIndex,accentNames,IM_ARRAYSIZE(accentNames));
         if(accentIndex==5) {
@@ -6503,59 +6560,59 @@ static void renderUI() {
                               ImGuiColorEditFlags_NoInputs);
         }
         ImGui::Spacing();
-        ImGui::Text("Theme");
+        ImGui::Text(localized("Theme"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##theme",&themeIndex,themeNames,IM_ARRAYSIZE(themeNames)))applyTheme();
         ImGui::Spacing();
-        ImGui::Text("Interface Scale");
+        ImGui::Text(localized("Interface Scale"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::SliderFloat("##scale",&interfaceScale,.8f,1.4f,"%.2fx"))
             ImGui::GetIO().FontGlobalScale=interfaceScale;
         ImGui::Spacing();
-        ImGui::Text("Window size (maximum 1920 x 1080)");
+        ImGui::Text(localized("Window size (maximum 1920 x 1080)"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##windowPreset",&windowPreset,windowPresetNames,
             IM_ARRAYSIZE(windowPresetNames)))applyWindowPreset();
-        ImGui::TextDisabled("Size is limited to the available desktop work area.");
+        ImGui::TextDisabled(localized("Size is limited to the available desktop work area."));
         ImGui::Spacing();
-        ImGui::Text("Table Density");
+        ImGui::Text(localized("Table Density"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##density",&densityIndex,densityNames,IM_ARRAYSIZE(densityNames)))
             applyTheme();
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"INTERFACE DETAILS");
-        ImGui::Checkbox("Animate scanner branding",&brandAnimation);
-        ImGui::Checkbox("Monochrome rain across the window",&ambientMotesEnabled);
+        ImGui::Checkbox(localized("Animate scanner branding"),&brandAnimation);
+        ImGui::Checkbox(localized("Monochrome rain across the window"),&ambientMotesEnabled);
         ImGui::BeginDisabled(!ambientMotesEnabled);
         ImGui::SetNextItemWidth(200);
         ImGui::Combo("Rain density",&rainDensity,rainDensityNames,
                      IM_ARRAYSIZE(rainDensityNames));
         ImGui::EndDisabled();
-        ImGui::Checkbox("Reduce motion (disable transition and unlock animations)",
+        ImGui::Checkbox(localized("Reduce motion (disable transition and unlock animations)"),
                         &reducedMotion);
         ImGui::TextDisabled("Rain stays static with Reduce motion; scan results remain protected.");
-        ImGui::Checkbox("Highlight navigation on hover",&showNavHover);
-        ImGui::TextDisabled("Animations are visual only; scanning is unaffected.");
+        ImGui::Checkbox(localized("Highlight navigation on hover"),&showNavHover);
+        ImGui::TextDisabled(localized("Animations are visual only; scanning is unaffected."));
         ImGui::Spacing();
-        ImGui::Text("Button corners");
+        ImGui::Text(localized("Button corners"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##corners",&cornerStyle,cornerStyleNames,
                         IM_ARRAYSIZE(cornerStyleNames)))applyTheme();
         ImGui::Spacing();
-        ImGui::Text("Scrollbar width");
+        ImGui::Text(localized("Scrollbar width"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##scrollbar",&scrollbarWidth,scrollbarWidthNames,
                         IM_ARRAYSIZE(scrollbarWidthNames)))applyTheme();
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"PROCESS REVIEW");
-        ImGui::Checkbox("Highlight suspicious processes in red",&highlightSuspicious);
-        ImGui::Checkbox("Show security assessment details",&showSecurityWarnings);
+        ImGui::Checkbox(localized("Highlight suspicious processes in red"),&highlightSuspicious);
+        ImGui::Checkbox(localized("Show security assessment details"),&showSecurityWarnings);
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"PREFERENCES");
-        if(accentButton("Save Settings",ImVec2(170,42)))saveSettings();
+        if(accentButton(localized("Save Settings"),ImVec2(170,42)))saveSettings();
         ImGui::SameLine();
-        if(ImGui::Button("Restore Defaults",ImVec2(170,42))) {
-            accentIndex=0;themeIndex=0;densityIndex=1;interfaceScale=1.f;
+        if(ImGui::Button(localized("Restore Defaults"),ImVec2(170,42))) {
+            displayLanguage=0;accentIndex=0;themeIndex=0;densityIndex=1;interfaceScale=1.f;
             windowPreset=2;applyWindowPreset();
             highlightSuspicious=true;showSecurityWarnings=true;
             brandAnimation=true;ambientMotesEnabled=true;
@@ -6571,7 +6628,7 @@ static void renderUI() {
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::TextDisabled("%s",XOR_STR("APPLICATION INTEGRITY").c_str());
-        if(ImGui::Button("Verify Scanner Executable",ImVec2(240,38))) {
+        if(ImGui::Button(localized("Verify Scanner Executable"),ImVec2(240,38))) {
             try {
                 auto result=inspectFile(executablePath());
                 std::lock_guard<std::mutex> lock(dataMutex);
