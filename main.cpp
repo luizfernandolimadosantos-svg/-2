@@ -15,6 +15,7 @@
 #include <winevt.h>
 #pragma comment(lib,"wevtapi.lib")
 #include <cstring>
+#include <cstdint>
 #include <winreg.h>
 #include <cctype>
 #include <cwctype>
@@ -1093,7 +1094,7 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(full>780.f && i%2)ImGui::SameLine(0,gap);
-        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,108),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,126),ImGuiChildFlags_Borders);
         ImGui::TextColored(m.implemented?orange():ImVec4(.70f,.72f,.76f,1),"%s",m.title);
         ImGui::SameLine();
         ImGui::TextDisabled("  %s",m.implemented?"AVAILABLE":"PLANNED");
@@ -1241,10 +1242,88 @@ static std::vector<ModuleReview> inspectProcessModules(DWORD pid) {
 static void selectProcessDetails(const Process& p) {
     selectedProcess=p;
     selectedModules=inspectProcessModules(p.pid);
+    selectedImports=inspectImportedDlls(p.path);
     selectedHash.clear();
     selectedSignature.clear();
     detailsOpen=true;
 }
+
+// Inspect the PE import directory on disk. This does not require opening
+// another process and is different from enumerating currently loaded DLLs.
+static std::vector<ModuleReview> inspectImportedDlls(const std::wstring& path) {
+    std::vector<ModuleReview> result;
+    if(!isResolvedPath(path))return result;
+    std::ifstream input(fs::path(path),std::ios::binary|std::ios::ate);
+    if(!input)return result;
+    auto length=input.tellg();
+    if(length<=0 || length>static_cast<std::streamoff>(128ull*1024*1024))return result;
+    std::vector<unsigned char> bytes(static_cast<size_t>(length));
+    input.seekg(0);
+    if(!input.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))return result;
+    auto read16=[&](size_t off,WORD& value)->bool {
+        if(off>bytes.size() || bytes.size()-off<sizeof(value))return false;
+        std::memcpy(&value,bytes.data()+off,sizeof(value));return true;
+    };
+    auto read32=[&](size_t off,DWORD& value)->bool {
+        if(off>bytes.size() || bytes.size()-off<sizeof(value))return false;
+        std::memcpy(&value,bytes.data()+off,sizeof(value));return true;
+    };
+    WORD mz=0;
+    DWORD peOffset=0,signature=0;
+    if(!read16(0,mz)||mz!=IMAGE_DOS_SIGNATURE||
+       !read32(0x3c,peOffset)||peOffset>bytes.size()||
+       !read32(peOffset,signature)||signature!=IMAGE_NT_SIGNATURE)return result;
+    size_t fileHeader=static_cast<size_t>(peOffset)+4;
+    WORD sectionCount=0,optionalSize=0,magic=0;
+    if(!read16(fileHeader+2,sectionCount)||
+       !read16(fileHeader+16,optionalSize)||
+       sectionCount>96)return result;
+    size_t opt=fileHeader+sizeof(IMAGE_FILE_HEADER);
+    if(!read16(opt,magic))return result;
+    size_t dirOffset=magic==IMAGE_NT_OPTIONAL_HDR64_MAGIC?112:
+                     magic==IMAGE_NT_OPTIONAL_HDR32_MAGIC?96:0;
+    if(!dirOffset || optionalSize<dirOffset+16)return result;
+    DWORD importRva=0,importSize=0;
+    if(!read32(opt+dirOffset+8,importRva)||
+       !read32(opt+dirOffset+12,importSize)||!importRva)return result;
+    size_t sectionOffset=opt+optionalSize;
+    auto toOffset=[&](DWORD rva)->size_t {
+        for(WORD i=0;i<sectionCount;++i) {
+            size_t off=sectionOffset+static_cast<size_t>(i)*sizeof(IMAGE_SECTION_HEADER);
+            DWORD virtualSize=0,virtualAddress=0,rawSize=0,rawOffset=0;
+            if(!read32(off+8,virtualSize)||!read32(off+12,virtualAddress)||
+               !read32(off+16,rawSize)||!read32(off+20,rawOffset))return bytes.size();
+            DWORD span=(std::max)(virtualSize,rawSize);
+            if(rva>=virtualAddress && static_cast<uint64_t>(rva)-virtualAddress<span) {
+                uint64_t pos=static_cast<uint64_t>(rawOffset)+rva-virtualAddress;
+                return pos<bytes.size()?static_cast<size_t>(pos):bytes.size();
+            }
+        }
+        return bytes.size();
+    };
+    size_t start=toOffset(importRva);
+    for(size_t i=0;i<512 && start<bytes.size();++i) {
+        size_t at=start+i*sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        DWORD nameRva=0,firstThunk=0,originalThunk=0;
+        if(!read32(at+12,nameRva)||!read32(at+16,firstThunk)||
+           !read32(at,originalThunk))break;
+        if(!nameRva && !firstThunk && !originalThunk)break;
+        size_t nameAt=toOffset(nameRva);
+        if(nameAt>=bytes.size())continue;
+        size_t end=nameAt;
+        while(end<bytes.size() && end-nameAt<260 && bytes[end])++end;
+        if(end==bytes.size() || end-nameAt>=260)continue;
+        std::string dll(reinterpret_cast<const char*>(bytes.data()+nameAt),end-nameAt);
+        std::wstring wide(dll.begin(),dll.end());
+        ModuleReview m;
+        m.name=wide;
+        m.path=L"Import table (not a loaded-module path)";
+        m.assessment="Declared PE import; loading and trust are not established";
+        result.push_back(std::move(m));
+    }
+    return result;
+}
+static std::vector<ModuleReview> selectedImports;
 static void drawProcessDetails() {
     if(!detailsOpen)return;
     ImGui::SetNextWindowSize(ImVec2(1020,680),ImGuiCond_FirstUseEver);
@@ -1277,7 +1356,7 @@ static void drawProcessDetails() {
         ImGui::TextDisabled("No module list available (protected, exited, or access denied).");
     if(ImGui::BeginTable("detailModules",3,ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
-        ImVec2(0,-1))) {
+        ImVec2(0,230))) {
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableSetupColumn("Module",ImGuiTableColumnFlags_WidthStretch,1.2f);
         ImGui::TableSetupColumn("Full path",ImGuiTableColumnFlags_WidthStretch,3.f);
@@ -1290,6 +1369,21 @@ static void drawProcessDetails() {
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(m.path).c_str());
             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",m.assessment.c_str());
+        }
+        ImGui::EndTable();
+    }
+    ImGui::Separator();
+    ImGui::Text("Imported DLLs (PE import table): %zu",selectedImports.size());
+    ImGui::TextDisabled("These are file dependencies, not proof that a DLL is loaded or malicious.");
+    if(ImGui::BeginTable("importedDlls",2,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,180))) {
+        ImGui::TableSetupColumn("DLL",ImGuiTableColumnFlags_WidthStretch,1);
+        ImGui::TableSetupColumn("Assessment",ImGuiTableColumnFlags_WidthStretch,3);
+        ImGui::TableHeadersRow();
+        for(const auto& m:selectedImports) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(m.assessment.c_str());
         }
         ImGui::EndTable();
     }
@@ -1633,6 +1727,7 @@ static void renderUI() {
         sectionTitle("SYSTEM INSPECTION","Live collection status and module availability");
         ImGui::BeginChild("inspectionCard",ImVec2(0,scanning?160:126),ImGuiChildFlags_Borders);
         ImGui::Text("Status: %s",stateText());
+        ImGui::SameLine();ImGui::TextDisabled("  |  %zu processes / %zu records",processCount.load(),recordCount.load());
         if(scanning) {
             int idx=(std::min)(stage.load(),5);
             ImGui::TextDisabled("Current stage: %s",stages[idx]);
@@ -1640,7 +1735,7 @@ static void renderUI() {
             if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
         } else {
             ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-            if(accentButton("Start Full Scan",ImVec2(210,42))) startScan();
+            if(accentButton("Start Full Scan",ImVec2(210,42))) { startScan(); status="New full inspection started"; }
         }
         ImGui::EndChild();
         ImGui::Spacing();
