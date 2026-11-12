@@ -2072,6 +2072,81 @@ static std::vector<Record> inspectCheatNamedModules(
     return out;
 }
 
+
+// Read-only artifact inventory. Bounded directory traversal avoids unbounded
+// scans of large user profiles and never follows directory symlinks.
+static std::vector<Record> inspectArtifactLocations(){
+    std::vector<Record> out;
+    wchar_t temp[MAX_PATH]={},windows[MAX_PATH]={};
+    const DWORD tlen=GetTempPathW(MAX_PATH,temp);
+    const UINT wlen=GetWindowsDirectoryW(windows,MAX_PATH);
+    struct Root {fs::path path;std::string label;bool recursive;};
+    std::vector<Root> roots;
+    if(tlen && tlen<MAX_PATH)roots.push_back({fs::path(temp),"User TEMP",true});
+    if(wlen && wlen<MAX_PATH){
+        roots.push_back({fs::path(windows)/L"Prefetch","Windows Prefetch",false});
+        roots.push_back({fs::path(windows)/L"Temp","Windows TEMP",true});
+    }
+    wchar_t appdata[MAX_PATH]={};
+    const DWORD alen=GetEnvironmentVariableW(L"APPDATA",appdata,MAX_PATH);
+    if(alen && alen<MAX_PATH)
+        roots.push_back({fs::path(appdata)/L"Microsoft"/L"Windows"/L"Start Menu"/
+            L"Programs"/L"Startup","User Startup",false});
+    const wchar_t* extensions[]={L".exe",L".dll",L".sys",L".pf",
+                                  L".ps1",L".bat",L".cmd",L".vbs",L".js",L".lnk"};
+    size_t total=0;
+    for(const auto& root:roots){
+        if(cancelRequested || total>=2200)break;
+        std::error_code ec;
+        if(!fs::is_directory(root.path,ec))continue;
+        auto add=[&](const fs::directory_entry& e){
+            if(total>=2200 || cancelRequested)return;
+            std::error_code fileEc;
+            if(!e.is_regular_file(fileEc) || fileEc)return;
+            const std::wstring ext=lowerPath(e.path().extension().wstring());
+            bool allowed=false;
+            for(const wchar_t* x:extensions)if(ext==x){allowed=true;break;}
+            if(!allowed)return;
+            ++total;
+            const bool prefetch=ext==L".pf";
+            const bool named=isCheatNameRuleMatch(e.path().filename().wstring());
+            const std::string category=prefetch?"Artifact: Prefetch":
+                (ext==L".sys"?"Artifact: Driver":
+                (ext==L".dll"?"Artifact: DLL":
+                (ext==L".exe"?"Artifact: EXE":"Artifact: Script/Shortcut")));
+            const std::string status=named?"DETECTED - NAME RULE":"INVENTORY";
+            out.push_back({category,utf8(e.path().filename().wstring()),
+                status+" | Location: "+root.label+" | File: "+
+                utf8(e.path().wstring())+
+                (prefetch?
+                 " | Prefetch is an execution-related Windows artifact, not proof of malware.":
+                 " | Presence alone does not indicate malicious activity.")});
+        };
+        if(root.recursive){
+            fs::recursive_directory_iterator it(root.path,
+                fs::directory_options::skip_permission_denied,ec),end;
+            size_t visited=0;
+            while(it!=end && !cancelRequested && total<2200 && visited<6000){
+                if(it.depth()>3)it.disable_recursion_pending();
+                if(it->is_symlink(ec))it.disable_recursion_pending();
+                add(*it);++visited;
+                it.increment(ec);
+                if(ec)ec.clear();
+            }
+        }else{
+            fs::directory_iterator it(root.path,
+                fs::directory_options::skip_permission_denied,ec),end;
+            size_t visited=0;
+            while(it!=end && !cancelRequested && total<2200 && visited<6000){
+                add(*it);++visited;
+                it.increment(ec);
+                if(ec)ec.clear();
+            }
+        }
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -2130,6 +2205,7 @@ static void scanWorker() {
         auto hosts=inspectHostsFile();
         auto cheatNameProcesses=inspectCheatNamedProcesses(p);
         auto cheatNameModules=inspectCheatNamedModules(p);
+        auto artifactLocations=inspectArtifactLocations();
         auto peFindings=inspectPeStructure(p);
         auto provenance=inspectExecutableProvenance(p);
         auto loadedModules=inspectLoadedModuleProvenance(p);
@@ -2158,6 +2234,7 @@ static void scanWorker() {
         services.insert(services.end(),provenance.begin(),provenance.end());
         services.insert(services.end(),cheatNameProcesses.begin(),cheatNameProcesses.end());
         services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
+        services.insert(services.end(),artifactLocations.begin(),artifactLocations.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
@@ -4292,7 +4369,7 @@ static void renderUI() {
     if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
     lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
-                       "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","KERNEL MEMORY DUMP","PREFERENCES"};
+                       "BINARY LAB","NETWORK","DRIVER AUDIT","ARTIFACT EXPLORER","KERNEL MEMORY DUMP","PREFERENCES"};
     const int navPages[]={0,2,3,6,7,8,9,10,4};
     // Quick page navigation, ignored while editing text or using shortcuts.
     // Ctrl+1..9 follows the visible tab order.
@@ -4393,7 +4470,7 @@ static void renderUI() {
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
         page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
-        page==9?"FILE INTELLIGENCE":page==10?"KERNEL MEMORY DUMP":"PREFERENCES";
+        page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":"PREFERENCES";
     // A short title entrance signals navigation without obscuring the tables.
     const float elapsed=uiNow-navTransitionStart;
     const float entrance=(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.30f);
@@ -4902,38 +4979,73 @@ static void renderUI() {
         ImGui::TextDisabled(
             "No stealth capture, driver installation, or protection bypass.");
     } else if(page==9) {
-        sectionTitle("File Intelligence","Files analyzed or verified by the scanner");
-        ImGui::TextDisabled("SHA-256 and signature results are shown only when available.");
-        static char fileIntelSearch[320]{};
-        ImGui::SetNextItemWidth(460);
-        ImGui::InputTextWithHint("##fileIntelSearch","Search path, hash or signature...",
-            fileIntelSearch,sizeof(fileIntelSearch));
+        sectionTitle("Artifact Explorer",
+            "EXE, DLL, SYS, Prefetch, TEMP, Startup and executable scripts");
+        ImGui::TextDisabled("Read-only evidence from the last full scan. "
+            "Inventory entries are not confirmed threats.");
+        static int artifactType=0;
+        static char artifactSearch[320]{};
+        const char* types[]={"All artifacts","EXE","DLL","SYS","Prefetch",
+                             "Scripts / shortcuts","Cheat / External name matches"};
+        ImGui::SetNextItemWidth(215);
+        ImGui::Combo("Type##artifact", &artifactType,types,IM_ARRAYSIZE(types));
         ImGui::SameLine();
-        if(ImGui::Button("OPEN BINARY LAB##intel"))page=6;
-        std::vector<FileResult> snapshot;
-        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=files;}
-        ImGui::Text("Verified file entries: %zu",snapshot.size());
+        ImGui::SetNextItemWidth((std::max)(180.f,ImGui::GetContentRegionAvail().x-12.f));
+        ImGui::InputTextWithHint("##artifactSearch",
+            "Search filename, path, location or indicator...",
+            artifactSearch,sizeof(artifactSearch));
+        std::vector<Record> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            for(const auto& r:records){
+                if(r.category.rfind("Artifact: ",0)==0 ||
+                   r.category=="FiveM Cheat Name Detection" ||
+                   r.category=="Executable Location" ||
+                   r.category=="Executable Provenance" ||
+                   r.category=="Module Provenance" ||
+                   r.category=="Module Signature")
+                    snapshot.push_back(r);
+            }
+        }
+        ImGui::Text("Collected artifacts: %zu",snapshot.size());
+        ImGui::SameLine(0,18);
+        if(ImGui::SmallButton("OPEN BINARY LAB##artifact"))page=6;
         ImGui::Separator();
-        if(ImGui::BeginTable("##fileIntelTable",3,
-            ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+        std::string query=artifactSearch;
+        std::transform(query.begin(),query.end(),query.begin(),
+            [](unsigned char c){return (char)std::tolower(c);});
+        if(ImGui::BeginTable("##artifactExplorer",4,
+            ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
             ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))){
-            ImGui::TableSetupColumn("File path",ImGuiTableColumnFlags_WidthStretch,3);
-            ImGui::TableSetupColumn("SHA-256",ImGuiTableColumnFlags_WidthStretch,2);
-            ImGui::TableSetupColumn("Authenticode",ImGuiTableColumnFlags_WidthStretch,2);
+            ImGui::TableSetupScrollFreeze(0,1);
+            ImGui::TableSetupColumn("Type",ImGuiTableColumnFlags_WidthFixed,140);
+            ImGui::TableSetupColumn("File / Indicator",ImGuiTableColumnFlags_WidthStretch,1.5f);
+            ImGui::TableSetupColumn("Evidence and location",ImGuiTableColumnFlags_WidthStretch,3.f);
+            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,95);
             ImGui::TableHeadersRow();
-            std::string query=fileIntelSearch;
-            std::transform(query.begin(),query.end(),query.begin(),
-                [](unsigned char c){return (char)std::tolower(c);});
-            for(const auto& f:snapshot){
-                std::string path=utf8(f.path);
-                std::string hay=path+" "+f.hash+" "+f.signature;
+            for(const auto& r:snapshot){
+                const bool matchType=artifactType==0 ||
+                    (artifactType==1&&r.category=="Artifact: EXE") ||
+                    (artifactType==2&&r.category=="Artifact: DLL") ||
+                    (artifactType==3&&r.category=="Artifact: Driver") ||
+                    (artifactType==4&&r.category=="Artifact: Prefetch") ||
+                    (artifactType==5&&r.category=="Artifact: Script/Shortcut") ||
+                    (artifactType==6&&
+                      (r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
+                       r.category=="FiveM Cheat Name Detection"));
+                if(!matchType)continue;
+                std::string hay=r.category+" "+r.name+" "+r.detail;
                 std::transform(hay.begin(),hay.end(),hay.begin(),
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&hay.find(query)==std::string::npos)continue;
                 ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",path.c_str());
-                ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
-                ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
+                ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",r.category.c_str());
+                ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
+                ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+                ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
+                if(ImGui::SmallButton("Show Details"))
+                    openEvidenceDetails(r.category,r.name,r.detail);
+                ImGui::PopID();
             }
             ImGui::EndTable();
         }
