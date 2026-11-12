@@ -2,6 +2,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <winhttp.h>
+#include <shellapi.h>
+#pragma comment(lib,"shell32.lib")
+#include <map>
+#pragma comment(lib,"winhttp.lib")
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <commdlg.h>
@@ -1389,52 +1394,45 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=0.f; st.ChildRounding=3.f;
-    st.FrameRounding=3.f; st.PopupRounding=8.f;
-    st.ScrollbarRounding=4.f; st.TabRounding=2.f;
-    st.GrabRounding=3.f;
-    st.WindowBorderSize=0.f; st.ChildBorderSize=1.f; st.FrameBorderSize=0.f;
-    st.WindowPadding=ImVec2(20,17);
-    st.FramePadding=ImVec2(12,densityIndex==0?6.f:densityIndex==2?12.f:9.f);
-    st.ItemSpacing=ImVec2(10,densityIndex==0?7.f:densityIndex==2?13.f:9.f);
-    st.ItemInnerSpacing=ImVec2(9,6);
-    st.ScrollbarSize=8.f;
+    st.WindowRounding=0.f;st.ChildRounding=12.f;st.FrameRounding=10.f;
+    st.PopupRounding=12.f;st.ScrollbarRounding=8.f;st.TabRounding=9.f;
+    st.GrabRounding=8.f;st.WindowBorderSize=0;st.ChildBorderSize=0;
+    st.FrameBorderSize=0;st.WindowPadding=ImVec2(22,20);
+    st.FramePadding=ImVec2(13,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
+    st.ItemSpacing=ImVec2(11,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
+    st.ItemInnerSpacing=ImVec2(9,7);st.ScrollbarSize=9.f;
     auto& c=st.Colors;
-    const bool navy=themeIndex==2;
-    const bool slate=themeIndex==1;
-    c[ImGuiCol_WindowBg]=navy?ImVec4(.032f,.050f,.082f,1):
-        slate?ImVec4(.055f,.065f,.076f,1):ImVec4(.022f,.035f,.052f,1);
-    c[ImGuiCol_ChildBg]=navy?ImVec4(.060f,.080f,.122f,1):
-        slate?ImVec4(.078f,.094f,.109f,1):ImVec4(.039f,.062f,.085f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.075f,.092f,.120f,1);
-    c[ImGuiCol_Border]=ImVec4(.17f,.21f,.26f,.85f);
-    c[ImGuiCol_Separator]=ImVec4(.17f,.21f,.26f,.85f);
-    c[ImGuiCol_Text]=ImVec4(.93f,.96f,.98f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.55f,.62f,.71f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.095f,.125f,.16f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.15f,.19f,.24f,1);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.18f,.23f,.29f,1);
-    c[ImGuiCol_Button]=ImVec4(.12f,.15f,.20f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.19f,.23f,.29f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.24f,.28f,.35f,1);
-    c[ImGuiCol_Header]=ImVec4(.13f,.17f,.22f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.19f,.24f,.30f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.23f,.29f,.35f,1);
+    c[ImGuiCol_WindowBg]=ImVec4(.047f,.069f,.088f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.080f,.109f,.130f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.095f,.13f,.15f,1);
+    c[ImGuiCol_Border]=ImVec4(.18f,.26f,.29f,.8f);
+    c[ImGuiCol_Separator]=ImVec4(.17f,.24f,.27f,1);
+    c[ImGuiCol_Text]=ImVec4(.91f,.97f,.96f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.57f,.70f,.72f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.11f,.16f,.18f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.23f,.25f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.21f,.28f,.30f,1);
+    c[ImGuiCol_Button]=ImVec4(.14f,.21f,.23f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.20f,.30f,.32f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.24f,.34f,.35f,1);
+    c[ImGuiCol_Header]=ImVec4(.14f,.22f,.24f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.20f,.30f,.32f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.23f,.34f,.35f,1);
     c[ImGuiCol_CheckMark]=orange();
     c[ImGuiCol_SliderGrab]=orange();
     c[ImGuiCol_SliderGrabActive]=orange();
-    c[ImGuiCol_Tab]=ImVec4(.085f,.11f,.145f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.17f,.21f,.27f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.18f,.22f,.28f,1);
-    c[ImGuiCol_TabDimmed]=ImVec4(.065f,.09f,.12f,1);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.11f,.15f,.19f,1);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.20f,.24f,.30f,1);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.14f,.18f,.23f,.65f);
-    c[ImGuiCol_TableRowBg]=ImVec4(.06f,.08f,.11f,.5f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.11f,.14f,.18f,.5f);
+    c[ImGuiCol_Tab]=ImVec4(.10f,.16f,.18f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(.17f,.26f,.28f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.20f,.30f,.32f,1);
+    c[ImGuiCol_TabDimmed]=ImVec4(.08f,.13f,.15f,1);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.13f,.20f,.22f,1);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.20f,.28f,.30f,1);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.16f,.23f,.25f,.8f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.08f,.12f,.14f,.55f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.14f,.19f,.21f,.55f);
     c[ImGuiCol_NavHighlight]=orange();
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.045f,.06f,.08f,1);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.21f,.26f,.32f,1);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.06f,.09f,.11f,1);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.23f,.33f,.35f,1);
     c[ImGuiCol_PlotHistogram]=orange();
 }
 static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
@@ -1879,11 +1877,43 @@ static std::vector<ServiceReview> inspectServiceStates() {
 }
 static std::vector<ServiceReview> serviceReviews;
 static void drawServiceReviews() {
+    // Search is local to Service Review; it never modifies collected evidence.
+    static char serviceSearch[256]{};
+    static int serviceStateFilter=0;
     if(serviceReviews.empty())serviceReviews=inspectServiceStates();
     if(ImGui::Button("Refresh service states"))
         serviceReviews=inspectServiceStates();
     ImGui::SameLine();
     ImGui::TextDisabled("Stopped automatic-start services are review candidates, not confirmed threats.");
+    ImGui::Dummy(ImVec2(0,6));
+    ImGui::TextUnformatted("SEARCH  /");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth((std::max)(240.f,ImGui::GetContentRegionAvail().x-235.f));
+    ImGui::InputTextWithHint("##serviceSearch","Search service name, display name, state, assessment...",serviceSearch,sizeof(serviceSearch));
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Clear##serviceSearch"))serviceSearch[0]='\\0';
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(128.f);
+    ImGui::Combo("##serviceStateFilter",&serviceStateFilter,"All\\0Running\\0Stopped\\0Suspect\\0\\0");
+    const std::string searchLower=[&]() {
+        std::string v(serviceSearch);
+        std::transform(v.begin(),v.end(),v.begin(),[](unsigned char c){return (char)std::tolower(c);});
+        return v;
+    }();
+    auto matchesService=[&](const ServiceReview& item)->bool {
+        if(serviceStateFilter==1 && item.currentState!=SERVICE_RUNNING)return false;
+        if(serviceStateFilter==2 && item.currentState!=SERVICE_STOPPED)return false;
+        if(serviceStateFilter==3 && !item.review)return false;
+        if(searchLower.empty())return true;
+        std::string value=utf8(item.name)+" "+utf8(item.display)+" "+item.assessment+" "+
+            (item.currentState==SERVICE_RUNNING?"running":item.currentState==SERVICE_STOPPED?"stopped":"other");
+        std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return (char)std::tolower(c);});
+        return value.find(searchLower)!=std::string::npos;
+    };
+    size_t visible=0;
+    for(const auto& item:serviceReviews)if(matchesService(item))++visible;
+    ImGui::TextDisabled("%zu of %zu services shown  |  Search applies to this table only.",
+                        visible,serviceReviews.size());
     if(ImGui::BeginTable("serviceReviewTable",5,ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
         ImVec2(0,-1))) {
@@ -1895,6 +1925,7 @@ static void drawServiceReviews() {
         ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableHeadersRow();
         for(const auto& item:serviceReviews) {
+            if(!matchesService(item))continue;
             ImGui::TableNextRow();
             if(item.review && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
@@ -2094,6 +2125,264 @@ static void recordsTable() {
         ImGui::EndTable();
     }
 }
+
+// VirusTotal API v3: explicit, user-triggered hash-only reputation lookups.
+// API key stays in RAM. Files are never uploaded. HTTP runs off the UI thread.
+namespace vt {
+struct Value {
+    enum Kind { Null, Object, Array, String, Number, Boolean } kind=Null;
+    std::map<std::string,Value> object;
+    std::vector<Value> array;
+    std::string scalar;
+    const Value& at(const std::string& key) const {
+        auto it=object.find(key);
+        if(it!=object.end())return it->second;
+        static const Value empty{};
+        return empty;
+    }
+    int integer() const {try{return std::stoi(scalar);}catch(...){return 0;}}
+};
+struct Reader {
+    const std::string& s; size_t i=0; int depth=0;
+    void ws(){while(i<s.size() && (s[i]==' '||s[i]=='\r'||s[i]=='\n'||s[i]=='\t'))++i;}
+    std::string quoted() {
+        std::string o;
+        if(i>=s.size()||s[i++]!='"')return o;
+        while(i<s.size()) {
+            char c=s[i++];
+            if(c=='"')break;
+            if(c=='\\'&&i<s.size()){
+                char e=s[i++];
+                switch(e){case 'n':o+='\n';break;case 'r':o+='\r';break;
+                    case 't':o+='\t';break;case '"':o+='"';break;
+                    case '\\':o+='\\';break;
+                    case 'u':if(i+4<=s.size()){i+=4;o+='?';}break;
+                    default:o+=e;break;}
+            }else o+=c;
+        }
+        return o;
+    }
+    Value read() {
+        ws(); Value v;
+        if(i>=s.size()||depth>40)return v;
+        ++depth;
+        char c=s[i];
+        if(c=='{'){
+            v.kind=Value::Object;++i;ws();
+            while(i<s.size()&&s[i]!='}'){
+                ws();if(i>=s.size()||s[i]!='"')break;
+                auto k=quoted();ws();
+                if(i>=s.size()||s[i++]!=':')break;
+                v.object.emplace(std::move(k),read());ws();
+                if(i<s.size()&&s[i]==',')++i;else break;
+            }
+            if(i<s.size()&&s[i]=='}')++i;
+        }else if(c=='['){
+            v.kind=Value::Array;++i;ws();
+            while(i<s.size()&&s[i]!=']'){
+                v.array.push_back(read());ws();
+                if(i<s.size()&&s[i]==',')++i;else break;
+            }
+            if(i<s.size()&&s[i]==']')++i;
+        }else if(c=='"'){v.kind=Value::String;v.scalar=quoted();}
+        else {
+            const size_t start=i;
+            while(i<s.size()&&s[i]!=','&&s[i]!=']'&&s[i]!='}'&&
+                s[i]!=' '&&s[i]!='\r'&&s[i]!='\n')++i;
+            v.scalar=s.substr(start,i-start);
+            v.kind=(v.scalar=="true"||v.scalar=="false")?Value::Boolean:Value::Number;
+        }
+        --depth;return v;
+    }
+};
+struct Engine {std::string name,category,result;};
+struct Report {
+    std::string hash,status="Not queried",name,type,analysisDate;
+    int malicious=0,suspicious=0,undetected=0,harmless=0,timeout=0;
+    std::vector<Engine> engines;
+    bool found=false;
+};
+static std::mutex mutex;
+static Report report;
+static std::atomic<bool> busy{false};
+static char key[256]{};
+static char hashInput[96]{};
+static char filePath[2048]{};
+static bool showAllEngines=false;
+static std::string narrowError(DWORD e){return "Windows network error "+std::to_string(e);}
+static std::string request(const std::string& hash,const std::string& apiKey,DWORD& code,std::string& error){
+    code=0;
+    HINTERNET session=WinHttpOpen(L"SyncPCChecker/1.0",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
+    if(!session){error=narrowError(GetLastError());return {};}
+    WinHttpSetTimeouts(session,6000,6000,12000,12000);
+    HINTERNET conn=WinHttpConnect(session,L"www.virustotal.com",INTERNET_DEFAULT_HTTPS_PORT,0);
+    if(!conn){error=narrowError(GetLastError());WinHttpCloseHandle(session);return {};}
+    std::wstring path=L"/api/v3/files/"+std::wstring(hash.begin(),hash.end());
+    HINTERNET req=WinHttpOpenRequest(conn,L"GET",path.c_str(),nullptr,
+        WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE);
+    std::string response;
+    if(req){
+        std::wstring header=L"x-apikey: "+std::wstring(apiKey.begin(),apiKey.end())+L"\r\nAccept: application/json\r\n";
+        BOOL ok=WinHttpSendRequest(req,header.c_str(),(DWORD)-1L,
+            WINHTTP_NO_REQUEST_DATA,0,0,0);
+        if(ok)ok=WinHttpReceiveResponse(req,nullptr);
+        if(ok){
+            DWORD size=sizeof(code);
+            WinHttpQueryHeaders(req,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX,&code,&size,WINHTTP_NO_HEADER_INDEX);
+            for(;;){
+                DWORD available=0;
+                if(!WinHttpQueryDataAvailable(req,&available)||available==0)break;
+                if(response.size()+available>4*1024*1024){error="Report exceeds 4 MB";break;}
+                std::string chunk(available,'\0');
+                DWORD got=0;
+                if(!WinHttpReadData(req,chunk.data(),available,&got))break;
+                response.append(chunk.data(),got);
+            }
+        }else error=narrowError(GetLastError());
+        WinHttpCloseHandle(req);
+    }else error=narrowError(GetLastError());
+    WinHttpCloseHandle(conn);WinHttpCloseHandle(session);
+    return response;
+}
+static bool validHash(const std::string& h){
+    if(h.size()!=64)return false;
+    for(char c:h)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F')))return false;
+    return true;
+}
+static void query(const std::string& h,const std::string& apiKey){
+    if(busy.exchange(true))return;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        report=Report{};report.hash=h;report.status="Requesting VirusTotal report...";
+    }
+    std::thread([h,apiKey](){
+        Report r;r.hash=h;
+        DWORD http=0;std::string err;
+        auto body=request(h,apiKey,http,err);
+        if(http==200){
+            Reader parser{body};const auto root=parser.read();
+            const auto& attrs=root.at("data").at("attributes");
+            if(attrs.kind!=Value::Object)r.status="Invalid API response";
+            else{
+                r.found=true;r.status="Report available";
+                r.name=attrs.at("meaningful_name").scalar;
+                r.type=attrs.at("type_description").scalar;
+                const auto& stats=attrs.at("last_analysis_stats");
+                r.malicious=stats.at("malicious").integer();
+                r.suspicious=stats.at("suspicious").integer();
+                r.undetected=stats.at("undetected").integer();
+                r.harmless=stats.at("harmless").integer();
+                r.timeout=stats.at("timeout").integer();
+                const auto& results=attrs.at("last_analysis_results");
+                for(const auto& pair:results.object){
+                    const auto& item=pair.second;
+                    Engine e{pair.first,item.at("category").scalar,item.at("result").scalar};
+                    if(e.result=="null")e.result.clear();
+                    r.engines.push_back(std::move(e));
+                }
+                std::sort(r.engines.begin(),r.engines.end(),[](const Engine& a,const Engine& b){
+                    auto rank=[](const std::string& c){return c=="malicious"?0:c=="suspicious"?1:2;};
+                    if(rank(a.category)!=rank(b.category))return rank(a.category)<rank(b.category);
+                    return a.name<b.name;
+                });
+            }
+        }else if(http==404)r.status="Hash not found in VirusTotal";
+        else if(http==401||http==403)r.status="API key invalid or access denied";
+        else if(http==429)r.status="Rate limit reached; try again later";
+        else if(!err.empty())r.status=err;
+        else r.status="VirusTotal HTTP "+std::to_string(http);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            report=std::move(r);
+        }
+        busy=false;
+    }).detach();
+}
+static void chooseFile(){
+    wchar_t path[32768]{};
+    OPENFILENAMEW dlg{};dlg.lStructSize=sizeof(dlg);
+    dlg.hwndOwner=hwnd;dlg.lpstrFile=path;dlg.nMaxFile=32768;
+    dlg.lpstrFilter=L"All files\0*.*\0";
+    dlg.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+    if(GetOpenFileNameW(&dlg)){
+        const auto digest=sha256(path);
+        std::string utf=utf8(path);
+        strncpy_s(filePath,sizeof(filePath),utf.c_str(),_TRUNCATE);
+        if(validHash(digest))strncpy_s(hashInput,sizeof(hashInput),digest.c_str(),_TRUNCATE);
+    }
+}
+static void draw(){
+    ImGui::TextColored(orange(),"VIRUSTOTAL  /  HASH REPUTATION");
+    ImGui::TextDisabled("Third-party intelligence, not an antivirus engine built into this scanner.");
+    ImGui::Dummy(ImVec2(0,10));
+    ImGui::BeginChild("##vtLookup",ImVec2(0,215),ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted("FILE OR SHA-256");
+    ImGui::SetNextItemWidth(-140);
+    ImGui::InputTextWithHint("##vtHash","64-character SHA-256",hashInput,sizeof(hashInput));
+    ImGui::SameLine();
+    if(ImGui::Button("Choose file",ImVec2(125,0)))chooseFile();
+    if(filePath[0])ImGui::TextWrapped("Selected: %s",filePath);
+    ImGui::TextUnformatted("VirusTotal API key");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##vtKey","Paste API key (memory only)",key,sizeof(key),
+        ImGuiInputTextFlags_Password);
+    const bool ready=validHash(hashInput)&&key[0]&&!busy.load();
+    ImGui::BeginDisabled(!ready);
+    if(ImGui::Button("LOOK UP HASH",ImVec2(178,36)))query(hashInput,key);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("No file uploads. Explicit query only.");
+    ImGui::EndChild();
+    ImGui::Dummy(ImVec2(0,12));
+    Report r;
+    {std::lock_guard<std::mutex> lock(mutex);r=report;}
+    ImGui::Text("STATUS  /  %s",r.status.c_str());
+    if(!r.found){
+        ImGui::TextWrapped("A missing report does not mean a file is safe. "
+            "Use an API key to retrieve existing analysis results.");
+        return;
+    }
+    ImGui::Dummy(ImVec2(0,10));
+    ImGui::BeginChild("##vtSummary",ImVec2(0,112),ImGuiChildFlags_Borders);
+    ImGui::TextColored(ImVec4(1,.44f,.44f,1),"MALICIOUS  %d",r.malicious);
+    ImGui::SameLine(0,28);
+    ImGui::TextColored(ImVec4(1,.78f,.30f,1),"SUSPICIOUS  %d",r.suspicious);
+    ImGui::SameLine(0,28);
+    ImGui::Text("UNDETECTED  %d",r.undetected);
+    ImGui::SameLine(0,28);
+    ImGui::Text("HARMLESS  %d",r.harmless);
+    ImGui::TextDisabled("Name: %s  |  Type: %s",r.name.c_str(),r.type.c_str());
+    ImGui::TextDisabled("SHA-256: %s",r.hash.c_str());
+    ImGui::EndChild();
+    ImGui::Checkbox("Show all engines",&showAllEngines);
+    ImGui::SameLine();
+    if(ImGui::Button("Open report in browser")){
+        const std::string url="https://www.virustotal.com/gui/file/"+r.hash+"/detection";
+        ShellExecuteA(hwnd,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+    }
+    if(ImGui::BeginTable("##vtEngines",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,ImVec2(0,0))){
+        ImGui::TableSetupColumn("Engine",ImGuiTableColumnFlags_WidthStretch,.35f);
+        ImGui::TableSetupColumn("Verdict",ImGuiTableColumnFlags_WidthStretch,.22f);
+        ImGui::TableSetupColumn("Detection name",ImGuiTableColumnFlags_WidthStretch,.43f);
+        ImGui::TableHeadersRow();
+        for(const auto& e:r.engines){
+            if(!showAllEngines&&e.category!="malicious"&&e.category!="suspicious")continue;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            if(e.category=="malicious")ImGui::TextColored(ImVec4(1,.43f,.43f,1),"MALICIOUS");
+            else if(e.category=="suspicious")ImGui::TextColored(ImVec4(1,.79f,.33f,1),"SUSPECT");
+            else ImGui::TextUnformatted(e.category.c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(e.result.c_str());
+        }
+        ImGui::EndTable();
+    }
+}
+} // namespace vt
+
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
@@ -2118,84 +2407,81 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // OPERATIONS CONSOLE: full-width command surface instead of a sidebar.
-    // A custom draggable top rail preserves the frameless window controls.
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.038f,.067f,.095f,1));
-    ImGui::BeginChild("##operationsRail",ImVec2(0,62),ImGuiChildFlags_None,
-        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-    if(syncLogoTexture) {
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(36,36));
-        ImGui::SameLine(0,13);
-    }
-    ImGui::BeginGroup();
-    ImGui::TextColored(orange(),"SYNC PC CHECKER");
-    ImGui::TextDisabled("ENDPOINT SECURITY  /  MUDIN");
-    ImGui::EndGroup();
-    ImGui::SameLine(0,12);
-    const float dragWidth=(std::max)(35.f,ImGui::GetContentRegionAvail().x-116.f);
-    ImGui::InvisibleButton("##moveWindow",ImVec2(dragWidth,37));
-
-    ImGui::SameLine(0,5);
-    if(ImGui::Button("_##minimize",ImVec2(45,36)))ShowWindow(hwnd,SW_MINIMIZE);
-    ImGui::SameLine(0,4);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.68f,.14f,.19f,1));
-    if(ImGui::Button("X##close",ImVec2(45,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
-    ImGui::PopStyleColor();
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
-
-    // Top-level navigation: no old sidebar, no old workspace header.
-    if(page==1)page=0;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.078f,.104f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(17,10));
-    ImGui::BeginChild("##operationsNav",ImVec2(0,66),ImGuiChildFlags_None,
-        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-    const char* navLabels[]={"COMMAND CENTER","THREAT ANALYSIS","ACTIVITY LOG","CONFIGURATION","SIGNATURE"};
-    const int navTargets[]={0,2,3,4,5};
+    // New layout: vertical investigation dock, content workspace, floating window controls.
+    if(page==1 || page==5)page=0;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.036f,.054f,.075f,1.f));
+    ImGui::BeginChild("##investigationDock",ImVec2(204.f,0),ImGuiChildFlags_None);
+    ImGui::SetCursorPos(ImVec2(20,25));
+    if(syncLogoTexture)ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(52,52));
+    ImGui::SetCursorPosX(20);
+    ImGui::TextColored(orange(),"SYNC PC");
+    ImGui::SetCursorPosX(20);
+    ImGui::TextUnformatted("CHECKER");
+    ImGui::SetCursorPosX(20);
+    ImGui::TextDisabled("MUDIN / SECURITY");
+    ImGui::Dummy(ImVec2(0,20));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,22));
+    const char* navLabels[]={"  OVERVIEW","  FINDINGS","  EVENT HISTORY","  VIRUSTOTAL","  SETTINGS"};
+    const int navTargets[]={0,2,3,6,4};
     for(int i=0;i<5;i++) {
-        ImGui::PushID(410+i);
+        ImGui::PushID(600+i);
         const bool active=page==navTargets[i];
         if(active) {
             ImGui::PushStyleColor(ImGuiCol_Button,
-                ImVec4(orange().x*.22f,orange().y*.22f,orange().z*.22f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.98f,.98f,1,1));
+                ImVec4(.11f,.21f,.24f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.84f,1.f,.96f,1));
         }
-        const ImVec2 pos=ImGui::GetCursorScreenPos();
-        const bool clicked=ImGui::Button(navLabels[i],ImVec2(
-            i==2?142.f:i==1?163.f:i==3?161.f:i==0?168.f:126.f,40.f));
+        ImGui::SetCursorPosX(12);
+        ImVec2 pos=ImGui::GetCursorScreenPos();
+        bool clicked=ImGui::Button(navLabels[i],ImVec2(180,54));
         if(active) {
-            const ImVec2 end=ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(pos.x,pos.y+38),ImVec2(end.x,pos.y+41),
-                ImGui::ColorConvertFloat4ToU32(orange()),1.f);
+                ImVec2(pos.x,pos.y+8),ImVec2(pos.x+4,pos.y+46),
+                ImGui::ColorConvertFloat4ToU32(orange()),2);
             ImGui::PopStyleColor(2);
         }
         if(clicked)page=navTargets[i];
         ImGui::PopID();
-        if(i<4)ImGui::SameLine(0,8);
+        ImGui::Dummy(ImVec2(0,7));
     }
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0,7));
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,20));
-    ImGui::BeginChild("##workspace",ImVec2(0,0),ImGuiChildFlags_None);
-    // Compact operational status replaces the previous decorative header.
-    ImGui::TextDisabled("SECURITY OPERATIONS");
-    ImGui::SameLine(0,14);
-    ImGui::TextColored(scanning?orange():done?ImVec4(.39f,.82f,.63f,1):
-        ImVec4(.62f,.69f,.76f,1),"%s",stateText());
-    ImGui::SameLine(0,18);
-    ImGui::TextDisabled("  /  %s",isAdministrator()?"ADMINISTRATOR":"STANDARD ACCESS");
+    ImGui::Dummy(ImVec2(0,22));
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0,5));
+    ImGui::SetCursorPosX(18);
+    ImGui::TextDisabled("ACCESS");
+    ImGui::SetCursorPosX(18);
+    ImGui::TextColored(isAdministrator()?ImVec4(.38f,.86f,.66f,1):
+        ImVec4(.92f,.74f,.42f,1),"%s",isAdministrator()?"Administrator":"Standard");
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::SameLine(0,0);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,18));
+    ImGui::BeginChild("##analysisWorkspace",ImVec2(0,0),ImGuiChildFlags_None);
+    // No invisible drag overlay: all controls receive their own input.
+    ImGui::BeginChild("##utilityBar",ImVec2(0,56),ImGuiChildFlags_None);
+    ImGui::TextDisabled("ENDPOINT  /  %s",
+        page==0?"OVERVIEW":page==2?"FINDINGS":page==3?"EVENT HISTORY":page==6?"VIRUSTOTAL":"SETTINGS");
+    ImGui::SameLine(0,14);
+    ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.83f,.65f,1):
+        ImVec4(.63f,.70f,.77f,1),"%s",stateText());
+    const float right=ImGui::GetWindowContentRegionMax().x;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),right-108.f));
+    if(ImGui::Button("-##windowMin",ImVec2(43,32)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,7);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.65f,.16f,.19f,1));
+    if(ImGui::Button("X##windowClose",ImVec2(43,32)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::PopStyleColor();
+    ImGui::EndChild();
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,13));
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
-        sectionTitle("COMMAND CENTER","Endpoint health, investigation controls and evidence sources");
+        sectionTitle("Endpoint Overview","Run an inspection and review collected system evidence");
         ImGui::BeginChild("scanControls",ImVec2(0,scanning?151:125),ImGuiChildFlags_Borders);
         ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.84f,.65f,1):
             ImVec4(.70f,.76f,.84f,1),"%s",stateText());
@@ -2239,7 +2525,7 @@ static void renderUI() {
         modulesList();
         ImGui::EndChild();
     } else if(page==2) {
-        sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
+        sectionTitle(done?"Investigation Results":"Investigation Results",
                      "Process inventory with explainable path-based review indicators.");
         ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
                           processCount.load(),recordCount.load(),fileCount.load());
@@ -2410,8 +2696,10 @@ static void renderUI() {
                     if(ImGui::Button("Close"))ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
+    } else if(page==6) {
+        vt::draw();
     } else if(page==4) {
-        sectionTitle("APPEARANCE & SETTINGS","Customize the scanner interface. Changes apply immediately.");
+        sectionTitle("Workspace Preferences","Adjust appearance and investigation options");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
         ImGui::TextColored(orange(),"APPEARANCE");
         ImGui::Separator();
@@ -2456,25 +2744,18 @@ static void renderUI() {
         if(settingsNotice)ImGui::TextColored(ImVec4(.35f,.85f,.55f,1),"Settings saved successfully.");
         ImGui::Spacing();
         ImGui::TextDisabled("Preferences are stored locally in APPDATA\\SyncPCChecker\\settings.ini");
-        ImGui::EndChild();
-    } else if(page==5) {
-        sectionTitle("DIGITAL IDENTITY","Application integrity and developer information");
-        ImGui::BeginChild("identity",ImVec2(0,270),ImGuiChildFlags_Borders);
-        ImGui::Text("Application       Sync PC Checker");
-        ImGui::Text("Developer         Mudin");
-        ImGui::Text("Privileges        %s",isAdministrator()?"Administrator":"Standard User");
-        ImGui::TextDisabled("Executable location is available in file inspection details.");
+        ImGui::Spacing();
         ImGui::Separator();
-        if(accentButton("Verify This Executable",ImVec2(240,43))) {
+        ImGui::TextDisabled("APPLICATION INTEGRITY");
+        if(ImGui::Button("Verify Scanner Executable",ImVec2(240,38))) {
             try {
-                auto r=inspectFile(executablePath());
+                auto result=inspectFile(executablePath());
                 std::lock_guard<std::mutex> lock(dataMutex);
-                files.push_back(std::move(r));
-        fileCount=files.size();
-                status="Executable verification recorded in Results > File Integrity";
+                files.push_back(std::move(result));
+                fileCount=files.size();
+                status="Executable verification recorded in Findings > File Integrity";
             } catch(...) {status="Executable verification failed";}
         }
-        ImGui::TextDisabled("A self-signed certificate is not publicly trusted by default.");
         ImGui::EndChild();
     }
     ImGui::EndChild();
@@ -2513,7 +2794,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
         renderUI();ImGui::Render();
-        const float clear[4]={.055f,.060f,.075f,1};
+        const float clear[4]={.047f,.069f,.088f,1};
         context->OMSetRenderTargets(1,&target,nullptr);
         context->ClearRenderTargetView(target,clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
