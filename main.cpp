@@ -2190,25 +2190,55 @@ static std::vector<Record> inspectAdditionalEvidence(
         roots.push_back(fs::path(profile)/L"Desktop");
         roots.push_back(fs::path(profile)/L"Downloads");
     }
-    // Optional plain-text SHA-256 database beside the scanner executable.
-    // One 64-character hex digest per line, optionally followed by a comment.
-    std::unordered_set<std::string> knownHashes;
+    // Local SHA-256 indicator database: supports 250,000 distinct hashes.
+    // Format: <64 hex characters> [optional human-readable label]
+    // Data is never downloaded or executed; malformed entries are ignored.
+    std::unordered_map<std::string,std::string> knownHashes;
+    size_t invalidHashLines=0;
+    bool hashDatabaseFound=false;
+    bool hashDatabaseTruncated=false;
     wchar_t self[MAX_PATH]={};
     if(GetModuleFileNameW(nullptr,self,MAX_PATH)){
-        std::ifstream db(fs::path(self).parent_path()/L"threat-hashes.txt");
+        const fs::path database=fs::path(self).parent_path()/L"threat-hashes.txt";
+        std::ifstream db(database);
+        hashDatabaseFound=db.is_open();
         std::string line;
-        while(knownHashes.size()<20000 && std::getline(db,line)){
-            if(line.size()<64)continue;
-            const std::string h=line.substr(0,64);
-            if(std::all_of(h.begin(),h.end(),[](unsigned char c){
+        size_t linesRead=0;
+        while(db && std::getline(db,line) && linesRead<300000){
+            ++linesRead;
+            if(line.empty() || line[0]=='#')continue;
+            if(line.size()<64){++invalidHashLines;continue;}
+            std::string hash=line.substr(0,64);
+            if(!std::all_of(hash.begin(),hash.end(),[](unsigned char c){
                 return std::isxdigit(c)!=0;})){
-                std::string normalized=h;
-                std::transform(normalized.begin(),normalized.end(),
-                    normalized.begin(),[](unsigned char c){return (char)std::tolower(c);});
-                knownHashes.insert(normalized);
+                ++invalidHashLines;continue;
             }
+            if(line.size()>64 && line[64]!=' ' && line[64]!='\t' &&
+               line[64]!=';' && line[64]!='#'){
+                ++invalidHashLines;continue;
+            }
+            std::transform(hash.begin(),hash.end(),hash.begin(),
+                [](unsigned char c){return (char)std::tolower(c);});
+            std::string label;
+            if(line.size()>65){
+                const size_t first=line.find_first_not_of(" \t;#",64);
+                if(first!=std::string::npos)label=line.substr(first,120);
+            }
+            if(knownHashes.size()>=250000 && !knownHashes.count(hash)){
+                hashDatabaseTruncated=true;
+                break;
+            }
+            knownHashes.emplace(std::move(hash),std::move(label));
         }
+        if(linesRead>=300000)hashDatabaseTruncated=true;
     }
+    result.push_back({"Detection Coverage","SHA-256 indicator database",
+        "INFO | Loaded "+std::to_string(knownHashes.size())+
+        " unique SHA-256 indicators from threat-hashes.txt. "+
+        (hashDatabaseFound?"Database file found. ":"Database not installed. ")+
+        "Malformed lines: "+std::to_string(invalidHashLines)+
+        (hashDatabaseTruncated?". Database safety limit reached.":"")+
+        " | Hash matches require trusted, independently verified indicators."});
     size_t visited=0;
     for(const auto& root:roots){
         if(cancelRequested || visited>=9000)break;
@@ -2241,13 +2271,15 @@ static std::vector<Record> inspectAdditionalEvidence(
         }
     }
     size_t hashed=0, signedChecked=0;
+    size_t skippedLargeFiles=0;
     for(const auto& path:paths){
         if(cancelRequested || hashed>=350)break;
         std::error_code ec;
         const fs::path file(path);
         if(!fs::is_regular_file(file,ec) || ec)continue;
         const auto size=fs::file_size(file,ec);
-        if(ec || size>100ull*1024*1024)continue;
+        if(ec)continue;
+        if(size>100ull*1024*1024){++skippedLargeFiles;continue;}
         const std::wstring ext=lowerPath(file.extension().wstring());
         if(ext!=L".exe" && ext!=L".dll" && ext!=L".sys")continue;
         ++hashed;
@@ -2256,10 +2288,12 @@ static std::vector<Record> inspectAdditionalEvidence(
             std::string key=digest;
             std::transform(key.begin(),key.end(),key.begin(),
                 [](unsigned char c){return (char)std::tolower(c);});
-            if(knownHashes.count(key))
+            const auto hit=knownHashes.find(key);
+            if(hit!=knownHashes.end())
                 result.push_back({"Known Hash Indicator",utf8(file.filename().wstring()),
                     "DETECTED - SHA256 MATCH | Hash: "+key+
                     " | Path: "+utf8(path)+
+                    (hit->second.empty()?"":" | Indicator label: "+hit->second)+
                     " | Matched local threat-hashes.txt. Verify the indicator source."});
         }
         if(signedChecked<90){
@@ -2279,11 +2313,628 @@ static std::vector<Record> inspectAdditionalEvidence(
         result.push_back({"Scan Coverage","Artifact traversal limit",
             "INFO | Historical artifact inspection reached its 9000-entry "
             "safety limit. Some files were not inspected."});
+    result.push_back({"Detection Coverage","File hash inspection",
+        "INFO | Inspected "+std::to_string(hashed)+
+        " executable/module files. Skipped oversized files: "+
+        std::to_string(skippedLargeFiles)+
+        ". This is partial coverage, not a clean-system verdict."});
     if(hashed>=350)
         result.push_back({"Scan Coverage","Hash inspection limit",
             "INFO | SHA-256 inspection reached its 350-file safety limit. "
             "Some files were not hashed."});
     return result;
+}
+
+
+// Additional read-only, evidence-based checks for persistence and masquerading.
+// A hit is a review indicator, never a confirmed malware verdict.
+static std::vector<Record> inspectExpandedPersistenceIndicators(){
+    std::vector<Record> out;
+    struct RegistryLocation {
+        HKEY root; const wchar_t* key; const char* label;
+    };
+    const RegistryLocation locations[]={
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run","User policy autorun"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run","Machine policy autorun"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows","User Windows load"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows","Machine Windows load"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows","AppInit DLL configuration"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Command Processor","User command processor"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Command Processor","Machine command processor"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServices","Legacy user autorun"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServices","Legacy machine autorun"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce","Legacy user one-shot autorun"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce","Legacy machine one-shot autorun"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Notify","Winlogon notification"},
+    };
+    const std::wstring suspiciousTerms[]={
+        L"\\temp\\",L"\\appdata\\local\\temp\\",L"powershell -enc",
+        L"powershell.exe -enc",L" -encodedcommand",L"frombase64string",
+        L"wscript.exe",L"cscript.exe",L"mshta.exe",L"regsvr32.exe",
+        L"rundll32.exe",L"\\downloads\\",L".vbs",L".js",L".ps1"
+    };
+    for(const auto& location:locations){
+        if(cancelRequested)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(location.root,location.key,0,KEY_READ,&key)!=ERROR_SUCCESS)
+            continue;
+        for(DWORD i=0;i<512 && !cancelRequested;++i){
+            wchar_t name[512]={};DWORD nameLen=511;
+            BYTE data[8192]={};DWORD dataSize=sizeof(data),type=0;
+            const LONG rc=RegEnumValueW(key,i,name,&nameLen,nullptr,
+                                        &type,data,&dataSize);
+            if(rc==ERROR_NO_MORE_ITEMS)break;
+            if(rc!=ERROR_SUCCESS || (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+               dataSize<sizeof(wchar_t))continue;
+            const auto* ptr=reinterpret_cast<const wchar_t*>(data);
+            const size_t count=dataSize/sizeof(wchar_t);
+            const std::wstring value(ptr,wcsnlen_s(ptr,count));
+            if(value.empty())continue;
+            const std::wstring normalized=lowerPath(value);
+            std::string reasons;
+            for(const auto& term:suspiciousTerms){
+                if(normalized.find(term)!=std::wstring::npos){
+                    if(!reasons.empty())reasons+=", ";
+                    reasons+=utf8(term);
+                }
+            }
+            if(isCheatNameRuleMatch(value) ||
+               isCheatNameRuleMatch(name)){
+                if(!reasons.empty())reasons+=", ";
+                reasons+="CHEAT/EXTERNAL filename rule";
+            }
+            if(reasons.empty())continue;
+            out.push_back({"Expanded Persistence",utf8(name),
+                "NEEDS REVIEW | "+std::string(location.label)+
+                " | Matched: "+reasons+
+                " | Registry value: "+utf8(value)+
+                " | Why: this autorun-related setting references a path or "
+                "command worth checking. It is not proof of malware."});
+        }
+        RegCloseKey(key);
+    }
+    return out;
+}
+
+// Inspect accessible startup folders for executable and script filenames.
+// Shortcut files are inventoried but their targets are not assumed.
+static std::vector<Record> inspectStartupFolderIndicators(){
+    std::vector<Record> out;
+    wchar_t roaming[MAX_PATH]={},programData[MAX_PATH]={};
+    DWORD r=GetEnvironmentVariableW(L"APPDATA",roaming,MAX_PATH);
+    DWORD p=GetEnvironmentVariableW(L"PROGRAMDATA",programData,MAX_PATH);
+    std::vector<fs::path> roots;
+    const fs::path suffix=L"Microsoft\\Windows\\Start Menu\\Programs\\Startup";
+    if(r && r<MAX_PATH)roots.push_back(fs::path(roaming)/suffix);
+    if(p && p<MAX_PATH)roots.push_back(fs::path(programData)/suffix);
+    for(const auto& root:roots){
+        if(cancelRequested)break;
+        std::error_code ec;
+        fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,ec),end;
+        size_t visited=0;
+        while(it!=end && !cancelRequested && visited++<512){
+            std::error_code fileEc;
+            if(it->is_regular_file(fileEc) && !fileEc){
+                const fs::path file=it->path();
+                const std::wstring ext=lowerPath(file.extension().wstring());
+                const bool script=ext==L".vbs"||ext==L".js"||
+                    ext==L".ps1"||ext==L".bat"||ext==L".cmd"||ext==L".wsf";
+                const bool executable=ext==L".exe"||ext==L".scr"||ext==L".com";
+                const bool nameRule=isCheatNameRuleMatch(file.filename().wstring());
+                if(script || executable || nameRule){
+                    out.push_back({"Startup File Review",utf8(file.filename().wstring()),
+                        std::string(nameRule?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                        " | Startup folder contains "+
+                        (script?"a script":executable?"an executable":"a name-rule match")+
+                        " | Path: "+utf8(file.wstring())+
+                        " | Verify that this entry is expected. Its presence "
+                        "does not establish malicious behavior."});
+                }
+            }
+            it.increment(ec);
+            if(ec)ec.clear();
+        }
+    }
+    return out;
+}
+
+
+// Engine 3.2 - Additional read-only persistence and file metadata evidence.
+// All detections below describe observed settings, not proven compromise.
+static std::vector<Record> inspectSpecialPersistenceKeys(){
+    std::vector<Record> out;
+    struct KeyRule{HKEY root;const wchar_t* key;const char* label;};
+    const KeyRule keys[]={
+        {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCertDlls","AppCert DLL registration"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit","Silent Process Exit configuration"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit","User Silent Process Exit configuration"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options","Image Execution Options"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows","Windows AppInit configuration"},
+        {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa","LSA configuration"}
+    };
+    size_t findings=0;
+    for(const auto& rule:keys){
+        if(cancelRequested || findings>=250)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(rule.root,rule.key,0,KEY_READ,&key)!=ERROR_SUCCESS)
+            continue;
+        // For large configuration roots, only inspect selected values,
+        // never treat ordinary subkey presence as an infection.
+        const wchar_t* wanted[]={
+            L"AppInit_DLLs",L"LoadAppInit_DLLs",L"Notification Packages",
+            L"Security Packages",L"Authentication Packages",
+            L"GlobalFlag",L"ReportingMode",L"MonitorProcess",
+            L"Debugger",L"VerifierDlls"
+        };
+        for(const wchar_t* valueName:wanted){
+            if(cancelRequested || findings>=250)break;
+            BYTE buffer[8192]={};DWORD type=0,size=sizeof(buffer);
+            if(RegQueryValueExW(key,valueName,nullptr,&type,buffer,&size)!=ERROR_SUCCESS)
+                continue;
+            if(type!=REG_SZ && type!=REG_EXPAND_SZ && type!=REG_MULTI_SZ)
+                continue;
+            if(size<sizeof(wchar_t) || size>=sizeof(buffer))continue;
+            const auto* wide=reinterpret_cast<const wchar_t*>(buffer);
+            const size_t n=size/sizeof(wchar_t);
+            std::wstring value(wide,wcsnlen_s(wide,n));
+            if(value.empty())continue;
+            const std::wstring low=lowerPath(value);
+            const bool suspicious=
+                low.find(L"\\temp\\")!=std::wstring::npos ||
+                low.find(L"\\downloads\\")!=std::wstring::npos ||
+                low.find(L"powershell")!=std::wstring::npos ||
+                low.find(L"wscript")!=std::wstring::npos ||
+                low.find(L"mshta")!=std::wstring::npos ||
+                low.find(L"cheat")!=std::wstring::npos ||
+                low.find(L"external")!=std::wstring::npos;
+            if(!suspicious)continue;
+            ++findings;
+            out.push_back({"Special Persistence",utf8(valueName),
+                "NEEDS REVIEW | "+std::string(rule.label)+
+                " references an unusual location or command. Value: "+
+                utf8(value)+" | Confirm whether the setting belongs to "
+                "legitimate installed software. Not proof of malware."});
+        }
+        // AppCertDlls entries are named values, rather than one fixed value.
+        if(std::wstring(rule.key).find(L"AppCertDlls")!=std::wstring::npos){
+            for(DWORD i=0;i<128 && findings<250 && !cancelRequested;++i){
+                wchar_t name[256]={};DWORD nameSize=255;
+                BYTE data[4096]={};DWORD dataSize=sizeof(data),type=0;
+                LONG rc=RegEnumValueW(key,i,name,&nameSize,nullptr,&type,data,&dataSize);
+                if(rc==ERROR_NO_MORE_ITEMS)break;
+                if(rc!=ERROR_SUCCESS ||
+                   (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+                   dataSize<sizeof(wchar_t))continue;
+                const wchar_t* ptr=reinterpret_cast<const wchar_t*>(data);
+                const std::wstring value(ptr,wcsnlen_s(ptr,dataSize/sizeof(wchar_t)));
+                if(value.empty())continue;
+                ++findings;
+                out.push_back({"Special Persistence",utf8(name),
+                    "NEEDS REVIEW | AppCert DLL entry points to: "+utf8(value)+
+                    " | Verify the publisher and purpose of this registered module. "
+                    "Registration alone does not prove malware."});
+            }
+        }
+        RegCloseKey(key);
+    }
+    return out;
+}
+
+// NTFS alternate data streams can hold extra content. Only report streams
+// actually enumerated on active executable images; do not read stream contents.
+static std::vector<Record> inspectExecutableAlternateStreams(
+    const std::vector<Process>& items){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0,reported=0;
+    for(const auto& proc:items){
+        if(cancelRequested || checked>=240 || reported>=120)break;
+        if(proc.path.empty() || proc.path[0]==L'[')continue;
+        const std::wstring normalized=lowerPath(proc.path);
+        if(!seen.insert(normalized).second)continue;
+        ++checked;
+        WIN32_FIND_STREAM_DATA stream{};
+        HANDLE handle=FindFirstStreamW(proc.path.c_str(),
+            FindStreamInfoStandard,&stream,0);
+        if(handle==INVALID_HANDLE_VALUE)continue;
+        do{
+            if(cancelRequested || reported>=120)break;
+            const std::wstring streamName=stream.cStreamName;
+            if(streamName==L"::$DATA" ||
+               lowerPath(streamName)==L":zone.identifier:$data")continue;
+            ++reported;
+            out.push_back({"Executable Alternate Stream",utf8(proc.name),
+                "NEEDS REVIEW | Additional NTFS data stream: "+
+                utf8(streamName)+" | File: "+utf8(proc.path)+
+                " | Extra streams can be legitimate metadata; inspect their "
+                "origin before drawing conclusions."});
+        }while(FindNextStreamW(handle,&stream));
+        FindClose(handle);
+    }
+    return out;
+}
+
+
+// Additional evidence-based checks. Registry is opened read-only and bounded.
+// A detection below means a configured rule matched, not confirmed malware.
+static std::vector<Record> inspectImageExecutionHijackSettings(){
+    std::vector<Record> out;
+    struct Root {const wchar_t* path;const char* label;};
+    const Root roots[]={
+        {L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options","IFEO"},
+        {L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit","SilentProcessExit"}
+    };
+    const wchar_t* names[]={L"Debugger",L"VerifierDlls",L"MonitorProcess"};
+    for(const auto& root:roots){
+        if(cancelRequested)break;
+        HKEY parent=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,root.path,0,
+                         KEY_READ|KEY_WOW64_64KEY,&parent)!=ERROR_SUCCESS)
+            continue;
+        for(DWORD i=0;i<1600 && !cancelRequested && out.size()<220;++i){
+            wchar_t subkey[512]={};DWORD len=511;
+            LONG rc=RegEnumKeyExW(parent,i,subkey,&len,nullptr,nullptr,nullptr,nullptr);
+            if(rc==ERROR_NO_MORE_ITEMS)break;
+            if(rc!=ERROR_SUCCESS)continue;
+            HKEY child=nullptr;
+            if(RegOpenKeyExW(parent,subkey,0,KEY_READ,&child)!=ERROR_SUCCESS)
+                continue;
+            for(const wchar_t* valueName:names){
+                BYTE buffer[4096]={};DWORD type=0,size=sizeof(buffer);
+                if(RegQueryValueExW(child,valueName,nullptr,&type,buffer,&size)
+                   !=ERROR_SUCCESS || (type!=REG_SZ&&type!=REG_EXPAND_SZ) ||
+                   size<sizeof(wchar_t) || size>=sizeof(buffer))continue;
+                const auto* ptr=reinterpret_cast<const wchar_t*>(buffer);
+                const std::wstring value(ptr,wcsnlen_s(ptr,size/sizeof(wchar_t)));
+                if(value.empty())continue;
+                const std::wstring low=lowerPath(value);
+                const bool nameMatch=isCheatNameRuleMatch(value) ||
+                                     isCheatNameRuleMatch(subkey);
+                const bool unusual=low.find(L"\\temp\\")!=std::wstring::npos ||
+                    low.find(L"\\downloads\\")!=std::wstring::npos ||
+                    low.find(L"powershell")!=std::wstring::npos ||
+                    low.find(L"mshta")!=std::wstring::npos ||
+                    low.find(L"wscript")!=std::wstring::npos;
+                out.push_back({"Execution Configuration",utf8(subkey),
+                    std::string(nameMatch?"DETECTED - NAME RULE":
+                                unusual?"NEEDS REVIEW":"INFO")+
+                    " | "+root.label+" / "+utf8(valueName)+
+                    " | Command or module: "+utf8(value)+
+                    " | Why: Windows is configured to use this debugger, "
+                    "verification DLL or exit monitor for the named program. "
+                    "Review whether this is intentional; it is not proof of malware."});
+            }
+            RegCloseKey(child);
+        }
+        RegCloseKey(parent);
+    }
+    return out;
+}
+
+// Look for active executables using potentially misleading Unicode format
+// characters in their names. No heuristic malware verdict is assigned.
+static std::vector<Record> inspectFilenameMasquerading(
+    const std::vector<Process>& processes){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& p:processes){
+        if(cancelRequested)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring name=fs::path(p.path).filename().wstring();
+        if(!seen.insert(lowerPath(name)).second)continue;
+        const bool rtl=name.find(wchar_t(0x202E))!=std::wstring::npos;
+        const bool bidi=name.find(wchar_t(0x202D))!=std::wstring::npos ||
+                        name.find(wchar_t(0x202A))!=std::wstring::npos ||
+                        name.find(wchar_t(0x202B))!=std::wstring::npos ||
+                        name.find(wchar_t(0x2066))!=std::wstring::npos ||
+                        name.find(wchar_t(0x2067))!=std::wstring::npos ||
+                        name.find(wchar_t(0x2068))!=std::wstring::npos;
+        if(rtl || bidi)
+            out.push_back({"Filename Masquerading",utf8(name),
+                "NEEDS REVIEW | Active executable filename contains a "
+                "bidirectional Unicode formatting character. Path: "+
+                utf8(p.path)+" | Such characters can change how a name is "
+                "displayed. Verify the actual file extension and publisher."});
+    }
+    return out;
+}
+
+// Check user and machine shell initialization values. This is informational
+// unless the value references an unusual executable location or a name rule.
+static std::vector<Record> inspectShellInitialization(){
+    std::vector<Record> out;
+    struct Key {HKEY hive;const wchar_t* path;const char* label;};
+    const Key keys[]={
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon","Machine Winlogon"},
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon","User Winlogon"}
+    };
+    const wchar_t* values[]={L"Shell",L"Userinit",L"Taskman"};
+    for(const auto& k:keys){
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(k.hive,k.path,0,KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        for(const wchar_t* valueName:values){
+            BYTE bytes[4096]={};DWORD size=sizeof(bytes),type=0;
+            if(RegQueryValueExW(key,valueName,nullptr,&type,bytes,&size)
+               !=ERROR_SUCCESS || (type!=REG_SZ&&type!=REG_EXPAND_SZ) ||
+               size<sizeof(wchar_t)||size>=sizeof(bytes))continue;
+            const auto* ptr=reinterpret_cast<const wchar_t*>(bytes);
+            const std::wstring value(ptr,wcsnlen_s(ptr,size/sizeof(wchar_t)));
+            if(value.empty())continue;
+            const std::wstring low=lowerPath(value);
+            const bool nameMatch=isCheatNameRuleMatch(value);
+            const bool unusual=low.find(L"\\temp\\")!=std::wstring::npos ||
+                low.find(L"\\downloads\\")!=std::wstring::npos ||
+                low.find(L"powershell")!=std::wstring::npos ||
+                low.find(L"cmd.exe")!=std::wstring::npos ||
+                low.find(L"wscript")!=std::wstring::npos;
+            if(!nameMatch && !unusual)continue;
+            out.push_back({"Shell Initialization",utf8(valueName),
+                std::string(nameMatch?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                " | "+k.label+" | Value: "+utf8(value)+
+                " | Why: shell initialization references an unusual command "
+                "or a name-rule match. Confirm this is expected."});
+        }
+        RegCloseKey(key);
+    }
+    return out;
+}
+
+
+// Explicitly configured Windows security weakening signals.
+// Missing values are not flagged. Managed-device policy may explain findings.
+static std::vector<Record> inspectSecurityPolicyWeakening(){
+    std::vector<Record> out;
+    struct PolicyRule {
+        const wchar_t* key;
+        const wchar_t* value;
+        DWORD concerningValue;
+        const char* title;
+    };
+    const PolicyRule rules[]={
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableRealtimeMonitoring",1, "Defender real-time protection"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableBehaviorMonitoring",1, "Defender behavior monitoring"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableOnAccessProtection",1, "Defender on-access protection"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableIOAVProtection",1, "Defender IOAV scanning"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableScriptScanning",1, "Defender script scanning"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",L"DisableAntiSpyware",1, "Defender anti-spyware policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",L"DisableAntiVirus",1, "Defender anti-virus policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",L"EnableSmartScreen",0, "Windows SmartScreen"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\DomainProfile",L"EnableFirewall",0, "Windows firewall domain"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",L"EnableFirewall",0, "Windows firewall private"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\PublicProfile",L"EnableFirewall",0, "Windows firewall public"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"EnableLUA",0, "UAC enabled"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"PromptOnSecureDesktop",0, "UAC secure desktop"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",L"NoAutoUpdate",1, "Windows Update disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\wuauserv",L"Start",4, "Windows Update service disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\wscsvc",L"Start",4, "Security Center service disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\WinDefend",L"Start",4, "Defender service disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\EventLog",L"Start",4, "Windows event log service disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\MpsSvc",L"Start",4, "Windows firewall service disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",L"UserAuthentication",0, "RDP network level authentication"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Remote Assistance",L"fAllowToGetHelp",1, "Remote Assistance enabled"},
+    };
+    for(const auto& rule:rules){
+        if(cancelRequested)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,rule.key,0,KEY_QUERY_VALUE,
+                         &key)!=ERROR_SUCCESS)continue;
+        DWORD actual=0,type=0,size=sizeof(actual);
+        const LONG rc=RegQueryValueExW(key,rule.value,nullptr,&type,
+                                       reinterpret_cast<BYTE*>(&actual),&size);
+        RegCloseKey(key);
+        if(rc!=ERROR_SUCCESS || type!=REG_DWORD || size!=sizeof(DWORD))
+            continue;
+        if(actual!=rule.concerningValue)continue;
+        out.push_back({"Security Policy Review",rule.title,
+            "NEEDS REVIEW | Configured registry value matches a potentially "
+            "weakened security setting. Value: "+std::to_string(actual)+
+            " | Registry path: "+utf8(rule.key)+
+            " | Name: "+utf8(rule.value)+
+            " | This is configuration evidence, not proof of malware. "
+            "Verify against organizational policy and Windows version."});
+    }
+    return out;
+}
+
+
+// Read-only BAM execution-history inspection. BAM retention and coverage vary
+// by Windows version; an entry does not establish malicious execution.
+static std::vector<Record> inspectBamExecutionHistory(){
+    std::vector<Record> out;
+    const wchar_t* roots[]={
+        L"SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings",
+        L"SYSTEM\\CurrentControlSet\\Services\\bam\\UserSettings",
+        L"SYSTEM\\CurrentControlSet\\Services\\dam\\State\\UserSettings"
+    };
+    size_t examined=0;
+    for(const wchar_t* rootPath:roots){
+        if(cancelRequested)break;
+        HKEY root=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,rootPath,0,KEY_READ,&root)!=ERROR_SUCCESS)continue;
+        for(DWORD i=0;i<256 && !cancelRequested;++i){
+            wchar_t sid[256]={};DWORD sidLen=255;
+            LONG rc=RegEnumKeyExW(root,i,sid,&sidLen,nullptr,nullptr,nullptr,nullptr);
+            if(rc==ERROR_NO_MORE_ITEMS)break;
+            if(rc!=ERROR_SUCCESS)continue;
+            HKEY user=nullptr;
+            if(RegOpenKeyExW(root,sid,0,KEY_READ,&user)!=ERROR_SUCCESS)continue;
+            for(DWORD j=0;j<2500 && examined<12000 && !cancelRequested;++j){
+                wchar_t name[2048]={};DWORD nameLen=2047;
+                LONG vr=RegEnumValueW(user,j,name,&nameLen,nullptr,nullptr,nullptr,nullptr);
+                if(vr==ERROR_NO_MORE_ITEMS)break;
+                if(vr!=ERROR_SUCCESS)continue;
+                ++examined;
+                const std::wstring entry(name,nameLen);
+                if(!isCheatNameRuleMatch(entry))continue;
+                out.push_back({"BAM Execution History",utf8(entry),
+                    "DETECTED - NAME RULE | BAM/DAM execution-history entry "
+                    "contains CHEAT or EXTERNAL. Historical record, not proof "
+                    "of malware or cheating. Source: "+utf8(rootPath)});
+                if(out.size()>=250)break;
+            }
+            RegCloseKey(user);
+            if(out.size()>=250 || examined>=12000)break;
+        }
+        RegCloseKey(root);
+        if(out.size()>=250 || examined>=12000)break;
+    }
+    return out;
+}
+
+// Inspect Defender exclusion paths/processes/extensions. Exclusions can be
+// legitimate and may be inaccessible due to tamper protection.
+static std::vector<Record> inspectDefenderExclusionIndicators(){
+    std::vector<Record> out;
+    const wchar_t* base=L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\";
+    const wchar_t* groups[]={L"Paths",L"Processes",L"Extensions"};
+    for(const wchar_t* group:groups){
+        if(cancelRequested)break;
+        HKEY key=nullptr;
+        const std::wstring path=std::wstring(base)+group;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,path.c_str(),0,KEY_READ,&key)!=ERROR_SUCCESS)
+            continue;
+        for(DWORD i=0;i<1000 && !cancelRequested;++i){
+            wchar_t name[2048]={};DWORD nameLen=2047;
+            LONG rc=RegEnumValueW(key,i,name,&nameLen,nullptr,nullptr,nullptr,nullptr);
+            if(rc==ERROR_NO_MORE_ITEMS)break;
+            if(rc!=ERROR_SUCCESS)continue;
+            const std::wstring value(name,nameLen);
+            const std::wstring lower=lowerPath(value);
+            const bool nameMatch=isCheatNameRuleMatch(value);
+            const bool broad=(lower==L"c:\\" || lower==L"d:\\" ||
+                lower==L"*" || lower==L".exe" || lower==L".dll");
+            const bool temp=(lower.find(L"\\temp\\")!=std::wstring::npos ||
+                lower.find(L"\\downloads\\")!=std::wstring::npos);
+            if(!nameMatch && !broad && !temp)continue;
+            out.push_back({"Defender Exclusion Review",utf8(value),
+                std::string(nameMatch?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                " | Defender exclusion group: "+utf8(group)+
+                " | Exclusions reduce scanning for matching content. "
+                "Confirm the exclusion is necessary and authorized."});
+            if(out.size()>=200)break;
+        }
+        RegCloseKey(key);
+        if(out.size()>=200)break;
+    }
+    return out;
+}
+
+// Task Scheduler stores task definitions under Windows\\System32\\Tasks.
+// Only inspect names and paths here, not arbitrary XML or task execution.
+static std::vector<Record> inspectScheduledTaskNames(){
+    std::vector<Record> out;
+    wchar_t win[MAX_PATH]={};
+    const UINT len=GetWindowsDirectoryW(win,MAX_PATH);
+    if(!len || len>=MAX_PATH)return out;
+    const fs::path root=fs::path(win)/L"System32"/L"Tasks";
+    std::error_code ec;
+    fs::recursive_directory_iterator it(root,
+        fs::directory_options::skip_permission_denied,ec),end;
+    size_t checked=0;
+    while(it!=end && !cancelRequested && checked<6000){
+        if(it.depth()>6 || it->is_symlink(ec))it.disable_recursion_pending();
+        std::error_code fe;
+        if(it->is_regular_file(fe) && !fe){
+            ++checked;
+            const auto path=it->path();
+            if(isCheatNameRuleMatch(path.filename().wstring())){
+                out.push_back({"Scheduled Task Name",utf8(path.filename().wstring()),
+                    "DETECTED - NAME RULE | Scheduled task filename matches "
+                    "CHEAT or EXTERNAL. Task definition: "+utf8(path.wstring())+
+                    " | Name-only match, not proof of malicious behavior."});
+            }
+        }
+        it.increment(ec);
+        if(ec)ec.clear();
+    }
+    if(checked>=6000)out.push_back({"Scan Coverage","Scheduled tasks",
+        "INFO | Scheduled-task inspection stopped at its 6000-file limit."});
+    return out;
+}
+
+
+// Read-only investigation of user-scoped COM registrations.
+// Only unexpected paths and explicit name rules produce findings.
+static std::vector<Record> inspectUserComRegistrationIndicators(){
+    std::vector<Record> out;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Classes\\CLSID",0,KEY_READ,&root)!=ERROR_SUCCESS)
+        return out;
+    for(DWORD i=0;i<2400 && !cancelRequested && out.size()<160;++i){
+        wchar_t clsid[128]={};DWORD count=127;
+        LONG rc=RegEnumKeyExW(root,i,clsid,&count,nullptr,nullptr,nullptr,nullptr);
+        if(rc==ERROR_NO_MORE_ITEMS)break;
+        if(rc!=ERROR_SUCCESS)continue;
+        for(const wchar_t* sub:{L"InprocServer32",L"LocalServer32"}){
+            const std::wstring keyName=std::wstring(clsid)+L"\\"+sub;
+            HKEY key=nullptr;
+            if(RegOpenKeyExW(root,keyName.c_str(),0,KEY_READ,&key)!=ERROR_SUCCESS)
+                continue;
+            BYTE buffer[4096]={};DWORD size=sizeof(buffer),type=0;
+            const LONG query=RegQueryValueExW(key,nullptr,nullptr,&type,buffer,&size);
+            RegCloseKey(key);
+            if(query!=ERROR_SUCCESS || (type!=REG_SZ&&type!=REG_EXPAND_SZ) ||
+               size<sizeof(wchar_t) || size>=sizeof(buffer))continue;
+            const wchar_t* data=reinterpret_cast<const wchar_t*>(buffer);
+            const std::wstring path(data,wcsnlen_s(data,size/sizeof(wchar_t)));
+            const std::wstring lower=lowerPath(path);
+            const bool named=isCheatNameRuleMatch(path);
+            const bool review=lower.find(L"\\temp\\")!=std::wstring::npos ||
+                lower.find(L"\\downloads\\")!=std::wstring::npos ||
+                lower.find(L"\\appdata\\roaming\\")!=std::wstring::npos;
+            if(!named && !review)continue;
+            out.push_back({"COM Registration Review",utf8(clsid),
+                std::string(named?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                " | User COM "+utf8(sub)+" references: "+utf8(path)+
+                " | A user-level COM registration points to a name-rule match "
+                "or an unusual location. Verify the file and its publisher; "
+                "this is not confirmation of malicious behavior."});
+        }
+    }
+    RegCloseKey(root);
+    return out;
+}
+
+// Service image configuration: suspicious paths are review signals only.
+static std::vector<Record> inspectServiceImagePathIndicators(){
+    std::vector<Record> out;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,&root)!=ERROR_SUCCESS)
+        return out;
+    for(DWORD i=0;i<3500 && !cancelRequested && out.size()<200;++i){
+        wchar_t service[256]={};DWORD count=255;
+        LONG rc=RegEnumKeyExW(root,i,service,&count,nullptr,nullptr,nullptr,nullptr);
+        if(rc==ERROR_NO_MORE_ITEMS)break;
+        if(rc!=ERROR_SUCCESS)continue;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(root,service,0,KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        BYTE bytes[8192]={};DWORD size=sizeof(bytes),type=0;
+        rc=RegQueryValueExW(key,L"ImagePath",nullptr,&type,bytes,&size);
+        RegCloseKey(key);
+        if(rc!=ERROR_SUCCESS || (type!=REG_SZ&&type!=REG_EXPAND_SZ) ||
+           size<sizeof(wchar_t)||size>=sizeof(bytes))continue;
+        const wchar_t* data=reinterpret_cast<const wchar_t*>(bytes);
+        const std::wstring command(data,wcsnlen_s(data,size/sizeof(wchar_t)));
+        const std::wstring lower=lowerPath(command);
+        const bool named=isCheatNameRuleMatch(command) ||
+                         isCheatNameRuleMatch(service);
+        const bool review=lower.find(L"\\temp\\")!=std::wstring::npos ||
+            lower.find(L"\\downloads\\")!=std::wstring::npos ||
+            lower.find(L"\\appdata\\roaming\\")!=std::wstring::npos ||
+            lower.find(L"powershell")!=std::wstring::npos ||
+            lower.find(L"wscript")!=std::wstring::npos;
+        if(!named && !review)continue;
+        out.push_back({"Service Image Review",utf8(service),
+            std::string(named?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+            " | Service ImagePath: "+utf8(command)+
+            " | A service references a name-rule match or an unusual location. "
+            "Inspect its signature and provenance. This alone does not prove malware."});
+    }
+    RegCloseKey(root);
+    return out;
 }
 
 static void scanWorker() {
@@ -2346,6 +2997,19 @@ static void scanWorker() {
         auto cheatNameModules=inspectCheatNamedModules(p);
         auto artifactLocations=inspectArtifactLocations();
         auto additionalEvidence=inspectAdditionalEvidence(p);
+        auto expandedPersistence=inspectExpandedPersistenceIndicators();
+        auto startupFileIndicators=inspectStartupFolderIndicators();
+        auto specialPersistence=inspectSpecialPersistenceKeys();
+        auto executableStreams=inspectExecutableAlternateStreams(p);
+        auto executionConfig=inspectImageExecutionHijackSettings();
+        auto masquerading=inspectFilenameMasquerading(p);
+        auto shellInitialization=inspectShellInitialization();
+        auto securityWeakening=inspectSecurityPolicyWeakening();
+        auto bamHistory=inspectBamExecutionHistory();
+        auto defenderExclusions=inspectDefenderExclusionIndicators();
+        auto scheduledTaskNames=inspectScheduledTaskNames();
+        auto comRegistrations=inspectUserComRegistrationIndicators();
+        auto serviceImagePaths=inspectServiceImagePathIndicators();
         auto peFindings=inspectPeStructure(p);
         auto provenance=inspectExecutableProvenance(p);
         auto loadedModules=inspectLoadedModuleProvenance(p);
@@ -2376,6 +3040,19 @@ static void scanWorker() {
         services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
         services.insert(services.end(),artifactLocations.begin(),artifactLocations.end());
         services.insert(services.end(),additionalEvidence.begin(),additionalEvidence.end());
+        services.insert(services.end(),expandedPersistence.begin(),expandedPersistence.end());
+        services.insert(services.end(),startupFileIndicators.begin(),startupFileIndicators.end());
+        services.insert(services.end(),specialPersistence.begin(),specialPersistence.end());
+        services.insert(services.end(),executableStreams.begin(),executableStreams.end());
+        services.insert(services.end(),executionConfig.begin(),executionConfig.end());
+        services.insert(services.end(),masquerading.begin(),masquerading.end());
+        services.insert(services.end(),shellInitialization.begin(),shellInitialization.end());
+        services.insert(services.end(),securityWeakening.begin(),securityWeakening.end());
+        services.insert(services.end(),bamHistory.begin(),bamHistory.end());
+        services.insert(services.end(),defenderExclusions.begin(),defenderExclusions.end());
+        services.insert(services.end(),scheduledTaskNames.begin(),scheduledTaskNames.end());
+        services.insert(services.end(),comRegistrations.begin(),comRegistrations.end());
+        services.insert(services.end(),serviceImagePaths.begin(),serviceImagePaths.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
@@ -5166,7 +5843,21 @@ static void renderUI() {
                    r.category=="Known Hash Indicator" ||
                    r.category=="Signature Review" ||
                    r.category=="Execution Artifact" ||
-                   r.category=="Scan Coverage")
+                   r.category=="Scan Coverage" ||
+                   r.category=="Expanded Persistence" ||
+                   r.category=="Startup File Review" ||
+                   r.category=="Special Persistence" ||
+                   r.category=="Executable Alternate Stream" ||
+                   r.category=="BAM Execution History" ||
+                   r.category=="Defender Exclusion Review" ||
+                   r.category=="Scheduled Task Name" ||
+                   r.category=="COM Registration Review" ||
+                   r.category=="Service Image Review" ||
+                   r.category=="Execution Configuration" ||
+                   r.category=="Filename Masquerading" ||
+                   r.category=="Shell Initialization" ||
+                   r.category=="Security Policy Review" ||
+                   r.category=="Detection Coverage")
                     snapshot.push_back(r);
             }
         }
