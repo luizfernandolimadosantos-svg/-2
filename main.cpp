@@ -987,6 +987,71 @@ static std::vector<Record> inspectDesktopWindowVisibility(HWND ownWindow){
     return std::move(context.findings);
 }
 
+// Declarative detection rules: facts are collected separately from decisions.
+// Rules require explicit evidence and report the exact matching conditions.
+struct TaskEvidence {
+    std::string command;
+    std::string arguments;
+    std::string taskPath;
+    bool userWritablePath=false;
+    bool scriptInterpreter=false;
+    bool hiddenWindowArgument=false;
+    bool encodedCommandArgument=false;
+};
+struct TaskDetectionRule {
+    const char* id;
+    const char* title;
+    const char* severity;
+    bool (*matches)(const TaskEvidence&);
+    const char* rationale;
+};
+static std::string asciiLower(std::string value){
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](unsigned char c){return static_cast<char>(std::tolower(c));});
+    return value;
+}
+static bool taskUserWritableInterpreter(const TaskEvidence& e){
+    return e.userWritablePath && e.scriptInterpreter;
+}
+static bool taskEncodedInterpreter(const TaskEvidence& e){
+    return e.scriptInterpreter && e.encodedCommandArgument;
+}
+static bool taskHiddenInterpreter(const TaskEvidence& e){
+    return e.scriptInterpreter && e.hiddenWindowArgument;
+}
+static bool taskUserWritableExecutable(const TaskEvidence& e){
+    return e.userWritablePath && !e.scriptInterpreter;
+}
+static std::vector<Record> evaluateTaskRules(const TaskEvidence& e){
+    static const TaskDetectionRule rules[]={
+        {"TASK-001","Script interpreter in user-writable location","MEDIUM",
+         taskUserWritableInterpreter,
+         "Task command combines an interpreter with a user-writable path"},
+        {"TASK-002","Encoded interpreter invocation","MEDIUM",
+         taskEncodedInterpreter,
+         "Task arguments include an encoded-command option"},
+        {"TASK-003","Hidden interpreter invocation","LOW",
+         taskHiddenInterpreter,
+         "Task arguments request a hidden window"},
+        {"TASK-004","Executable in user-writable location","LOW",
+         taskUserWritableExecutable,
+         "Task launches from a user-writable path"}
+    };
+    std::vector<Record> findings;
+    for(const auto& rule:rules){
+        if(!rule.matches(e))continue;
+        findings.push_back({"Scheduled Task Rule",
+            std::string(rule.id)+" | "+rule.title,
+            std::string("REVIEW ONLY | Severity: ")+rule.severity+
+            " | Evidence: "+rule.rationale+
+            " | Command: "+e.command+
+            " | Arguments: "+e.arguments+
+            " | Task: "+e.taskPath+
+            " | This is not a malware verdict"});
+    }
+    return findings;
+}
+
 // Extended read-only endpoint inventory. Results are evidence, not verdicts.
 static std::vector<Record> inspectExtendedEndpoint(){
     std::vector<Record> result;
@@ -1018,19 +1083,32 @@ static std::vector<Record> inspectExtendedEndpoint(){
             };
             const auto command=between("Command");
             if(command.empty())continue;
-            std::string lower=command;
-            std::transform(lower.begin(),lower.end(),lower.begin(),
-                [](unsigned char c){return static_cast<char>(std::tolower(c));});
-            const bool review=lower.find("appdata")!=std::string::npos||
-                lower.find("\\temp\\")!=std::string::npos||
-                lower.find("powershell")!=std::string::npos||
-                lower.find("wscript")!=std::string::npos||
-                lower.find("mshta")!=std::string::npos;
-            if(review)
-                result.push_back({"Scheduled Task Review",
-                    utf8(it->path().filename().wstring()),
-                    "REVIEW: Task command "+command+
-                    " | Path: "+utf8(it->path().wstring())});
+            const auto arguments=between("Arguments");
+            const auto cmd=asciiLower(command);
+            const auto args=asciiLower(arguments);
+            const auto writable=[](const std::string& v){
+                return v.find("appdata")!=std::string::npos ||
+                       v.find("\\temp\\")!=std::string::npos ||
+                       v.find("%temp%")!=std::string::npos ||
+                       v.find("\\users\\public\\")!=std::string::npos;
+            };
+            const bool interpreter=
+                cmd.find("powershell.exe")!=std::string::npos ||
+                cmd.find("pwsh.exe")!=std::string::npos ||
+                cmd.find("wscript.exe")!=std::string::npos ||
+                cmd.find("cscript.exe")!=std::string::npos ||
+                cmd.find("mshta.exe")!=std::string::npos;
+            TaskEvidence evidence{
+                command,arguments,utf8(it->path().wstring()),
+                writable(cmd)||writable(args),
+                interpreter,
+                args.find("-windowstyle hidden")!=std::string::npos ||
+                    args.find("-w hidden")!=std::string::npos,
+                args.find("-encodedcommand")!=std::string::npos ||
+                    args.find("-enc ")!=std::string::npos
+            };
+            auto matches=evaluateTaskRules(evidence);
+            result.insert(result.end(),matches.begin(),matches.end());
         }
     }
     // Internet Settings: proxy and auto-config scripts may redirect traffic.
@@ -1654,36 +1732,36 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=0.f;
-    st.ChildRounding=0.f;
-    st.FrameRounding=cornerStyle==0?0.f:cornerStyle==1?4.f:9.f;
-    st.PopupRounding=5.f;
+    st.WindowRounding=8.f;
+    st.ChildRounding=9.f;
+    st.FrameRounding=cornerStyle==0?3.f:cornerStyle==1?7.f:11.f;
+    st.PopupRounding=10.f;
     st.ScrollbarRounding=3.f;
-    st.TabRounding=3.f;
+    st.TabRounding=7.f;
     st.GrabRounding=3.f;
     st.WindowBorderSize=0.f;
-    st.ChildBorderSize=0.f;
+    st.ChildBorderSize=1.f;
     st.FrameBorderSize=1.f;
-    st.WindowPadding=ImVec2(18,16);
+    st.WindowPadding=ImVec2(21,19);
     st.FramePadding=ImVec2(11,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(10,densityIndex==0?7.f:densityIndex==2?12.f:9.f);
     st.ItemInnerSpacing=ImVec2(8,6);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.009f,.010f,.014f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.019f,.022f,.028f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.055f,.060f,.075f,1);
-    c[ImGuiCol_Border]=ImVec4(.16f,.18f,.22f,1);
-    c[ImGuiCol_Separator]=ImVec4(.13f,.15f,.19f,1);
+    c[ImGuiCol_WindowBg]=ImVec4(.017f,.027f,.046f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.034f,.052f,.082f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.049f,.070f,.110f,1);
+    c[ImGuiCol_Border]=ImVec4(.15f,.24f,.36f,1);
+    c[ImGuiCol_Separator]=ImVec4(.13f,.23f,.35f,1);
     c[ImGuiCol_Text]=ImVec4(.94f,.95f,.97f,1);
     c[ImGuiCol_TextDisabled]=ImVec4(.50f,.55f,.63f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.065f,.075f,.095f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.060f,.087f,.130f,1);
     c[ImGuiCol_FrameBgHovered]=ImVec4(.095f,.115f,.15f,1);
     c[ImGuiCol_FrameBgActive]=ImVec4(.13f,.16f,.20f,1);
-    c[ImGuiCol_Button]=ImVec4(.075f,.085f,.11f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.15f,.21f,.30f,1);
+    c[ImGuiCol_Button]=ImVec4(.075f,.112f,.170f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.13f,.23f,.36f,1);
     c[ImGuiCol_ButtonActive]=ImVec4(.18f,.22f,.29f,1);
-    c[ImGuiCol_Header]=ImVec4(.09f,.12f,.16f,1);
+    c[ImGuiCol_Header]=ImVec4(.09f,.15f,.24f,1);
     c[ImGuiCol_HeaderHovered]=ImVec4(.15f,.19f,.25f,1);
     c[ImGuiCol_HeaderActive]=ImVec4(.18f,.24f,.31f,1);
     c[ImGuiCol_CheckMark]=ImVec4(.45f,.65f,.98f,1);
@@ -1709,6 +1787,10 @@ static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::TextUnformatted(title);
     ImGui::SetWindowFontScale(1.f);
     if(description)ImGui::TextDisabled("%s",description);
+    ImGui::Dummy(ImVec2(0,3));
+    ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(.16f,.29f,.45f,.72f));
+    ImGui::Separator();
+    ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0,14));
 }
 static const char* stateText() {
@@ -3063,9 +3145,14 @@ static void draw(){
     for(int i=0;i<5;i++){
         ImGui::PushID(i);
         bool active=tab==i;
-        if(active)ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.80f,.88f,.98f,1));
+        if(active){
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.33f,.55f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.21f,.42f,.68f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.13f,.28f,.49f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.94f,.97f,1.f,1.f));
+        }
         if(ImGui::Button(tabs[i],ImVec2(i==2?156.f:125.f,36)))tab=i;
-        if(active)ImGui::PopStyleColor();
+        if(active)ImGui::PopStyleColor(4);
         ImGui::PopID();
         if(i<4)ImGui::SameLine(0,7);
     }
