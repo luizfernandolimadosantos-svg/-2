@@ -249,15 +249,11 @@ static const char* cornerStyleNames[]={"Square","Soft","Rounded"};
 static const char* scrollbarWidthNames[]={"Thin","Standard","Wide"};
 static ImVec4 customAccent(.98f,.43f,.15f,1.f);
 static bool settingsNotice=false;
-static const char* accentNames[]={"Orange","Red","Blue","Purple","Green","Custom"};
+static const char* accentNames[]={"Monochrome","Monochrome","Monochrome","Monochrome","Monochrome","Monochrome"};
 static const char* themeNames[]={"Carbon Ember","Dark Graphite","Midnight"};
 static const char* densityNames[]={"Compact","Comfortable","Spacious"};
 static ImVec4 accentColor() {
-    static const ImVec4 palette[]={
-        ImVec4(.98f,.43f,.15f,1),ImVec4(.92f,.27f,.31f,1),
-        ImVec4(.29f,.57f,.98f,1),ImVec4(.67f,.42f,.95f,1),
-        ImVec4(.27f,.77f,.54f,1)};
-    return accentIndex==5?customAccent:palette[std::clamp(accentIndex,0,4)];
+    return ImVec4(.88f,.88f,.88f,1.f);
 }
 static fs::path settingsPath() {
     wchar_t appdata[32768]{};
@@ -1228,9 +1224,9 @@ static void drawDetectionCoverageCatalog(){
             ImGui::TableNextColumn();ImGui::Text("%03d",id);
             ImGui::TableNextColumn();ImGui::TextUnformatted(labels[i]);
             ImGui::TableNextColumn();
-            ImGui::TextColored(implemented?ImVec4(.45f,.85f,.60f,1.f):
-                partial?ImVec4(.97f,.77f,.41f,1.f):
-                ImVec4(.58f,.64f,.72f,1.f),"%s",status);
+            ImGui::TextColored(implemented?ImVec4(0.747f,0.747f,0.747f,1.f):
+                partial?ImVec4(0.787f,0.787f,0.787f,1.f):
+                ImVec4(0.633f,0.633f,0.633f,1.f),"%s",status);
         }
         ImGui::EndTable();
     }
@@ -1506,8 +1502,8 @@ static const char* evidenceLabel(const Record& r) {
     return isDetectedRecord(r)?"DETECTED":isSuspectRecord(r)?"SUSPECT":"UNKNOWN";
 }
 static void tintEvidenceRow(const Record& r) {
-    if(isDetectedRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(137,33,43,190));
-    else if(isSuspectRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(129,92,17,175));
+    if(isDetectedRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(56,56,56,190));
+    else if(isSuspectRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(94,94,94,175));
 }
 
 
@@ -1984,38 +1980,38 @@ static void applyTheme() {
     st.ItemInnerSpacing=ImVec2(8,6);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.017f,.027f,.046f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.034f,.052f,.082f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.049f,.070f,.110f,1);
-    c[ImGuiCol_Border]=ImVec4(.15f,.24f,.36f,1);
-    c[ImGuiCol_Separator]=ImVec4(.13f,.23f,.35f,1);
-    c[ImGuiCol_Text]=ImVec4(.94f,.95f,.97f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.50f,.55f,.63f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.060f,.087f,.130f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.095f,.115f,.15f,1);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.13f,.16f,.20f,1);
-    c[ImGuiCol_Button]=ImVec4(.075f,.112f,.170f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.13f,.23f,.36f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.18f,.22f,.29f,1);
-    c[ImGuiCol_Header]=ImVec4(.09f,.15f,.24f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.15f,.19f,.25f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.18f,.24f,.31f,1);
-    c[ImGuiCol_CheckMark]=ImVec4(.45f,.65f,.98f,1);
-    c[ImGuiCol_SliderGrab]=ImVec4(.40f,.59f,.91f,1);
-    c[ImGuiCol_SliderGrabActive]=ImVec4(.53f,.71f,1,1);
-    c[ImGuiCol_Tab]=ImVec4(.075f,.09f,.12f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.15f,.19f,.26f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.19f,.25f,.34f,1);
-    c[ImGuiCol_TabDimmed]=ImVec4(.045f,.055f,.07f,1);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.085f,.105f,.14f,1);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.17f,.20f,.25f,1);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.11f,.14f,.18f,1);
-    c[ImGuiCol_TableRowBg]=ImVec4(.020f,.025f,.033f,1);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.045f,.053f,.068f,1);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(.30f,.49f,.85f,.40f);
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.02f,.025f,.035f,1);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.18f,.22f,.29f,1);
-    c[ImGuiCol_NavHighlight]=ImVec4(.45f,.65f,.98f,1);
+    c[ImGuiCol_WindowBg]=ImVec4(.027f,.027f,.027f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.052f,.052f,.052f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.075f,.075f,.075f,1);
+    c[ImGuiCol_Border]=ImVec4(.22f,.22f,.22f,1);
+    c[ImGuiCol_Separator]=ImVec4(.18f,.18f,.18f,1);
+    c[ImGuiCol_Text]=ImVec4(.96f,.96f,.96f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.61f,.61f,.61f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.105f,.105f,.105f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.17f,.17f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.23f,.23f,.23f,1);
+    c[ImGuiCol_Button]=ImVec4(.105f,.105f,.105f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.22f,.22f,.22f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.33f,.33f,.33f,1);
+    c[ImGuiCol_Header]=ImVec4(.18f,.18f,.18f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.27f,.27f,.27f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.36f,.36f,.36f,1);
+    c[ImGuiCol_CheckMark]=ImVec4(.95f,.95f,.95f,1);
+    c[ImGuiCol_SliderGrab]=ImVec4(.72f,.72f,.72f,1);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.95f,.95f,.95f,1);
+    c[ImGuiCol_Tab]=ImVec4(.12f,.12f,.12f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(.24f,.24f,.24f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.33f,.33f,.33f,1);
+    c[ImGuiCol_TabDimmed]=ImVec4(.07f,.07f,.07f,1);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.13f,.13f,.13f,1);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.25f,.25f,.25f,1);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.17f,.17f,.17f,1);
+    c[ImGuiCol_TableRowBg]=ImVec4(.045f,.045f,.045f,1);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.075f,.075f,.075f,1);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.55f,.55f,.55f,.4f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.04f,.04f,.04f,1);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.30f,.30f,.30f,1);
+    c[ImGuiCol_NavHighlight]=ImVec4(.80f,.80f,.80f,1);
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
@@ -2024,7 +2020,7 @@ static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::SetWindowFontScale(1.f);
     if(description)ImGui::TextDisabled("%s",description);
     ImGui::Dummy(ImVec2(0,3));
-    ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(.16f,.29f,.45f,.72f));
+    ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(0.274f,0.274f,0.274f,.72f));
     ImGui::Separator();
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0,14));
@@ -2192,7 +2188,7 @@ static void runMemoryInspection(DWORD pid){
 static void drawMemoryInvestigation(const char* mode,bool embedded=false){
     const ImVec4 accent(.64f,.78f,1,1);
     const ImVec4 muted(.53f,.61f,.71f,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.060f,.081f,.117f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.079f,0.079f,0.079f,1));
     ImGui::BeginChild("##memoryControls",ImVec2(0,204),ImGuiChildFlags_None);
     ImGui::TextColored(accent,"TARGET PROCESS");
     ImGui::TextColored(muted,"Read-only address-space inspection. Some protected processes deny access.");
@@ -2275,16 +2271,16 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(i%columns)ImGui::SameLine(0,gap);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.077f,.102f,1));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
         // Inner padding keeps text away from card edges; no decorative stripe
         // overlaid on the module label.
         ImGui::SetCursorPos(ImVec2(16.f,14.f));
-        ImGui::TextColored(ImVec4(.56f,.66f,.81f,1),"MODULE %02d",i+1);
+        ImGui::TextColored(ImVec4(0.650f,0.650f,0.650f,1),"MODULE %02d",i+1);
         ImGui::SameLine();
-        ImGui::TextColored(m.implemented?ImVec4(.45f,.82f,.68f,1):
-            ImVec4(.64f,.68f,.74f,1),m.implemented?"AVAILABLE":"LIMITED");
+        ImGui::TextColored(m.implemented?ImVec4(0.731f,0.731f,0.731f,1):
+            ImVec4(0.676f,0.676f,0.676f,1),m.implemented?"AVAILABLE":"LIMITED");
         ImGui::SetWindowFontScale(1.10f);
         ImGui::TextWrapped("%s",m.title);
         ImGui::SetWindowFontScale(1.f);
@@ -2309,9 +2305,9 @@ static void modulesList() {
     if(ImGui::BeginPopupModal("Evidence inspector",nullptr,ImGuiWindowFlags_NoSavedSettings)) {
         if(inspectedModule>=0 && inspectedModule<IM_ARRAYSIZE(inspectionModules)) {
             const auto& m=inspectionModules[inspectedModule];
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.09f,.13f,.20f,1));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.127f,0.127f,0.127f,1));
             ImGui::BeginChild("##inspectorBanner",ImVec2(0,108),ImGuiChildFlags_None);
-            ImGui::TextColored(ImVec4(.62f,.78f,1,1),"INVESTIGATION  /  %02d",inspectedModule+1);
+            ImGui::TextColored(ImVec4(0.762f,0.762f,0.762f,1),"INVESTIGATION  /  %02d",inspectedModule+1);
             ImGui::SetWindowFontScale(1.55f);
             ImGui::TextUnformatted(m.title);
             ImGui::SetWindowFontScale(1.f);
@@ -2404,7 +2400,7 @@ static void modulesList() {
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
                             ImGui::TableNextRow();
-                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(102,70,24,120));
+                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
                             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(e.eventId.c_str());
@@ -2502,7 +2498,7 @@ static void modulesList() {
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
                             ImGui::TableNextRow();
-                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(102,70,24,120));
+                            if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
                             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(e.eventId.c_str());
@@ -2602,7 +2598,7 @@ static void modulesList() {
                             if(!moduleSearchMatches(name+" "+path+" "+p.assessment))continue;
                             ImGui::TableNextRow();
                             if(p.suspicious && highlightSuspicious)
-                                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,160));
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(52,52,52,160));
                             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
                             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
                             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
@@ -2797,7 +2793,7 @@ static void drawProcessDetails() {
         (unsigned long)selectedProcess.pid,(unsigned long)selectedProcess.parent);
     ImGui::TextWrapped("Executable: %s",utf8(selectedProcess.path).c_str());
     if(selectedProcess.suspicious)
-        ImGui::TextColored(ImVec4(1.f,.44f,.43f,1.f),
+        ImGui::TextColored(ImVec4(0.558f,0.558f,0.558f,1.f),
             "Review indicator: %s",selectedProcess.assessment.c_str());
     else ImGui::TextDisabled("%s",selectedProcess.assessment.c_str());
     if(isResolvedPath(selectedProcess.path)) {
@@ -2827,7 +2823,7 @@ static void drawProcessDetails() {
         for(const auto& m:selectedModules) {
             ImGui::TableNextRow();
             if(m.suspicious && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(m.path).c_str());
             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",m.assessment.c_str());
@@ -2954,7 +2950,7 @@ static void drawServiceReviews() {
             if(!matchesService(item))continue;
             ImGui::TableNextRow();
             if(item.review && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(item.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(utf8(item.display).c_str());
             ImGui::TableSetColumnIndex(2);
@@ -3015,7 +3011,7 @@ static void processTable(float height) {
         if(active) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                 ImVec4(orange().x*.28f,orange().y*.28f,orange().z*.28f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,1,1,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.000f,1.000f,1.000f,1));
         }
         if(ImGui::Button(filters[f],ImVec2(f==0?132.f:f==3?133.f:105.f,34.f)))
             processViewFilter=f;
@@ -3033,7 +3029,7 @@ static void processTable(float height) {
         for(const auto& p:processes)if(p.suspicious)++flagged;
     }
     if(flagged)
-        ImGui::TextColored(ImVec4(1.f,.76f,.28f,1.f),
+        ImGui::TextColored(ImVec4(0.776f,0.776f,0.776f,1.f),
             "%zu SUSPECT process(es). Yellow indicates review, not confirmed malware.",flagged);
     else
         ImGui::TextDisabled("No path-based review indicators found. This does not guarantee safety.");
@@ -3064,14 +3060,14 @@ static void processTable(float height) {
             if(combined.find(q)==std::string::npos)continue;
             ImGui::TableNextRow();
             if(p.suspicious && highlightSuspicious)
-                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(130,95,20,180));
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
             ImGui::TableSetColumnIndex(4);
             if(p.suspicious && highlightSuspicious)
-                ImGui::TextColored(ImVec4(1.f,.72f,.68f,1.f),"%s",p.assessment.c_str());
+                ImGui::TextColored(ImVec4(0.777f,0.777f,0.777f,1.f),"%s",p.assessment.c_str());
             else
                 ImGui::TextDisabled("%s",p.assessment.c_str());
             ImGui::TableSetColumnIndex(5);
@@ -3111,7 +3107,7 @@ static void drawEvidenceDetails() {
     ImGui::TextWrapped("%s",evidenceDescription.c_str());
     if(!evidenceAssessment.empty()) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1.f,.48f,.43f,1.f),"Security assessment");
+        ImGui::TextColored(ImVec4(0.587f,0.587f,0.587f,1.f),"Security assessment");
         ImGui::TextWrapped("%s",evidenceAssessment.c_str());
     }
     if(!evidenceFile.empty()) {
@@ -3160,7 +3156,7 @@ struct Section {std::string name; uint32_t rva=0,raw=0,size=0,flags=0; double en
 struct Report {
     std::wstring path;
     std::string status="Choose an executable, DLL or other file.";
-    std::string sha256,format,architecture,compileTime;
+    std::string sha256,format,architecture,compileTime,signature,coverage;
     uint64_t bytes=0;
     bool pe=false,packedHint=false;
     std::vector<Section> sections;
@@ -3215,6 +3211,7 @@ static Report analyze(const std::wstring& path){
     const auto sz=fs::file_size(path,ec);
     if(ec){r.status="Cannot read file metadata.";return r;}
     r.bytes=sz;
+    r.signature=signatureStatus(path);
     // Bounded analysis for large installers. Read enough of the file to
     // inspect the PE headers, sections, imports, and representative strings
     // without allocating memory proportional to an arbitrary file size.
@@ -3232,6 +3229,8 @@ static Report analyze(const std::wstring& path){
         r.status="Unable to read binary data.";
         return r;
     }
+    r.coverage=static_cast<uint64_t>(sz)>maxAnalysisBytes?
+        "Partial (first 256 MiB; full-file SHA-256)":"Full file";
     if(static_cast<uint64_t>(sz)>maxAnalysisBytes)
         r.notes.push_back(
             "Large file: PE data and strings are analyzed from the first "
@@ -3355,13 +3354,98 @@ static void select(){
         strncpy_s(selected,sizeof(selected),utf8(path).c_str(),_TRUNCATE);
     }
 }
+static std::string jsonQuote(const std::string& value){
+    std::string out="\"";
+    for(unsigned char c:value){
+        switch(c){
+            case '"':out+="\\\"";break;
+            case '\\':out+="\\\\";break;
+            case '\n':out+="\\n";break;
+            case '\r':out+="\\r";break;
+            case '\t':out+="\\t";break;
+            default:
+                if(c<32){
+                    char escaped[8]{};
+                    snprintf(escaped,sizeof(escaped),"\\u%04x",unsigned(c));
+                    out+=escaped;
+                }else out+=char(c);
+        }
+    }
+    return out+"\"";
+}
+static bool exportReport(const Report& r,bool csv){
+    if(r.path.empty())return false;
+    wchar_t destination[32768]{};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize=sizeof(dialog);
+    dialog.hwndOwner=hwnd;
+    dialog.lpstrFile=destination;
+    dialog.nMaxFile=32768;
+    dialog.lpstrFilter=csv?
+        L"CSV report\0*.csv\0All files\0*.*\0":
+        L"JSON report\0*.json\0All files\0*.*\0";
+    dialog.lpstrDefExt=csv?L"csv":L"json";
+    dialog.Flags=OFN_OVERWRITEPROMPT|OFN_PATHMUSTEXIST;
+    if(!GetSaveFileNameW(&dialog))return false;
+    std::ofstream out(fs::path(destination),std::ios::binary);
+    if(!out)return false;
+    const std::string path=utf8(r.path);
+    if(csv){
+        auto row=[&](const std::string& k,const std::string& v){
+            // Quoted CSV fields, with quotes escaped by doubling.
+            auto quote=[](const std::string& x){
+                std::string y="\"";
+                for(char c:x){if(c=='"')y+="\"\"";else y+=c;}
+                return y+"\"";
+            };
+            out<<quote(k)<<","<<quote(v)<<"\r\n";
+        };
+        row("File",path);row("Status",r.status);
+        row("SHA-256",r.sha256);row("Signature",r.signature);
+        row("Coverage",r.coverage);row("Format",r.format);
+        row("Architecture",r.architecture);
+        row("Size (bytes)",std::to_string(r.bytes));
+        for(const auto& sec:r.sections)
+            row("Section",sec.name+" (entropy "+std::to_string(sec.entropy)+")");
+        for(const auto& imp:r.imports)row("Import",imp);
+        for(const auto& note:r.notes)row("Note",note);
+    }else{
+        out<<"{\n";
+        auto field=[&](const char* k,const std::string& v){
+            out<<"  "<<jsonQuote(k)<<": "<<jsonQuote(v)<<",\n";
+        };
+        field("file",path);field("status",r.status);
+        field("sha256",r.sha256);field("signature",r.signature);
+        field("coverage",r.coverage);field("format",r.format);
+        field("architecture",r.architecture);
+        out<<"  \"size_bytes\": "<<r.bytes<<",\n";
+        auto array=[&](const char* key,const std::vector<std::string>& items,
+                       bool comma){
+            out<<"  "<<jsonQuote(key)<<": [";
+            for(size_t i=0;i<items.size();++i){
+                if(i)out<<",";
+                out<<"\n    "<<jsonQuote(items[i]);
+            }
+            if(!items.empty())out<<"\n  ";
+            out<<"]"<<(comma?",":"")<<"\n";
+        };
+        std::vector<std::string> sectionNames;
+        for(const auto& sec:r.sections)
+            sectionNames.push_back(sec.name+" | entropy="+std::to_string(sec.entropy));
+        array("sections",sectionNames,true);
+        array("imports",r.imports,true);
+        array("notes",r.notes,false);
+        out<<"}\n";
+    }
+    return out.good();
+}
 static void draw(){
     ImGui::SetWindowFontScale(1.55f);
     ImGui::TextUnformatted("Binary Intelligence Studio");
     ImGui::SetWindowFontScale(1.f);
     ImGui::TextDisabled("Offline PE analysis  |  DLL imports  |  Extracted strings  |  Hex viewer");
     ImGui::Dummy(ImVec2(0,14));
-    ImGui::TextColored(ImVec4(.38f,.88f,.74f,1),"SELECT A BINARY");
+    ImGui::TextColored(ImVec4(0.764f,0.764f,0.764f,1),"SELECT A BINARY");
     ImGui::SetNextItemWidth(-300.f);
     ImGui::InputTextWithHint("##binaryPath","Select a Windows executable or DLL...",selected,sizeof(selected));
     ImGui::SameLine();
@@ -3390,19 +3474,32 @@ static void draw(){
     ImGui::SameLine(0,22);
     ImGui::Text("SIZE  %llu bytes",(unsigned long long)r.bytes);
     ImGui::TextWrapped("SHA-256  %s",r.sha256.c_str());
+    ImGui::TextWrapped("SIGNATURE  %s",
+        r.signature.empty()?"Not checked":r.signature.c_str());
+    ImGui::TextWrapped("COVERAGE  %s",
+        r.coverage.empty()?"Unknown":r.coverage.c_str());
+    if(ImGui::Button("EXPORT JSON",ImVec2(130,30))){
+        if(!exportReport(r,false))
+            diagnosticLog("Binary Lab JSON export cancelled or failed.");
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("EXPORT CSV",ImVec2(130,30))){
+        if(!exportReport(r,true))
+            diagnosticLog("Binary Lab CSV export cancelled or failed.");
+    }
     ImGui::TextDisabled("Sections: %zu   |   Imported entries: %zu   |   Strings: %zu",
         r.sections.size(),r.imports.size(),r.strings.size());
-    if(r.packedHint)ImGui::TextColored(ImVec4(1,.73f,.31f,1),"SUSPECT  /  High entropy detected; inspect sections.");
+    if(r.packedHint)ImGui::TextColored(ImVec4(0.757f,0.757f,0.757f,1),"SUSPECT  /  High entropy detected; inspect sections.");
     ImGui::Dummy(ImVec2(0,12));
     const char* tabs[]={"OVERVIEW","PE SECTIONS","IMPORTS / DLLs","STRINGS","HEX VIEW"};
     for(int i=0;i<5;i++){
         ImGui::PushID(i);
         bool active=tab==i;
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.33f,.55f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.21f,.42f,.68f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.13f,.28f,.49f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.94f,.97f,1.f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.310f,0.310f,0.310f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.394f,0.394f,0.394f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.263f,0.263f,0.263f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.966f,0.966f,0.966f,1.f));
         }
         if(ImGui::Button(tabs[i],ImVec2(i==2?156.f:125.f,36)))tab=i;
         if(active)ImGui::PopStyleColor(4);
@@ -3412,7 +3509,7 @@ static void draw(){
     ImGui::Separator();
     ImGui::BeginChild("##binaryView",ImVec2(0,0),ImGuiChildFlags_None);
     if(tab==0){
-        ImGui::TextColored(ImVec4(.38f,.88f,.74f,1),"STATIC ANALYSIS NOTES");
+        ImGui::TextColored(ImVec4(0.764f,0.764f,0.764f,1),"STATIC ANALYSIS NOTES");
         for(const auto& n:r.notes){ImGui::Bullet();ImGui::SameLine();ImGui::TextWrapped("%s",n.c_str());}
         ImGui::Dummy(ImVec2(0,8));
         ImGui::TextDisabled("Analysis is read-only and does not execute the selected file.");
@@ -3423,7 +3520,7 @@ static void draw(){
             ImGui::TableSetupColumn("Entropy");ImGui::TableHeadersRow();
             for(const auto& sec:r.sections){
                 ImGui::TableNextRow();
-                if(sec.entropy>7.45&&sec.size>1024)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(93,68,21,120));
+                if(sec.entropy>7.45&&sec.size>1024)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(70,70,70,120));
                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(sec.name.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::Text("0x%08X",sec.rva);
                 ImGui::TableSetColumnIndex(2);ImGui::Text("0x%08X",sec.raw);
@@ -3469,10 +3566,10 @@ static void draw(){
 
 // Shared primary action button for dashboard, file verification and settings.
 static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
-    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.19f,.37f,.69f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.26f,.46f,.81f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.14f,.29f,.56f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.f,1.f,1.f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.355f,0.355f,0.355f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.443f,0.443f,0.443f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.278f,0.278f,0.278f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.000f,1.000f,1.000f,1.f));
     const bool pressed=ImGui::Button(label,size);
     ImGui::PopStyleColor(4);
     return pressed;
@@ -3523,13 +3620,13 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
         draw->AddCircleFilled(ImVec2(x,y),radius*2.5f,
             IM_COL32(115,181,255,static_cast<int>(10.f+23.f*pulse)),16);
         draw->AddCircleFilled(ImVec2(x,y),radius,
-            IM_COL32(170,213,255,alpha),12);
+            IM_COL32(207,207,207,alpha),12);
         if(i%9==0){
             const int glow=static_cast<int>(20.f+42.f*pulse);
             draw->AddLine(ImVec2(x-5.f,y),ImVec2(x+5.f,y),
-                          IM_COL32(129,179,246,glow),1.f);
+                          IM_COL32(173,173,173,glow),1.f);
             draw->AddLine(ImVec2(x,y-5.f),ImVec2(x,y+5.f),
-                          IM_COL32(129,179,246,glow),1.f);
+                          IM_COL32(173,173,173,glow),1.f);
         }
     }
     // Traveling accents on the outer perimeter, not across text or tables.
@@ -3541,9 +3638,9 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     else if(d<2.f*size.x+size.y){
         dot.x+=size.x-10.f-(d-size.x-size.y);dot.y+=size.y-10.f;
     }else dot.y+=size.y-10.f-(d-2.f*size.x-size.y);
-    draw->AddCircleFilled(dot,11.f,IM_COL32(75,145,255,16),24);
-    draw->AddCircleFilled(dot,5.f,IM_COL32(125,185,255,39),16);
-    draw->AddCircleFilled(dot,2.6f,IM_COL32(180,220,255,175),12);
+    draw->AddCircleFilled(dot,11.f,IM_COL32(138,138,138,16),24);
+    draw->AddCircleFilled(dot,5.f,IM_COL32(177,177,177,39),16);
+    draw->AddCircleFilled(dot,2.6f,IM_COL32(214,214,214,175),12);
     draw->PopClipRect();
 }
 
@@ -3558,18 +3655,18 @@ static void drawAtlasProgress(bool compact=false){
     const ImVec2 q(p.x+width,p.y+height);
     ImDrawList* dl=ImGui::GetWindowDrawList();
     const float t=static_cast<float>(ImGui::GetTime());
-    dl->AddRectFilled(p,q,IM_COL32(13,27,46,255),9.f);
-    dl->AddRect(p,q,IM_COL32(66,102,149,195),9.f,0,1.1f);
+    dl->AddRectFilled(p,q,IM_COL32(25,25,25,255),9.f);
+    dl->AddRect(p,q,IM_COL32(98,98,98,195),9.f,0,1.1f);
     if(fraction>0.001f){
         const float fillW=width*fraction;
         dl->PushClipRect(p,ImVec2(p.x+fillW,q.y),true);
         dl->AddRectFilledMultiColor(
             ImVec2(p.x,p.y+2.f),ImVec2(p.x+width,p.y+height-2.f),
-            IM_COL32(32,102,194,255),IM_COL32(72,156,255,255),
-            IM_COL32(32,102,194,255),IM_COL32(72,156,255,255));
+            IM_COL32(94,94,94,255),IM_COL32(145,145,145,255),
+            IM_COL32(94,94,94,255),IM_COL32(145,145,145,255));
         dl->AddRectFilled(
             ImVec2(p.x,p.y+2.f),ImVec2(p.x+fillW,p.y+5.f),
-            IM_COL32(177,218,255,65),2.f);
+            IM_COL32(212,212,212,65),2.f);
         // A soft moving highlight is clipped to the filled part only.
         const float sweep=std::fmod(t*92.f,width+120.f)-60.f;
         for(int i=0;i<10;++i){
@@ -3581,16 +3678,16 @@ static void drawAtlasProgress(bool compact=false){
         dl->PopClipRect();
         const float edgeX=p.x+fillW;
         dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
-            8.f,IM_COL32(108,178,255,36),18);
+            8.f,IM_COL32(169,169,169,36),18);
         dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
-            3.f,IM_COL32(209,236,255,135),12);
+            3.f,IM_COL32(232,232,232,135),12);
     }
     char label[16]{};
     snprintf(label,sizeof(label),"%d%%",pct);
     const ImVec2 textSize=ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(p.x+(width-textSize.x)*.5f,
                        p.y+(height-textSize.y)*.5f),
-                IM_COL32(246,250,255,255),label);
+                IM_COL32(250,250,250,255),label);
     ImGui::Dummy(ImVec2(width,height));
     if(!compact){
         ImGui::Dummy(ImVec2(0,5.f));
@@ -3599,7 +3696,7 @@ static void drawAtlasProgress(bool compact=false){
             scanning?(cancelRequested?"CANCELLING INSPECTION":
                       stages[std::clamp(stage.load(),0,5)]):
             "READY";
-        ImGui::TextColored(ImVec4(.59f,.72f,.89f,1.f),"%s",phase);
+        ImGui::TextColored(ImVec4(0.705f,0.705f,0.705f,1.f),"%s",phase);
         if(ImGui::IsItemHovered()){
             ImGui::SetTooltip(
                 "Progress shows completed scan stages and the presentation timer. "
@@ -3613,7 +3710,7 @@ static void renderUI() {
         ImGui::OpenPopup("Windows Defender detection alert");
     if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
         ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(1.f,.34f,.35f,1.f),"WINDOWS DEFENDER SECURITY EVENT");
+        ImGui::TextColored(ImVec4(0.481f,0.481f,0.481f,1.f),"WINDOWS DEFENDER SECURITY EVENT");
         ImGui::Separator();
         ImGui::TextWrapped("%d recent Defender detection or failed-remediation events were found.",
             defenderAlerts.load());
@@ -3637,7 +3734,7 @@ static void renderUI() {
     const ImVec4 titleInk(.96f,.97f,1,1);
     const ImVec4 subtleInk(.53f,.59f,.69f,1);
     const ImVec4 accentInk(.63f,.77f,1,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.033f,.039f,.054f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.039f,0.039f,0.039f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,83),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
@@ -3653,15 +3750,15 @@ static void renderUI() {
         const int borderAlpha=static_cast<int>(36.f+51.f*breathe);
         brandDraw->AddRect(ImVec2(lo.x-5.f,lo.y-5.f),
                            ImVec2(hi.x+5.f,hi.y+5.f),
-                           IM_COL32(111,161,228,borderAlpha),5.f,0,1.f);
+                           IM_COL32(155,155,155,borderAlpha),5.f,0,1.f);
         // Two tiny moving corner accents, rather than a distracting radar glow.
         const float edge=brandAnimation?(8.f+24.f*(.5f+.5f*std::sin(brandTime*.65f))):16.f;
         if(brandAnimation)brandDraw->AddLine(ImVec2(lo.x-5.f,lo.y+edge),
                            ImVec2(lo.x-5.f,lo.y+edge+7.f),
-                           IM_COL32(146,193,248,115),1.5f);
+                           IM_COL32(187,187,187,115),1.5f);
         if(brandAnimation)brandDraw->AddLine(ImVec2(hi.x+5.f,hi.y-edge),
                            ImVec2(hi.x+5.f,hi.y-edge-7.f),
-                           IM_COL32(146,193,248,115),1.5f);
+                           IM_COL32(187,187,187,115),1.5f);
         ImGui::SameLine(0,15);
     }
     ImGui::BeginGroup();
@@ -3679,14 +3776,14 @@ static void renderUI() {
         const float y=wordmarkRight.y+3.f;
         const float width=x2-x1;
         brandDraw->AddLine(ImVec2(x1,y),ImVec2(x2,y),
-                           IM_COL32(73,105,148,55),1.f);
+                           IM_COL32(101,101,101,55),1.f);
         // Soft, slow light travel across the thin rule; text never flashes.
         const float phase=std::fmod(brandTime*24.f,width+40.f)-20.f;
         const float start=(std::max)(x1,x1+phase);
         const float end=(std::min)(x2,x1+phase+31.f);
         if(brandAnimation && end>start){
             brandDraw->AddLine(ImVec2(start,y),ImVec2(end,y),
-                               IM_COL32(129,184,249,155),1.5f);
+                               IM_COL32(177,177,177,155),1.5f);
         }
     }
     ImGui::SameLine(0,30);
@@ -3700,7 +3797,7 @@ static void renderUI() {
         ImGui::GetWindowDrawList()->AddRectFilled(
             ImVec2(wp.x,wp.y+ws.y-2.f),
             ImVec2(wp.x+ws.x*fraction,wp.y+ws.y),
-            IM_COL32(101,155,238,220));
+            IM_COL32(150,150,150,220));
     }
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
@@ -3711,7 +3808,7 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.030f,.042f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.030f,0.030f,0.030f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
     ImGui::BeginChild("##atlasNav",ImVec2(0,157),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
@@ -3746,10 +3843,10 @@ static void renderUI() {
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.27f,.41f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.92f,.95f,1.f,1));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.261f,0.261f,0.261f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.947f,0.947f,0.947f,1));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.61f,.89f,1));
+            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(0.590f,0.590f,0.590f,1));
         }
         const bool hoveredBefore=ImGui::IsMousePosValid() &&
             ImGui::IsMouseHoveringRect(ImGui::GetCursorScreenPos(),
@@ -3757,12 +3854,12 @@ static void renderUI() {
                        ImGui::GetCursorScreenPos().y+39.f),false);
         if(!active){
             ImGui::PushStyleColor(ImGuiCol_Button,
-                hoveredBefore?ImVec4(.105f,.155f,.225f,1.f):
-                              ImVec4(.060f,.079f,.115f,1.f));
+                hoveredBefore?ImVec4(0.149f,0.149f,0.149f,1.f):
+                              ImVec4(0.078f,0.078f,0.078f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                ImVec4(.14f,.205f,.29f,1.f));
+                ImVec4(0.197f,0.197f,0.197f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Border,
-                ImVec4(.16f,.22f,.31f,1.f));
+                ImVec4(0.214f,0.214f,0.214f,1.f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
         }
         if(ImGui::Button(nav[i],ImVec2(navWidth,39))){
@@ -3785,12 +3882,12 @@ static void renderUI() {
             ImGui::GetWindowDrawList()->AddRectFilled(
                 ImVec2(tabMin.x+1.f,tabMin.y+9.f),
                 ImVec2(tabMin.x+3.f,tabMax.y-9.f),
-                IM_COL32(146,192,248,230),1.f);
+                IM_COL32(186,186,186,230),1.f);
         } else if(showNavHover && ImGui::IsItemHovered()){
             ImGui::GetWindowDrawList()->AddRect(
                 ImVec2(tabMin.x+.5f,tabMin.y+.5f),
                 ImVec2(tabMax.x-.5f,tabMax.y-.5f),
-                IM_COL32(105,155,218,115),7.f,0,1.f);
+                IM_COL32(149,149,149,115),7.f,0,1.f);
         }
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
@@ -3802,7 +3899,7 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.015f,.019f,.028f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.019f,0.019f,0.019f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,26));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
@@ -3814,11 +3911,11 @@ static void renderUI() {
         dl->PushClipRect(origin,ImVec2(origin.x+extent.x,origin.y+extent.y),true);
         dl->AddRectFilledMultiColor(
             origin,ImVec2(origin.x+extent.x,origin.y+210.f),
-            IM_COL32(20,27,39,255),IM_COL32(16,22,32,255),
-            IM_COL32(10,14,21,255),IM_COL32(12,17,25,255));
+            IM_COL32(26,26,26,255),IM_COL32(21,21,21,255),
+            IM_COL32(14,14,14,255),IM_COL32(17,17,17,255));
         dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
                     ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
-                    IM_COL32(80,103,136,33),1.f);
+                    IM_COL32(100,100,100,33),1.f);
         dl->PopClipRect();
     }
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
@@ -3844,10 +3941,10 @@ static void renderUI() {
         const float lineY=lineStart.y+12.f;
         dl->AddLine(ImVec2(lineStart.x,lineY),
                     ImVec2(lineStart.x+lineWidth,lineY),
-                    IM_COL32(65,83,112,105),1.f);
+                    IM_COL32(81,81,81,105),1.f);
         dl->AddRectFilled(ImVec2(lineStart.x,lineY-1.f),
                           ImVec2(lineStart.x+44.f,lineY+1.f),
-                          IM_COL32(112,164,232,190),1.f);
+                          IM_COL32(158,158,158,190),1.f);
         ImGui::Dummy(ImVec2(0,29.f));
     }
     // Only Dashboard shows progress; remove the bar once it reaches 100%.
@@ -3898,23 +3995,23 @@ static void renderUI() {
         // Frosted-glass approximation: layered translucent panels and
         // diffuse highlights. No unimplemented GPU blur is claimed.
         curtain->AddRectFilled(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(9,18,32,fadeAlpha(247)),14.f);
+            IM_COL32(17,17,17,fadeAlpha(247)),14.f);
         curtain->AddRectFilledMultiColor(
             ImVec2(area.x+12,area.y+12),ImVec2(area.x+w-12,area.y+h-12),
-            IM_COL32(35,68,107,fadeAlpha(85)),IM_COL32(23,43,75,fadeAlpha(65)),
-            IM_COL32(13,25,43,fadeAlpha(95)),IM_COL32(25,46,78,fadeAlpha(80)));
+            IM_COL32(64,64,64,fadeAlpha(85)),IM_COL32(41,41,41,fadeAlpha(65)),
+            IM_COL32(24,24,24,fadeAlpha(95)),IM_COL32(44,44,44,fadeAlpha(80)));
         for(int ring=9;ring>=1;--ring){
             const float r=95.f+ring*13.f;
             curtain->AddCircleFilled(
                 ImVec2(area.x+w*.5f,area.y+h*.39f),r,
-                IM_COL32(69,127,206,fadeAlpha(2)),48);
+                IM_COL32(120,120,120,fadeAlpha(2)),48);
         }
         curtain->AddRect(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(72,116,166,fadeAlpha(130)),14.f,0,1.2f);
+            IM_COL32(110,110,110,fadeAlpha(130)),14.f,0,1.2f);
         // Lock silhouette rendered directly with ImDrawList.
         const ImVec2 center(area.x+w*.5f,area.y+h*.39f);
-        curtain->AddCircleFilled(center,54.f,IM_COL32(27,52,83,fadeAlpha(220)),48);
-        curtain->AddCircle(center,54.f,IM_COL32(91,150,222,fadeAlpha(160)),48,1.6f);
+        curtain->AddCircleFilled(center,54.f,IM_COL32(49,49,49,fadeAlpha(220)),48);
+        curtain->AddCircle(center,54.f,IM_COL32(143,143,143,fadeAlpha(160)),48,1.6f);
         curtain->PathClear();
         // The shackle rotates and rises as the scan unlocks.
         const ImVec2 shackleCenter(center.x-9.f*eased,
@@ -3922,24 +4019,24 @@ static void renderUI() {
         curtain->PathArcTo(shackleCenter,19.f,
             3.14159265f-0.62f*eased,
             6.2831853f-0.62f*eased,24);
-        curtain->PathStroke(IM_COL32(201,227,255,fadeAlpha(255)),0,5.f);
+        curtain->PathStroke(IM_COL32(223,223,223,fadeAlpha(255)),0,5.f);
         curtain->AddRectFilled(
             ImVec2(center.x-26.f,center.y-13.f),
             ImVec2(center.x+26.f,center.y+26.f),
-            IM_COL32(110,173,245,fadeAlpha(255)),7.f);
+            IM_COL32(165,165,165,fadeAlpha(255)),7.f);
         curtain->AddCircleFilled(
-            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(13,31,54,fadeAlpha(255)),16);
+            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(29,29,29,fadeAlpha(255)),16);
         curtain->AddRectFilled(
             ImVec2(center.x-2.f,center.y+3.f),
             ImVec2(center.x+2.f,center.y+14.f),
-            IM_COL32(13,31,54,fadeAlpha(255)),2.f);
+            IM_COL32(29,29,29,fadeAlpha(255)),2.f);
         ImGui::SetCursorScreenPos(ImVec2(area.x,center.y+76.f));
         ImGui::PushTextWrapPos(area.x+w-24.f);
         ImGui::SetWindowFontScale(1.35f);
         const char* heading=unlocking?"INSPECTION UNLOCKED":"INSPECTION LOCKED";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(heading).x)*.5f);
-        ImGui::TextColored(ImVec4(.90f,.96f,1.f,1.f),"%s",heading);
+        ImGui::TextColored(ImVec4(0.950f,0.950f,0.950f,1.f),"%s",heading);
         ImGui::SetWindowFontScale(1.f);
         ImGui::Dummy(ImVec2(0,9.f));
         const char* detail=unlocking?
@@ -3947,14 +4044,14 @@ static void renderUI() {
             "Results unlock when the scan reaches 100%.";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(detail).x)*.5f);
-        ImGui::TextColored(ImVec4(.62f,.73f,.86f,1.f),"%s",detail);
+        ImGui::TextColored(ImVec4(0.716f,0.716f,0.716f,1.f),"%s",detail);
         ImGui::PopTextWrapPos();
         ImGui::Dummy(ImVec2(0,22.f));
         const float buttonWidth=245.f;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-buttonWidth)*.5f);
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.35f,.59f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.22f,.46f,.75f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.327f,0.327f,0.327f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.430f,0.430f,0.430f,1.f));
         if(waitingForPresentation){
             if(ImGui::Button("RETURN TO SCAN",ImVec2(buttonWidth,45.f)))
                 page=0;
@@ -3972,7 +4069,7 @@ static void renderUI() {
         const bool side=full>=790.f;
         const float rightWidth=side?270.f:0.f;
         const float heroWidth=side?full-rightWidth-12.f:full;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.075f,.105f,1));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.073f,0.073f,0.073f,1));
         ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,205),ImGuiChildFlags_Borders);
         ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
@@ -3993,7 +4090,7 @@ static void renderUI() {
         ImGui::PopStyleColor();
         if(side){
             ImGui::SameLine(0,12);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.082f,.11f,1));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.080f,0.080f,0.080f,1));
             ImGui::BeginChild("##liveCounters",ImVec2(rightWidth,233),ImGuiChildFlags_Borders);
             ImGui::TextColored(accent,"LIVE TELEMETRY");
             ImGui::Separator();
@@ -4011,9 +4108,9 @@ static void renderUI() {
         }
         ImGui::Dummy(ImVec2(0,16));
         if(defenderAlerts.load()>0){
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.18f,.09f,.11f,1));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.111f,0.111f,0.111f,1));
             ImGui::BeginChild("##defenderNotice",ImVec2(0,68),ImGuiChildFlags_Borders);
-            ImGui::TextColored(ImVec4(1,.60f,.58f,1),"DEFENDER EVENTS: %d",defenderAlerts.load());
+            ImGui::TextColored(ImVec4(0.684f,0.684f,0.684f,1),"DEFENDER EVENTS: %d",defenderAlerts.load());
             ImGui::TextDisabled("Historical alerts; review current protection status separately.");
             ImGui::SameLine();
             if(ImGui::SmallButton("OPEN EVENTS"))page=3;
@@ -4162,7 +4259,7 @@ static void renderUI() {
                 ImGui::PushID((int)i);
                 ImGui::TableNextRow();
                 if(ev.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
-                    IM_COL32(135,86,19,150));
+                    IM_COL32(92,92,92,150));
                 ImGui::TableSetColumnIndex(0);
                 ImGui::TextUnformatted(ev.timestamp.empty()?"N/A":ev.timestamp.c_str());
                 ImGui::TableSetColumnIndex(1);
@@ -4193,7 +4290,7 @@ static void renderUI() {
                         ImGui::TextWrapped("%s",e.description.c_str());
                         ImGui::TextWrapped("%s",e.detail.c_str());
                         if(e.alert)ImGui::TextColored(
-                            ImVec4(1.f,.75f,.28f,1.f),
+                            ImVec4(0.769f,0.769f,0.769f,1.f),
                             "REVIEW: Security event requires investigation.");
                     }
                     if(ImGui::Button("Close"))ImGui::CloseCurrentPopup();
@@ -4443,12 +4540,12 @@ static void renderUI() {
             highlightSuspicious=true;showSecurityWarnings=true;
             brandAnimation=true;ambientMotesEnabled=true;
             showNavHover=true;cornerStyle=1;scrollbarWidth=1;
-            customAccent=ImVec4(.98f,.43f,.15f,1.f);
+            customAccent=ImVec4(0.527f,0.527f,0.527f,1.f);
             ImGui::GetIO().FontGlobalScale=1.f;
             applyTheme();
             saveSettings();
         }
-        if(settingsNotice)ImGui::TextColored(ImVec4(.35f,.85f,.55f,1),"Settings saved successfully.");
+        if(settingsNotice)ImGui::TextColored(ImVec4(0.722f,0.722f,0.722f,1),"Settings saved successfully.");
         ImGui::Spacing();
         ImGui::TextDisabled("Preferences are stored locally in APPDATA\\SyncPCChecker\\settings.ini");
         ImGui::Spacing();
