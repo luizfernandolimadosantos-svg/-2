@@ -3969,12 +3969,66 @@ static std::vector<Record> reconcileProcessSnapshots(
     processSecondSnapshot=static_cast<unsigned>(after.size());
     return changes;
 }
+
+// Deep mode: actual file-system, SHA-256 and Authenticode inspection for each
+// unique executable path observed in the initial process snapshot.
+// A cache avoids repeatedly hashing the same executable used by many PIDs.
+// This is read-only. Results are published only after the worker finishes.
+static std::atomic<unsigned> deepFilesChecked{0},deepFilesSkipped{0};
+static std::atomic<unsigned> deepUniquePaths{0};
+static std::vector<Record> inspectDeepProcessExecutables(
+    const std::vector<Process>& snapshot){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    constexpr std::uintmax_t kMaxHashBytes=128ull*1024ull*1024ull;
+    for(const auto& proc:snapshot){
+        if(cancelRequested)break;
+        ++sequentialDone;
+        setSequentialItem("Deep executable PID "+std::to_string(proc.pid));
+        if(proc.path.empty() || proc.path[0]==L'['){
+            ++deepFilesSkipped;
+            continue;
+        }
+        std::wstring key=proc.path;
+        std::transform(key.begin(),key.end(),key.begin(),
+            [](wchar_t c){return static_cast<wchar_t>(std::towlower(c));});
+        if(!seen.insert(key).second)continue;
+        ++deepUniquePaths;
+        std::error_code ec;
+        const fs::path path(proc.path);
+        if(!fs::is_regular_file(path,ec) || ec){
+            ++deepFilesSkipped;
+            findings.push_back({"Deep Executable Check",std::to_string(proc.pid),
+                "Executable inaccessible or no longer present; not a suspicious finding"});
+            continue;
+        }
+        const auto size=fs::file_size(path,ec);
+        if(ec || size>kMaxHashBytes){
+            ++deepFilesSkipped;
+            findings.push_back({"Deep Executable Check",std::to_string(proc.pid),
+                "Hash skipped (file size unavailable or exceeds 128 MiB safety limit)"});
+            continue;
+        }
+        if(cancelRequested)break;
+        setSequentialItem("SHA-256 PID "+std::to_string(proc.pid));
+        const auto digest=sha256(proc.path);
+        if(cancelRequested)break;
+        setSequentialItem("Signature PID "+std::to_string(proc.pid));
+        const auto signature=signatureStatus(proc.path);
+        ++deepFilesChecked;
+        findings.push_back({"Deep Executable Check",std::to_string(proc.pid),
+            "Path: "+utf8(proc.path)+" | Size: "+std::to_string(size)+
+            " | SHA256: "+(digest.empty()?"Unavailable":digest)+
+            " | Signature: "+signature});
+    }
+    return findings;
+}
 static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
         const std::wstring winRoot=windowsRoot();
-        sequentialTotal=static_cast<unsigned>(p.size()*(kProcessChecksPerPid+1));
+        sequentialTotal=static_cast<unsigned>(p.size()*(kProcessChecksPerPid+2));
         processChecksPlanned=static_cast<unsigned long long>(p.size())*kProcessChecksPerPid;
         processChecksCompleted=0;processChecksUnavailable=0;
         sequentialDone=0;
@@ -3987,6 +4041,8 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         auto processDetails=inspectIndividualProcesses(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        auto deepExecutables=inspectDeepProcessExecutables(p);
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
         markInspectionStage(1);
         stage=2;
@@ -3994,8 +4050,9 @@ static void scanWorker() {
         setSequentialItem("Service inventory");
         auto services=enumerateServices();
         services.insert(services.end(),processDetails.begin(),processDetails.end());
+        services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size());
+        stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size()-deepExecutables.size());
         markInspectionStage(2);
         stage=3;
         sequentialDone=0;sequentialTotal=0;
@@ -4292,6 +4349,7 @@ static void startScan() {
     processChecksPlanned=0;processChecksCompleted=0;processChecksUnavailable=0;
     processNewPids=0;processExitedPids=0;processSecondSnapshot=0;
     forensicProducedRecords=0;
+    deepFilesChecked=0;deepFilesSkipped=0;deepUniquePaths=0;
     sequentialDone=0;sequentialTotal=0;
     setSequentialItem("");
     forensicSourceStatus=0;
@@ -6852,6 +6910,9 @@ static void renderUI() {
         }
         if(done){
             if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
+                ImGui::Text("Deep executable files checked: %u",deepFilesChecked.load());
+                ImGui::Text("Deep paths found: %u | skipped: %u",
+                    deepUniquePaths.load(),deepFilesSkipped.load());
                 ImGui::Text("First process snapshot: %u",stageWorkItems[0].load());
                 ImGui::Text("Second process snapshot: %u",processSecondSnapshot.load());
                 ImGui::Text("New PIDs between snapshots: %u",processNewPids.load());
