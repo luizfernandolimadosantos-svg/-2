@@ -61,6 +61,49 @@
 #pragma comment(lib,"psapi.lib")
 
 namespace fs=std::filesystem;
+
+// Diagnostics are local and transparent: no Defender exclusions, concealment,
+// privilege escalation, registry writes, or changes to security settings.
+static std::mutex diagnosticMutex;
+static std::wstring diagnosticPath(){
+    wchar_t folder[MAX_PATH]{};
+    DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",folder,MAX_PATH);
+    if(n==0 || n>=MAX_PATH){
+        n=GetTempPathW(MAX_PATH,folder);
+        if(n==0 || n>=MAX_PATH)return L"SyncPCChecker-diagnostic.log";
+    }
+    return (std::filesystem::path(folder)/L"SyncPCChecker"/
+            L"diagnostic.log").wstring();
+}
+static void diagnosticLog(const char* message){
+    try{
+        std::lock_guard<std::mutex> guard(diagnosticMutex);
+        const std::filesystem::path p(diagnosticPath());
+        if(p.has_parent_path())std::filesystem::create_directories(p.parent_path());
+        std::ofstream file(p,std::ios::app);
+        if(!file)return;
+        SYSTEMTIME now{};GetLocalTime(&now);
+        char stamp[48]{};
+        snprintf(stamp,sizeof(stamp),"%04u-%02u-%02u %02u:%02u:%02u",
+            now.wYear,now.wMonth,now.wDay,now.wHour,now.wMinute,now.wSecond);
+        file<<stamp<<" | "<<(message?message:"(null)")<<"\n";
+    }catch(...){}
+}
+static void diagnosticHRESULT(const char* operation,HRESULT hr){
+    char buffer[160]{};
+    snprintf(buffer,sizeof(buffer),"%s failed (HRESULT 0x%08lX)",
+             operation,static_cast<unsigned long>(hr));
+    diagnosticLog(buffer);
+}
+static LONG WINAPI diagnosticUnhandledException(EXCEPTION_POINTERS* ep){
+    char buffer[160]{};
+    const unsigned long code=(ep && ep->ExceptionRecord)?
+        ep->ExceptionRecord->ExceptionCode:0;
+    snprintf(buffer,sizeof(buffer),"Unhandled Windows exception: 0x%08lX",code);
+    diagnosticLog(buffer);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 struct Process { DWORD pid; DWORD parent; std::wstring name,path; std::string assessment; bool suspicious=false; };
 struct Record { std::string category,name,detail; };
 struct FileResult { std::wstring path; std::string hash,signature; };
@@ -1686,7 +1729,28 @@ static void startScan() {
     peFilesInspected=0;
     inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
-    std::thread(scanWorker).detach();
+    try{
+        std::thread([]{
+            diagnosticLog("Scan worker started.");
+            try{
+                scanWorker();
+                diagnosticLog("Scan worker returned.");
+            }catch(const std::exception& e){
+                diagnosticLog(e.what());
+                scanFailed=true;
+                scanning=false;
+            }catch(...){
+                diagnosticLog("Unknown exception in scan worker.");
+                scanFailed=true;
+                scanning=false;
+            }
+        }).detach();
+    }catch(const std::exception& e){
+        diagnosticLog(e.what());
+        scanFailed=true;
+        scanning=false;
+        status="Could not start scan worker. See diagnostic.log.";
+    }
 }
 static std::string csvQuote(const std::string& s) {
     std::string out="\"";
@@ -1850,8 +1914,25 @@ static bool initD3D(HWND h) {
     D3D_FEATURE_LEVEL requested[]={D3D_FEATURE_LEVEL_11_0,D3D_FEATURE_LEVEL_10_0};
     HRESULT hr=D3D11CreateDeviceAndSwapChain(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,
         requested,2,D3D11_SDK_VERSION,&sd,&swapchain,&device,&level,&context);
-    if(FAILED(hr)) return false;
+    if(FAILED(hr)){
+        diagnosticHRESULT("D3D11 hardware initialization",hr);
+        // WARP is Microsoft's supported CPU renderer, not a security bypass.
+        hr=D3D11CreateDeviceAndSwapChain(nullptr,D3D_DRIVER_TYPE_WARP,
+            nullptr,0,requested,2,D3D11_SDK_VERSION,&sd,
+            &swapchain,&device,&level,&context);
+        if(FAILED(hr)){
+            diagnosticHRESULT("D3D11 WARP initialization",hr);
+            return false;
+        }
+        diagnosticLog("D3D11 initialized using Microsoft WARP fallback.");
+    }else{
+        diagnosticLog("D3D11 initialized using hardware acceleration.");
+    }
     renderTargetCreate();
+    if(!target){
+        diagnosticLog("Render target creation failed.");
+        return false;
+    }
     return true;
 }
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LPARAM);
@@ -4378,6 +4459,8 @@ static void renderUI() {
     drawEvidenceDetails();
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
+    SetUnhandledExceptionFilter(diagnosticUnhandledException);
+    diagnosticLog("Application starting.");
     HICON appIcon=reinterpret_cast<HICON>(
         LoadImageW(inst,MAKEINTRESOURCEW(1),IMAGE_ICON,32,32,LR_DEFAULTCOLOR));
     if(!appIcon)appIcon=LoadIconW(nullptr,IDI_APPLICATION);
@@ -4386,7 +4469,20 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     RegisterClassExW(&wc);
     hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
                        WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1200,780,nullptr,nullptr,inst,nullptr);
-    if(!hwnd || !initD3D(hwnd))return 1;
+    if(!hwnd){
+        diagnosticLog("CreateWindowW failed.");
+        MessageBoxW(nullptr,L"Unable to create the application window. "
+            L"See diagnostic.log in LocalAppData\\SyncPCChecker.",
+            L"Sync PC Checker - Startup Error",MB_OK|MB_ICONERROR);
+        return 1;
+    }
+    if(!initD3D(hwnd)){
+        diagnosticLog("Graphics initialization failed; exiting.");
+        MessageBoxW(hwnd,L"DirectX 11 initialization failed. "
+            L"Check LocalAppData\\SyncPCChecker\\diagnostic.log for details.",
+            L"Sync PC Checker - Startup Error",MB_OK|MB_ICONERROR);
+        return 1;
+    }
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
     IMGUI_CHECKVERSION();ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
@@ -4432,5 +4528,6 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     if(context)context->Release();
     if(device)device->Release();
     DestroyWindow(hwnd);UnregisterClassW(wc.lpszClassName,inst);
+    diagnosticLog("Application exited normally.");
     return 0;
 }
