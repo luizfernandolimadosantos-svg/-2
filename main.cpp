@@ -336,7 +336,7 @@ static const char* localized(const char* english){
         {"Restore Defaults","Restaurar padrões"},
         {"Settings saved successfully.","Configurações salvas com sucesso."},
         {"Verify Scanner Executable","Verificar executável do scanner"},
-        {"FULL INSPECTION  /  PRESENTATION PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO VISUAL"},
+        {"FULL INSPECTION  /  PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO"},
         {"SYSTEM INTEGRITY","INTEGRIDADE DO SISTEMA"},
         {"EXECUTION ARTIFACTS","ARTEFATOS DE EXECUÇÃO"},
         {"PROCESS ANALYSIS","ANÁLISE DE PROCESSOS"},
@@ -346,14 +346,14 @@ static const char* localized(const char* english){
         {"INSPECTION FAILED","INSPEÇÃO FALHOU"},
         {"INSPECTION CANCELLED","INSPEÇÃO CANCELADA"},
         {"PREPARING RESULTS","PREPARANDO RESULTADOS"},
-        {"EVIDENCE COLLECTED - PRESENTING RESULTS","EVIDÊNCIAS COLETADAS - PREPARANDO RESULTADOS"},
+        {"FINALIZING INSPECTION","FINALIZANDO INSPEÇÃO"},
         {"FULL INSPECTION IN PROGRESS","INSPEÇÃO COMPLETA EM ANDAMENTO"},
         {"START FULL INSPECTION","INICIAR INSPEÇÃO COMPLETA"},
         {"GO TO DASHBOARD","IR PARA O PAINEL"},
         {"RUN A FULL INSPECTION","EXECUTAR INSPEÇÃO COMPLETA"},
         {"Results unlock after inspection completes at 100%.","Os resultados são liberados quando a inspeção chega a 100%."},
         {"Run a full inspection to unlock this section.","Execute uma inspeção completa para liberar esta seção."},
-        {"SCAN COMPLETE - PREPARING RESULTS","SCAN CONCLUÍDO - PREPARANDO RESULTADOS"},
+        {"FINALIZING INSPECTION","FINALIZANDO INSPEÇÃO"},
         {"No scan results yet.","Ainda não há resultados de scan."},
         {"Changes only the 0-100%% number; the interface stays monochrome.","Altera apenas o número de 0 a 100%%; a interface permanece monocromática."},
         {"Animations are visual only; scanning is unaffected.","As animações são apenas visuais; a análise não é afetada."}
@@ -3318,6 +3318,47 @@ static std::vector<Record> inspectAuditAndPlatformEvidence(){
     return out;
 }
 
+
+// Read-only Windows defense and audit policy checks, with contextual findings.
+static std::vector<Record> inspectExtraSecurityPolicies(){
+    std::vector<Record> out;
+    auto report=[&](const char* label,const std::string& message){
+        out.push_back({"Defense Configuration",label,message});
+    };
+    struct Rule{
+        HKEY root;const wchar_t* path;const wchar_t* name;
+        const char* label;DWORD concerning;
+    };
+    const Rule rules[]={
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+         L"DisableAntiSpyware","Defender legacy disable policy",1},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+         L"DisableRealtimeMonitoring","Defender realtime policy",1},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+         L"DisableBehaviorMonitoring","Defender behavior monitoring policy",1},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",
+         L"EnableModuleLogging","PowerShell module logging policy",0},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",
+         L"EnableTranscripting","PowerShell transcription policy",0},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+         L"EnableLUA","User Account Control policy",0}
+    };
+    for(const auto& rule:rules){
+        if(cancelRequested)break;
+        HKEY h=nullptr;
+        if(RegOpenKeyExW(rule.root,rule.path,0,KEY_QUERY_VALUE,&h)!=ERROR_SUCCESS)
+            continue; // Absent policy is normal; do not report as tampering.
+        DWORD data=0,type=0,size=sizeof(data);
+        LONG rc=RegQueryValueExW(h,rule.name,nullptr,&type,
+            reinterpret_cast<LPBYTE>(&data),&size);
+        RegCloseKey(h);
+        if(rc==ERROR_SUCCESS && type==REG_DWORD && size==sizeof(data) &&
+           data==rule.concerning)
+            report(rule.label,"NEEDS REVIEW | Security policy has a potentially reduced-visibility setting. Verify administrative intent and effective protection state.");
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -3400,6 +3441,7 @@ static void scanWorker() {
         auto bypassExtended=inspectExtendedBypassEvidence(p);
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
         auto auditPlatform=inspectAuditAndPlatformEvidence();
+        auto extraPolicies=inspectExtraSecurityPolicies();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -3414,6 +3456,7 @@ static void scanWorker() {
         services.insert(services.end(),bypassExtended.begin(),bypassExtended.end());
         services.insert(services.end(),advancedIntegrity.begin(),advancedIntegrity.end());
         services.insert(services.end(),auditPlatform.begin(),auditPlatform.end());
+        services.insert(services.end(),extraPolicies.begin(),extraPolicies.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -5514,12 +5557,13 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     dl->AddRect(p,q,IM_COL32(82,82,82,190),6.f);
     if(fraction>0.f){
         const float w=width*fraction;
-        dl->PushClipRect(p,ImVec2(p.x+w,q.y),true);
-        dl->AddRectFilledMultiColor(
-            ImVec2(p.x,p.y+2.f),ImVec2(p.x+width,p.y+height-2.f),
-            IM_COL32(105,105,105,255),IM_COL32(232,232,232,255),
-            IM_COL32(105,105,105,255),IM_COL32(232,232,232,255));
-        dl->PopClipRect();
+        dl->AddRectFilled(ImVec2(p.x+2.f,p.y+2.f),
+            ImVec2((std::min)(q.x-2.f,p.x+(std::max)(2.f,w)),q.y-2.f),
+            IM_COL32(215,215,215,255),4.f);
+        if(w>14.f)
+            dl->AddRectFilled(ImVec2(p.x+3.f,p.y+3.f),
+                ImVec2((std::min)(q.x-3.f,p.x+w-3.f),p.y+4.f),
+                IM_COL32(248,248,248,220),1.f);
     }
     if(compact){
         char pct[16]{};
@@ -5536,40 +5580,63 @@ static void drawAtlasProgress(bool compact=false){
     const float fraction=smoothInspectionVisual(
         static_cast<float>(inspectionPresentationFraction()));
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled(localized("FULL INSPECTION  /  PRESENTATION PROGRESS"));
+    ImGui::TextDisabled(localized("FULL INSPECTION  /  PROGRESS"));
     ImGui::SameLine();
     ImGui::Text("%.1f%%",fraction*100.f);
     drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
                                   compact?14.f:19.f);
     if(compact)return;
     ImGui::Spacing();
-    // Four 2-minute sequential presentation windows, smoothly interpolated.
-    // These are intentionally labeled as presentation, not verified work.
-    const char* names[]={
-        "SYSTEM INTEGRITY","EXECUTION ARTIFACTS",
-        "PROCESS ANALYSIS","EVIDENCE CORRELATION"
+    // One focused activity track at a time beneath the overall progress.
+    // Visual phases are timed; the collection worker runs independently.
+    const char* phaseNames[]={
+        "SYSTEM INTEGRITY",
+        "EVENT LOG ANALYSIS",
+        "EXECUTION ARTIFACTS",
+        "PROCESS ANALYSIS",
+        "DRIVER AND MODULE AUDIT",
+        "PERSISTENCE REVIEW",
+        "EVIDENCE CORRELATION",
+        "FINAL INTEGRITY REVIEW"
     };
+    const char* phaseNamesPt[]={
+        "INTEGRIDADE DO SISTEMA",
+        "ANÁLISE DE LOGS DE EVENTOS",
+        "ARTEFATOS DE EXECUÇÃO",
+        "ANÁLISE DE PROCESSOS",
+        "AUDITORIA DE DRIVERS E MÓDULOS",
+        "REVISÃO DE PERSISTÊNCIA",
+        "CORRELAÇÃO DE EVIDÊNCIAS",
+        "REVISÃO FINAL DE INTEGRIDADE"
+    };
+    constexpr int phaseCount=8;
     const double elapsed=inspectionProgressStart>0.0 ?
         (std::max)(0.0,ImGui::GetTime()-inspectionProgressStart):0.0;
-    for(int i=0;i<4;++i){
-        const float fractionStage=std::clamp(
-            static_cast<float>((elapsed-i*120.0)/120.0),0.f,1.f);
-        ImGui::TextDisabled("%s  /  %s",localized(names[i]),
-                            displayLanguage==1?"APRESENTAÇÃO":"PRESENTATION");
-        ImGui::SameLine();
-        ImGui::Text("%.1f%%",fractionStage*100.f);
-        drawProfessionalProgressTrack(names[i],names[i],fractionStage,
-                                      width,11.f);
-        ImGui::Spacing();
-    }
+    const double phaseSeconds=inspectionPresentationSeconds/phaseCount;
+    const int activeIndex=std::clamp(static_cast<int>(elapsed/phaseSeconds),
+                                     0,phaseCount-1);
+    const float activeProgress=std::clamp(
+        static_cast<float>((elapsed-activeIndex*phaseSeconds)/phaseSeconds),
+        0.f,1.f);
+    const char* activeName=displayLanguage==1?
+        phaseNamesPt[activeIndex]:phaseNames[activeIndex];
+    ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
+    ImGui::TextUnformatted(activeName);
+    ImGui::SameLine();
+    ImGui::Text("%.1f%%",activeProgress*100.f);
+    drawProfessionalProgressTrack("active-stage",activeName,activeProgress,
+                                  width,11.f);
+    ImGui::Spacing();
     const char* phase=scanFailed?"INSPECTION FAILED":
         scanCancelled?"INSPECTION CANCELLED":
-        done?(verified>=100?"INSPECTION COMPLETE":"EVIDENCE COLLECTED - PRESENTING RESULTS"):
+        done?(verified>=100?"INSPECTION COMPLETE":"FINALIZING INSPECTION"):
         scanning?(cancelRequested?"CANCELLING INSPECTION":
             stages[std::clamp(stage.load(),0,5)]):"READY";
     ImGui::TextDisabled("%s",localized(phase));
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Each presentation segment takes 2 minutes. Actual evidence collection runs independently; results unlock only after both finish.");
+        ImGui::SetTooltip("Progress uses timed visual stages. Actual evidence collection may finish sooner; results unlock after both finish.");
 }
 
 static void renderUI() {
@@ -5821,9 +5888,6 @@ static void renderUI() {
     // Investigation pages show the lock from launch until scan completion and 100%.
     if(page==0 && (scanning || done) && inspectionDisplayPercent()<100){
         drawAtlasProgress(false);
-        ImGui::TextDisabled("%s",
-            done ? "EVIDENCE COLLECTED - PRESENTING RESULTS" :
-                "FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
     float available=ImGui::GetContentRegionAvail().x;
@@ -5956,8 +6020,8 @@ static void renderUI() {
             ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else if(done && inspectionDisplayPercent()<100){
-            ImGui::TextColored(accent,"EVIDENCE COLLECTED - PREPARING RESULTS");
-            ImGui::TextDisabled("Results unlock at 100%%. Please wait.");
+            ImGui::TextColored(accent,"FINALIZING INSPECTION");
+            ImGui::TextDisabled("Results unlock at 100%% after the scan completes.");
         }else{
             if(accentButton(localized("START FULL INSPECTION"),
                 ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
