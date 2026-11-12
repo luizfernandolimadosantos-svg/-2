@@ -1863,6 +1863,154 @@ static std::vector<Record> inspectFiveMSafeTestMarkers(){
     return result;
 }
 
+
+// Read-only executable provenance audit. No score and no malware verdict.
+// Checks misleading executable names and Mark-of-the-Web metadata for active
+// process images; each file is visited once, with bounded I/O.
+static std::vector<Record> inspectExecutableProvenance(
+    const std::vector<Process>& items) {
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> visited;
+    size_t inspected=0;
+    for(const auto& proc:items) {
+        if(cancelRequested || inspected>=350)break;
+        if(proc.path.empty() || proc.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(proc.path);
+        if(!visited.insert(path).second)continue;
+        ++inspected;
+        const fs::path exe(proc.path);
+        const std::wstring filename=lowerPath(exe.filename().wstring());
+        // An executable named like a document is worth reviewing, but is not
+        // proof of malicious activity.
+        static const wchar_t* deceptiveSuffixes[]={
+            L".pdf.exe",L".jpg.exe",L".jpeg.exe",L".png.exe",
+            L".doc.exe",L".docx.exe",L".txt.exe",L".zip.exe",
+            L".mp4.exe",L".xlsx.exe",L".scr.exe"
+        };
+        for(const auto* suffix:deceptiveSuffixes){
+            const std::wstring tail(suffix);
+            if(filename.size()>=tail.size() &&
+               filename.compare(filename.size()-tail.size(),tail.size(),tail)==0){
+                out.push_back({"Executable Provenance",utf8(exe.filename().wstring()),
+                    "REVIEW: Active executable has a document/media-like double extension. "
+                    "Path: "+utf8(proc.path)+" | This alone does not establish malware."});
+                break;
+            }
+        }
+        // Zone.Identifier is an optional NTFS alternate data stream written by
+        // Windows and browsers. Its absence is normal and not a clean verdict.
+        const std::wstring ads=proc.path+L":Zone.Identifier";
+        HANDLE file=CreateFileW(ads.c_str(),GENERIC_READ,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+            OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(file==INVALID_HANDLE_VALUE)continue;
+        char buffer[2049]={};
+        DWORD bytes=0;
+        const BOOL ok=ReadFile(file,buffer,2048,&bytes,nullptr);
+        CloseHandle(file);
+        if(!ok || !bytes)continue;
+        const std::string zone(buffer,bytes);
+        const size_t pos=zone.find("ZoneId=");
+        if(pos==std::string::npos)continue;
+        const size_t digit=pos+7;
+        if(digit>=zone.size())continue;
+        if(zone[digit]=='3' || zone[digit]=='4'){
+            out.push_back({"Executable Provenance",utf8(exe.filename().wstring()),
+                std::string("INFO: Running executable carries Mark-of-the-Web ZoneId=")+
+                zone[digit]+" (Internet/Restricted). Path: "+utf8(proc.path)+
+                " | Origin metadata only; not a malware verdict."});
+        }
+    }
+    return out;
+}
+
+
+// Engine 3.0: bounded, read-only inspection of modules actually loaded by
+// processes. Findings describe evidence, not a confirmed injection or infection.
+static std::vector<Record> inspectLoadedModuleProvenance(
+    const std::vector<Process>& items){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    const std::wstring windows=lowerPath(windowsRoot());
+    wchar_t tempBuf[MAX_PATH]={};
+    const DWORD tempLen=GetTempPathW(MAX_PATH,tempBuf);
+    const std::wstring temp=(tempLen && tempLen<MAX_PATH)?
+        lowerPath(std::wstring(tempBuf,tempLen)):L"";
+    size_t processesChecked=0, modulesChecked=0, signatureChecks=0;
+    for(const auto& proc:items){
+        if(cancelRequested || processesChecked>=90 || modulesChecked>=1200)break;
+        if(proc.pid==0 || proc.pid==4)continue;
+        ++processesChecked;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,proc.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W module{};module.dwSize=sizeof(module);
+        if(Module32FirstW(snapshot,&module)){
+            do{
+                if(cancelRequested || modulesChecked>=1200)break;
+                ++modulesChecked;
+                const std::wstring path=module.szExePath;
+                if(path.empty() || !seen.insert(lowerPath(path)).second)continue;
+                const std::wstring normalized=lowerPath(path);
+                const bool inWindows=startsWithPath(normalized,windows);
+                const bool inTemp=!temp.empty() && startsWithPath(normalized,temp);
+                const bool inUserTemp=
+                    normalized.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos;
+                if(inTemp || inUserTemp){
+                    out.push_back({"Module Provenance",utf8(module.szModule),
+                        "NEEDS REVIEW | A running process loaded a module from a temporary "
+                        "directory. Process: "+utf8(proc.name)+
+                        " | Module: "+utf8(path)+
+                        " | Why: temporary paths are unusual for persistent libraries. "
+                        "Check the publisher and application context; this is not proof of injection."});
+                }
+                // Validate a limited number of non-Windows modules. Unsigned
+                // modules are common and are recorded as informational only.
+                if(!inWindows && signatureChecks<75){
+                    ++signatureChecks;
+                    const std::string sig=signatureStatus(path);
+                    if(sig.find("Valid")==std::string::npos){
+                        out.push_back({"Module Signature",utf8(module.szModule),
+                            "INFO | Signature verification: "+sig+
+                            " | Loaded by: "+utf8(proc.name)+
+                            " | Path: "+utf8(path)+
+                            " | Missing/invalid signatures alone do not prove malware."});
+                    }
+                }
+            }while(Module32NextW(snapshot,&module));
+        }
+        CloseHandle(snapshot);
+    }
+    return out;
+}
+
+// Read-only review of active executables located in temporary folders.
+static std::vector<Record> inspectTemporaryExecutables(
+    const std::vector<Process>& items){
+    std::vector<Record> out;
+    wchar_t tempBuf[MAX_PATH]={};
+    const DWORD len=GetTempPathW(MAX_PATH,tempBuf);
+    const std::wstring temp=(len && len<MAX_PATH)?
+        lowerPath(std::wstring(tempBuf,len)):L"";
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:items){
+        if(cancelRequested)break;
+        if(proc.path.empty())continue;
+        const std::wstring path=lowerPath(proc.path);
+        if(!seen.insert(path).second)continue;
+        if((!temp.empty() && startsWithPath(path,temp)) ||
+           path.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos){
+            out.push_back({"Executable Location",utf8(proc.name),
+                "NEEDS REVIEW | An active executable is running from a temporary "
+                "folder. PID: "+std::to_string(proc.pid)+
+                " | Path: "+utf8(proc.path)+
+                " | What to check: publisher, file origin and expected installer activity. "
+                "Temporary-folder execution alone does not mean malware."});
+        }
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -1920,6 +2068,9 @@ static void scanWorker() {
         auto logon=inspectLogonConfiguration();
         auto hosts=inspectHostsFile();
         auto peFindings=inspectPeStructure(p);
+        auto provenance=inspectExecutableProvenance(p);
+        auto loadedModules=inspectLoadedModuleProvenance(p);
+        auto temporaryExecutables=inspectTemporaryExecutables(p);
         auto timeline=collectWindowsTimeline();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
@@ -1941,6 +2092,9 @@ static void scanWorker() {
         services.insert(services.end(),logon.begin(),logon.end());
         services.insert(services.end(),hosts.begin(),hosts.end());
         services.insert(services.end(),peFindings.begin(),peFindings.end());
+        services.insert(services.end(),provenance.begin(),provenance.end());
+        services.insert(services.end(),loadedModules.begin(),loadedModules.end());
+        services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
