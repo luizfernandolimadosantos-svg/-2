@@ -244,6 +244,9 @@ static void applyWindowPreset(){
 static bool highlightSuspicious=true, showSecurityWarnings=true;
 static bool brandAnimation=true, showNavHover=true;
 static bool ambientMotesEnabled=true;
+static bool reducedMotion=false;
+static int rainDensity=1; // 0 light, 1 balanced, 2 dense
+static const char* rainDensityNames[]={"Light","Balanced","Dense"};
 static int cornerStyle=1, scrollbarWidth=1;
 static const char* cornerStyleNames[]={"Square","Soft","Rounded"};
 static const char* scrollbarWidthNames[]={"Thin","Standard","Wide"};
@@ -1628,6 +1631,203 @@ static std::vector<TimelineEvent> collectWindowsTimeline() {
         });
     return output;
 }
+
+// 120 individual read-only Windows security policy probes. A missing value
+// is NOT an adverse detection. Unfamiliar values are inventory-only.
+static std::vector<Record> inspectPolicyRuleSet(){
+    struct PolicyRule{
+        const wchar_t* key;
+        const wchar_t* value;
+        int suspicious; // -1: inventory only
+        const char* id;
+    };
+    static const PolicyRule rules[]={
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableAntiSpyware", 1, "POL-001"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableAntiVirus", 1, "POL-002"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableRoutinelyTakingAction", -1, "POL-003"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"PUAProtection", -1, "POL-004"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"ServiceKeepAlive", -1, "POL-005"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableLocalAdminMerge", -1, "POL-006"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"RandomizeScheduleTaskTimes", -1, "POL-007"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"ScanAvgCPULoadFactor", -1, "POL-008"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableCatchupFullScan", -1, "POL-009"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender", L"DisableCatchupQuickScan", -1, "POL-010"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableRealtimeMonitoring", 1, "POL-011"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableBehaviorMonitoring", 1, "POL-012"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableOnAccessProtection", 1, "POL-013"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableScanOnRealtimeEnable", -1, "POL-014"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableIOAVProtection", 1, "POL-015"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableScriptScanning", 1, "POL-016"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableRawWriteNotification", -1, "POL-017"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableIntrusionPreventionSystem", -1, "POL-018"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableInformationProtectionControl", -1, "POL-019"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"LocalSettingOverrideDisableRealtimeMonitoring", -1, "POL-020"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SpynetReporting", -1, "POL-021"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SubmitSamplesConsent", -1, "POL-022"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"DisableBlockAtFirstSeen", 1, "POL-023"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"LocalSettingOverrideSpynetReporting", -1, "POL-024"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"LocalSettingOverrideSubmitSamplesConsent", -1, "POL-025"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"DisableCloudProtection", -1, "POL-026"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"CloudBlockLevel", -1, "POL-027"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"CloudExtendedTimeout", -1, "POL-028"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SpyNetReportingLocation", -1, "POL-029"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"DisableSpyNetReporting", -1, "POL-030"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableRemovableDriveScanning", -1, "POL-031"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableScanningNetworkFiles", -1, "POL-032"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableArchiveScanning", 1, "POL-033"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableEmailScanning", -1, "POL-034"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableHeuristics", 1, "POL-035"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisablePackedExeScanning", -1, "POL-036"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableReparsePointScanning", -1, "POL-037"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableRestorePoint", -1, "POL-038"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupQuickScan", -1, "POL-039"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupFullScan", -1, "POL-040"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"ForceUpdateFromMU", -1, "POL-041"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableUpdateOnStartupWithoutEngine", -1, "POL-042"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"SignatureUpdateInterval", -1, "POL-043"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"FallbackOrder", -1, "POL-044"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableScanOnUpdate", -1, "POL-045"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableUpdateOnStartup", -1, "POL-046"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"SignatureUpdateCatchupInterval", -1, "POL-047"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"ScheduleDay", -1, "POL-048"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"ScheduleTime", -1, "POL-049"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"UpdateOnStartUp", -1, "POL-050"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpCloudBlockLevel", -1, "POL-051"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpBafsExtendedTimeout", -1, "POL-052"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"EnableFileHashComputation", -1, "POL-053"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"DisableBlockAtFirstSeen", 1, "POL-054"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEnablePus", -1, "POL-055"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEnablePusAuditMode", -1, "POL-056"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEngineRing", -1, "POL-057"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEngineVersion", -1, "POL-058"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEngineSignatureVersion", -1, "POL-059"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEnginePlatformVersion", -1, "POL-060"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableSmartScreen", 0, "POL-061"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"ShellSmartScreenLevel", -1, "POL-062"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableCdp", -1, "POL-063"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"AllowCrossDeviceClipboard", -1, "POL-064"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableActivityFeed", -1, "POL-065"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"PublishUserActivities", -1, "POL-066"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"UploadUserActivities", -1, "POL-067"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DisableCMD", -1, "POL-068"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DisableRegistryTools", -1, "POL-069"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableMPR", -1, "POL-070"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableLUA", 0, "POL-071"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"ConsentPromptBehaviorAdmin", -1, "POL-072"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"ConsentPromptBehaviorUser", -1, "POL-073"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"PromptOnSecureDesktop", -1, "POL-074"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"FilterAdministratorToken", -1, "POL-075"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableInstallerDetection", -1, "POL-076"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableSecureUIAPaths", -1, "POL-077"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"ValidateAdminCodeSignatures", -1, "POL-078"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableVirtualization", -1, "POL-079"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"LocalAccountTokenFilterPolicy", -1, "POL-080"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"EnableVirtualizationBasedSecurity", -1, "POL-081"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"RequirePlatformSecurityFeatures", -1, "POL-082"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"Locked", -1, "POL-083"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"HypervisorEnforcedCodeIntegrity", -1, "POL-084"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"HVCIMATRequired", -1, "POL-085"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"LsaCfgFlags", -1, "POL-086"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"ConfigureSystemGuardLaunch", -1, "POL-087"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"Mandatory", -1, "POL-088"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"SecureLaunch", -1, "POL-089"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard", L"Scenarios", -1, "POL-090"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"RunAsPPL", 0, "POL-091"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"RunAsPPLBoot", -1, "POL-092"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"LsaCfgFlags", -1, "POL-093"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"DisableRestrictedAdmin", -1, "POL-094"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"DisableRestrictedAdminOutboundCreds", -1, "POL-095"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"LimitBlankPasswordUse", 0, "POL-096"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"NoLMHash", 0, "POL-097"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"LmCompatibilityLevel", -1, "POL-098"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"RestrictAnonymous", -1, "POL-099"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa", L"RestrictAnonymousSAM", -1, "POL-100"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"VerifiedAndReputablePolicyState", -1, "POL-101"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"UpgradedSystem", -1, "POL-102"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"SkuPolicyRequired", -1, "POL-103"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"SkuPolicyRequiredDebug", -1, "POL-104"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"DebugFlags", -1, "POL-105"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"Enabled", -1, "POL-106"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"PolicyId", -1, "POL-107"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"PolicyVersion", -1, "POL-108"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"HVCIEnabled", -1, "POL-109"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy", L"AuditMode", -1, "POL-110"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"EnableVirtualizationBasedSecurity", -1, "POL-111"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"RequirePlatformSecurityFeatures", -1, "POL-112"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"HypervisorEnforcedCodeIntegrity", -1, "POL-113"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"LsaCfgFlags", -1, "POL-114"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"ConfigureSystemGuardLaunch", -1, "POL-115"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"Locked", -1, "POL-116"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"HVCIMATRequired", -1, "POL-117"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"EnableCredentialGuard", -1, "POL-118"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"EnableHVCI", -1, "POL-119"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard", L"SecureLaunch", -1, "POL-120"},
+    };
+    std::vector<Record> out;
+    for(const auto& rule:rules){
+        if(cancelRequested)break;
+        DWORD value=0;
+        if(!readRegistryDword(HKEY_LOCAL_MACHINE,rule.key,rule.value,value))
+            continue;
+        const bool review=rule.suspicious>=0 &&
+            value==static_cast<DWORD>(rule.suspicious);
+        std::string detail=std::string(rule.id)+" | DWORD="+
+            std::to_string(value)+(review?
+            " | REVIEW: security-related configuration; verify effective state":
+            " | Observed policy value; not a threat verdict");
+        out.push_back({"Security Policy Audit",utf8(rule.value),detail});
+    }
+    return out;
+}
+// Firmware and DMA: query supported Windows indicators. These checks do not
+// claim to detect malicious firmware implants or DMA hardware directly.
+static std::vector<Record> inspectFirmwareAndDmaIndicators(){
+    std::vector<Record> out;
+    FIRMWARE_TYPE firmware=FirmwareTypeUnknown;
+    if(GetFirmwareType(&firmware)){
+        out.push_back({"UEFI / Firmware","Boot firmware type",
+            firmware==2?"UEFI firmware reported by Windows":
+            firmware==1?"Legacy BIOS reported by Windows":
+            "Firmware type unknown"});
+    }
+    DWORD secureBoot=0;
+    if(readRegistryDword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+        L"UEFISecureBootEnabled",secureBoot)){
+        out.push_back({"UEFI / Firmware","Secure Boot state",
+            std::string("UEFISecureBootEnabled=")+std::to_string(secureBoot)+
+            (secureBoot==0?" | REVIEW: Secure Boot disabled":
+             " | Reported enabled")});
+    }
+    const struct{const wchar_t* key;const wchar_t* name;const char* label;} checks[]={
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+         L"EnableVirtualizationBasedSecurity","VBS configured"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+         L"Enabled","HVCI configured"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",
+         L"Enabled","Credential Guard configured"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",
+         L"Enabled","System Guard configured"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+         L"RequirePlatformSecurityFeatures","Platform security requirements"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\Kernel DMA Protection",
+         L"DeviceEnumerationPolicy","Kernel DMA device enumeration policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions",
+         L"DenyUnspecified","Device installation restrictions"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+         L"RunAsPPL","LSA protection configuration"},
+    };
+    for(const auto& check:checks){
+        if(cancelRequested)break;
+        DWORD v=0;
+        if(readRegistryDword(HKEY_LOCAL_MACHINE,check.key,check.name,v))
+            out.push_back({"Firmware / DMA Posture",check.label,
+                "Configured DWORD="+std::to_string(v)+
+                " | Configuration indicator, not direct DMA/EFI compromise detection"});
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -1657,6 +1857,8 @@ static void scanWorker() {
         completedStages=4;
         stage=5;
         auto security=inspectWindowsSecurityConfiguration();
+        auto policyRules=inspectPolicyRuleSet();
+        auto firmwareIndicators=inspectFirmwareAndDmaIndicators();
         // Capture-protection diagnostics: inspect only our own window.
         // A protected window is not evidence of malware, and this does not
         // enumerate or bypass other applications' capture settings.
@@ -1693,6 +1895,8 @@ static void scanWorker() {
         services.insert(services.end(),usb.begin(),usb.end());
         services.insert(services.end(),defender.begin(),defender.end());
         services.insert(services.end(),security.begin(),security.end());
+        services.insert(services.end(),policyRules.begin(),policyRules.end());
+        services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),ifeo.begin(),ifeo.end());
         services.insert(services.end(),advancedPersistence.begin(),advancedPersistence.end());
         services.insert(services.end(),extendedEndpoint.begin(),extendedEndpoint.end());
@@ -3597,15 +3801,17 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     // Low-opacity rain stays subtle even when drawn over opaque panels.
     // Several speeds and lengths add depth without per-frame randomness.
     // Positions are stable across frames and wrap smoothly at the bottom.
-    for(int i=0;i<115;++i){
+    const int rainDrops=rainDensity==0?48:rainDensity==2?150:85;
+    for(int i=0;i<rainDrops;++i){
         const float seed=static_cast<float>(i+1);
         const float xFrac=std::fmod(seed*.61803398875f,1.f);
         const float offset=std::fmod(seed*.41421356237f,1.f);
         const float speed=85.f+static_cast<float>(i%9)*21.f;
         const float length=13.f+static_cast<float>(i%7)*6.f;
         const float travel=size.y+length+40.f;
+        const float rainTime=reducedMotion?0.f:t;
         const float y=origin.y-length-20.f+
-            std::fmod(offset*travel+t*speed,travel);
+            std::fmod(offset*travel+rainTime*speed,travel);
         const float x=origin.x+9.f+xFrac*(size.x-18.f);
         const int shade=130+(i%4)*20;
         const int alpha=15+(i%5)*5;
@@ -3629,7 +3835,7 @@ static void drawAtlasProgress(bool compact=false){
     const ImVec2 p=ImGui::GetCursorScreenPos();
     const ImVec2 q(p.x+width,p.y+height);
     ImDrawList* dl=ImGui::GetWindowDrawList();
-    const float t=static_cast<float>(ImGui::GetTime());
+    const float t=reducedMotion?0.f:static_cast<float>(ImGui::GetTime());
     dl->AddRectFilled(p,q,IM_COL32(25,25,25,255),9.f);
     dl->AddRect(p,q,IM_COL32(98,98,98,195),9.f,0,1.1f);
     if(fraction>0.001f){
@@ -3793,7 +3999,7 @@ static void renderUI() {
     static float navTransitionStart=0.f;
     const float uiNow=(float)ImGui::GetTime();
     const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
-    if(pageChanged)navTransitionStart=uiNow;
+    if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
     lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
                        "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","KERNEL MEMORY DUMP","PREFERENCES"};
@@ -3954,7 +4160,8 @@ static void renderUI() {
         ImGui::GetTime()-unlockAnimationStart : 100.0;
     const bool unlocking=!waitingForPresentation &&
         unlockElapsed<1.65;
-    if((waitingForPresentation || unlocking) && page!=0 && page!=4) {
+    if((waitingForPresentation || (unlocking && !reducedMotion)) &&
+       page!=0 && page!=4) {
         const float opening=unlocking?
             std::clamp(static_cast<float>(unlockElapsed/1.25),0.f,1.f):0.f;
         const float eased=opening*opening*(3.f-2.f*opening);
@@ -4490,7 +4697,15 @@ static void renderUI() {
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"INTERFACE DETAILS");
         ImGui::Checkbox("Animate scanner branding",&brandAnimation);
-        ImGui::Checkbox("Ambient particles across the window",&ambientMotesEnabled);
+        ImGui::Checkbox("Monochrome rain across the window",&ambientMotesEnabled);
+        ImGui::BeginDisabled(!ambientMotesEnabled);
+        ImGui::SetNextItemWidth(200);
+        ImGui::Combo("Rain density",&rainDensity,rainDensityNames,
+                     IM_ARRAYSIZE(rainDensityNames));
+        ImGui::EndDisabled();
+        ImGui::Checkbox("Reduce motion (disable transition and unlock animations)",
+                        &reducedMotion);
+        ImGui::TextDisabled("Rain stays static with Reduce motion; scan results remain protected.");
         ImGui::Checkbox("Highlight navigation on hover",&showNavHover);
         ImGui::TextDisabled("Animations are visual only; scanning is unaffected.");
         ImGui::Spacing();
@@ -4538,6 +4753,47 @@ static void renderUI() {
             } catch(...) {status="Executable verification failed";}
         }
         ImGui::EndChild();
+    }
+    // Atlas navigation transition: a short monochrome cinematic wipe.
+    // Rendered over the content only, so navigation and the top bar stay
+    // responsive. No result state, scan progress or evidence is modified.
+    if(!reducedMotion && navTransitionStart>0.f){
+        const float dt=static_cast<float>(ImGui::GetTime())-navTransitionStart;
+        constexpr float duration=.56f;
+        if(dt>=0.f && dt<duration){
+            const float progress=std::clamp(dt/duration,0.f,1.f);
+            const float smooth=progress*progress*(3.f-2.f*progress);
+            const ImVec2 lo=ImGui::GetWindowPos();
+            const ImVec2 sz=ImGui::GetWindowSize();
+            const ImVec2 hi(lo.x+sz.x,lo.y+sz.y);
+            ImDrawList* transitionDraw=ImGui::GetWindowDrawList();
+            transitionDraw->PushClipRect(lo,hi,true);
+            // The initial dark veil lifts, making the destination appear.
+            const float veil=(1.f-smooth)*(1.f-smooth);
+            transitionDraw->AddRectFilled(lo,hi,
+                IM_COL32(9,9,9,static_cast<int>(208.f*veil)));
+            // Bright scanning edge travels across the content horizontally.
+            const float edgeX=lo.x-70.f+(sz.x+140.f)*smooth;
+            const float edgeAlpha=std::sin(progress*3.14159265f);
+            for(int stripe=12;stripe>=0;--stripe){
+                const float x=edgeX-static_cast<float>(stripe)*5.f;
+                const int alpha=static_cast<int>(
+                    100.f*edgeAlpha*(1.f-stripe/13.f));
+                transitionDraw->AddRectFilled(
+                    ImVec2(x,lo.y),ImVec2(x+5.f,hi.y),
+                    IM_COL32(222,222,222,alpha));
+            }
+            transitionDraw->AddLine(
+                ImVec2(edgeX,lo.y+12.f),ImVec2(edgeX,hi.y-12.f),
+                IM_COL32(245,245,245,
+                    static_cast<int>(190.f*edgeAlpha)),1.6f);
+            // Brief top-edge confirmation flash, no colored highlights.
+            transitionDraw->AddRectFilled(
+                ImVec2(lo.x,lo.y),ImVec2(hi.x,lo.y+2.f),
+                IM_COL32(234,234,234,
+                    static_cast<int>(125.f*edgeAlpha)));
+            transitionDraw->PopClipRect();
+        }
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -4600,7 +4856,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
         ImGui::Render();
-        const float clear[4]={.047f,.069f,.088f,1};
+        const float clear[4]={.035f,.035f,.035f,1.f};
         context->OMSetRenderTargets(1,&target,nullptr);
         context->ClearRenderTargetView(target,clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
