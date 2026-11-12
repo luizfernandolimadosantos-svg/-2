@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <winioctl.h>
 #include <windowsx.h>
 #include <ctime>
 #include <cmath>
@@ -35,6 +36,7 @@
 #include <cctype>
 #include <cwctype>
 #include <unordered_set>
+#include <unordered_map>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -61,6 +63,29 @@
 #pragma comment(lib,"iphlpapi.lib")
 #pragma comment(lib,"ws2_32.lib")
 #pragma comment(lib,"psapi.lib")
+
+// Compile-time XOR obfuscation for selected non-sensitive UI literals.
+// This is not cryptography; decoded text is present during use.
+namespace sync_xor {
+template <std::size_t N, unsigned char Key = 0xA7>
+struct Literal {
+    std::array<char,N> encoded{};
+    consteval Literal(const char (&value)[N]) {
+        for(std::size_t i=0;i<N;++i)
+            encoded[i]=static_cast<char>(static_cast<unsigned char>(value[i]) ^ Key);
+    }
+    std::string decode() const {
+        std::string result;
+        result.resize(N-1);
+        for(std::size_t i=0;i<N-1;++i)
+            result[i]=static_cast<char>(static_cast<unsigned char>(encoded[i]) ^ Key);
+        return result;
+    }
+};
+template <Literal Value>
+std::string decode() { return Value.decode(); }
+}
+#define XOR_STR(value) (::sync_xor::decode<::sync_xor::Literal{value}>())
 
 namespace fs=std::filesystem;
 
@@ -2939,6 +2964,94 @@ static std::vector<Record> inspectServiceImagePathIndicators(){
     return out;
 }
 
+
+// Read-only bypass / evidence-integrity diagnostics.
+// Findings indicate review candidates, not proof of bypass usage.
+static std::vector<Record> inspectBypassEvidenceIntegrity(){
+    std::vector<Record> out;
+    auto add=[&](const char* name,const std::string& detail){
+        out.push_back({"Bypass Detection",name,detail});
+    };
+    auto readDword=[&](HKEY root,const wchar_t* key,const wchar_t* value,DWORD& data)->bool{
+        HKEY h=nullptr;
+        if(RegOpenKeyExW(root,key,0,KEY_QUERY_VALUE,&h)!=ERROR_SUCCESS)return false;
+        DWORD type=0,size=sizeof(data);
+        LONG rc=RegQueryValueExW(h,value,nullptr,&type,
+            reinterpret_cast<BYTE*>(&data),&size);
+        RegCloseKey(h);
+        return rc==ERROR_SUCCESS && type==REG_DWORD && size==sizeof(data);
+    };
+    DWORD value=0;
+    if(readDword(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters",
+        L"EnablePrefetcher",value)){
+        if(value==0)add("Prefetch configuration",
+            "NEEDS REVIEW | Prefetch is disabled in registry. This may be an administrative setting; not proof of tampering.");
+        else add("Prefetch configuration",
+            "INFO | Prefetch registry setting is present and not disabled.");
+    }else add("Prefetch configuration",
+        "UNAVAILABLE | Prefetch registry value not accessible or not configured; no conclusion.");
+    if(readDword(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Error Reporting",
+        L"Disabled",value) && value!=0)
+        add("Error reporting policy",
+            "NEEDS REVIEW | Windows Error Reporting disabled by policy; may be legitimate administration.");
+    if(readDword(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+        L"EnableScriptBlockLogging",value)){
+        if(value==0)add("PowerShell logging policy",
+            "NEEDS REVIEW | Script block logging explicitly disabled by policy; not proof of bypass.");
+        else add("PowerShell logging policy",
+            "INFO | Script block logging enabled by policy.");
+    }else add("PowerShell logging policy",
+        "INFO | No readable explicit script block logging policy; default behavior varies.");
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
+    if(scm){
+        for(const wchar_t* serviceName:{L"EventLog",L"WinDefend",L"wuauserv"}){
+            SC_HANDLE svc=OpenServiceW(scm,serviceName,SERVICE_QUERY_STATUS|SERVICE_QUERY_CONFIG);
+            if(!svc){
+                add("Security service visibility","UNAVAILABLE | Service status not accessible.");
+                continue;
+            }
+            SERVICE_STATUS_PROCESS status{};
+            DWORD needed=0;
+            if(QueryServiceStatusEx(svc,SC_STATUS_PROCESS_INFO,
+                reinterpret_cast<LPBYTE>(&status),sizeof(status),&needed)){
+                if(status.dwCurrentState==SERVICE_STOPPED)
+                    add("Security service status",
+                        std::string("NEEDS REVIEW | Service stopped: ")+utf8(serviceName)+
+                        ". This may be expected on some systems.");
+            }
+            CloseServiceHandle(svc);
+        }
+        CloseServiceHandle(scm);
+    }else add("Security service visibility",
+        "UNAVAILABLE | Cannot query Windows service manager.");
+    // Query USN metadata only. Never enumerate deleted files or alter the journal.
+    wchar_t windowsPath[MAX_PATH]={};
+    UINT n=GetWindowsDirectoryW(windowsPath,MAX_PATH);
+    if(n>2 && n<MAX_PATH && windowsPath[1]==L':'){
+        wchar_t volume[]=L"\\\\.\\C:";
+        volume[4]=windowsPath[0];
+        HANDLE h=CreateFileW(volume,GENERIC_READ,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+            OPEN_EXISTING,0,nullptr);
+        if(h!=INVALID_HANDLE_VALUE){
+            USN_JOURNAL_DATA_V0 journal{};
+            DWORD bytes=0;
+            if(DeviceIoControl(h,FSCTL_QUERY_USN_JOURNAL,nullptr,0,
+                &journal,sizeof(journal),&bytes,nullptr)){
+                add("USN Journal availability",
+                    "INFO | System-volume USN journal metadata is readable. Journal availability alone does not prove historical coverage.");
+            }else add("USN Journal availability",
+                "UNAVAILABLE | USN journal cannot be queried (permissions, filesystem, or no journal).");
+            CloseHandle(h);
+        }else add("USN Journal availability",
+            "UNAVAILABLE | System volume cannot be opened for read-only journal metadata query.");
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -3017,6 +3130,7 @@ static void scanWorker() {
         auto loadedModules=inspectLoadedModuleProvenance(p);
         auto temporaryExecutables=inspectTemporaryExecutables(p);
         auto timeline=collectWindowsTimeline();
+        auto bypassIntegrity=inspectBypassEvidenceIntegrity();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -3027,6 +3141,7 @@ static void scanWorker() {
         services.insert(services.end(),usb.begin(),usb.end());
         services.insert(services.end(),defender.begin(),defender.end());
         services.insert(services.end(),security.begin(),security.end());
+        services.insert(services.end(),bypassIntegrity.begin(),bypassIntegrity.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -4208,7 +4323,7 @@ static void drawProcessDetails() {
     ImGui::Text("Loaded modules: %zu",selectedModules.size());
     ImGui::TextDisabled("Read-only module inventory. Inaccessible modules are not evidence of malware.");
     if(selectedModules.empty())
-        ImGui::TextDisabled("No module list available (protected, exited, or access denied).");
+        ImGui::TextDisabled("%s",XOR_STR("No module list available (protected, exited, or access denied).").c_str());
     if(ImGui::BeginTable("detailModules",3,ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
         ImVec2(0,230))) {
@@ -4305,7 +4420,7 @@ static void drawServiceReviews() {
     ImGui::SameLine();
     ImGui::TextDisabled("Stopped automatic-start services are review candidates, not confirmed threats.");
     ImGui::Dummy(ImVec2(0,6));
-    ImGui::TextUnformatted("SEARCH  /");
+    ImGui::TextUnformatted(XOR_STR("SEARCH  /").c_str());
     ImGui::SameLine();
     ImGui::SetNextItemWidth((std::max)(100.f,ImGui::GetContentRegionAvail().x-245.f));
     ImGui::InputTextWithHint("##serviceSearch","Search service name, display name, state, assessment...",serviceSearch,sizeof(serviceSearch));
@@ -4397,7 +4512,7 @@ static void drawServiceReviews() {
 // are never inferred from that flag.
 static int processViewFilter=0; // 0 all, 1 suspect, 2 detected, 3 no indicators
 static void processTable(float height) {
-    ImGui::TextDisabled("PROCESS TRIAGE");
+    ImGui::TextDisabled("%s",XOR_STR("PROCESS TRIAGE").c_str());
     ImGui::SameLine();
     ImGui::TextColored(orange(),"READ-ONLY");
     ImGui::Dummy(ImVec2(0,3));
@@ -4595,7 +4710,7 @@ static void drawEvidenceDetails() {
         if(!evidenceSignature.empty())ImGui::TextWrapped("Signature: %s",evidenceSignature.c_str());
     }
     ImGui::Spacing();
-    ImGui::TextDisabled("Evidence is observational; an indicator alone does not confirm a threat.");
+    ImGui::TextDisabled("%s",XOR_STR("Evidence is observational; an indicator alone does not confirm a threat.").c_str());
     ImGui::End();
 }
 static void recordsTable() {
@@ -4915,7 +5030,7 @@ static bool exportReport(const Report& r,bool csv){
 }
 static void draw(){
     ImGui::SetWindowFontScale(1.55f);
-    ImGui::TextUnformatted("Binary Intelligence Studio");
+    ImGui::TextUnformatted(XOR_STR("Binary Intelligence Studio").c_str());
     ImGui::SetWindowFontScale(1.f);
     ImGui::TextDisabled("Offline PE analysis  |  DLL imports  |  Extracted strings  |  Hex viewer");
     ImGui::Dummy(ImVec2(0,14));
@@ -5944,7 +6059,7 @@ static void renderUI() {
             ImGui::Text("File size: %.2f MiB",
                 static_cast<double>(dumpBytes)/(1024.0*1024.0));
         if(!dumpHash.empty()){
-            ImGui::TextUnformatted("SHA-256");
+            ImGui::TextUnformatted(XOR_STR("SHA-256").c_str());
             ImGui::TextWrapped("%s",dumpHash.c_str());
             if(ImGui::Button("COPY SHA-256"))
                 ImGui::SetClipboardText(dumpHash.c_str());
@@ -6110,7 +6225,7 @@ static void renderUI() {
         ImGui::TextColored(orange(),"LANGUAGE");
         ImGui::Separator();
         ImGui::Text("Display language: English");
-        ImGui::TextDisabled("All interface labels and security assessments use English.");
+        ImGui::TextDisabled("%s",XOR_STR("All interface labels and security assessments use English.").c_str());
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"APPEARANCE");
         ImGui::Separator();
@@ -6191,7 +6306,7 @@ static void renderUI() {
         ImGui::TextDisabled("Preferences are stored locally in APPDATA\\SyncPCChecker\\settings.ini");
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextDisabled("APPLICATION INTEGRITY");
+        ImGui::TextDisabled("%s",XOR_STR("APPLICATION INTEGRITY").c_str());
         if(ImGui::Button("Verify Scanner Executable",ImVec2(240,38))) {
             try {
                 auto result=inspectFile(executablePath());
