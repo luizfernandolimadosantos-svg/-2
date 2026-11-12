@@ -1579,29 +1579,39 @@ static void runMemoryInspection(DWORD pid){
     }).detach();
 }
 static void drawMemoryInvestigation(const char* mode){
-    ImGui::TextWrapped("Read-only process memory inspection. Protected processes may deny access.");
-    ImGui::InputInt("Process ID (PID)",&memoryPid);
+    const ImVec4 accent(.64f,.78f,1,1);
+    const ImVec4 muted(.53f,.61f,.71f,1);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.060f,.081f,.117f,1));
+    ImGui::BeginChild("##memoryControls",ImVec2(0,161),ImGuiChildFlags_None);
+    ImGui::TextColored(accent,"TARGET PROCESS");
+    ImGui::TextColored(muted,"Read-only address-space inspection. Some protected processes deny access.");
+    ImGui::Dummy(ImVec2(0,9));
+    ImGui::SetNextItemWidth(190);
+    ImGui::InputInt("PID  /  PROCESS IDENTIFIER",&memoryPid,1,100);
     if(memoryPid<0)memoryPid=0;
-    ImGui::SameLine();
+    ImGui::SameLine(0,20);
     ImGui::BeginDisabled(memoryPid<=0||memoryBusy.load());
-    if(ImGui::Button("Inspect memory",ImVec2(150,34)))
+    if(ImGui::Button("RUN MEMORY INSPECTION",ImVec2(240,37)))
         runMemoryInspection((DWORD)memoryPid);
     ImGui::EndDisabled();
-    if(memoryBusy.load())ImGui::TextDisabled("Inspecting address space...");
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
     std::vector<MemoryFinding> findings;
     std::string status;size_t regions=0;
     {std::lock_guard<std::mutex> lock(memoryGuard);
         findings=memoryFindings;status=memoryStatus;regions=memoryRegionsChecked;}
-    ImGui::TextWrapped("%s",status.c_str());
-    ImGui::TextDisabled("%zu memory regions queried; %zu review entries (capped at 2,000).",
+    ImGui::Dummy(ImVec2(0,13));
+    ImGui::TextColored(accent,"INSPECTION RESULTS");
+    ImGui::TextColored(muted,"REGIONS QUERIED: %zu   /   REVIEW ENTRIES: %zu",
         regions,findings.size());
+    if(memoryBusy.load())ImGui::TextColored(accent,"Collecting accessible memory regions...");
+    else ImGui::TextWrapped("%s",status.c_str());
     if(std::strcmp(mode,"@hooks")==0){
-        ImGui::TextWrapped("This inspection checks executable memory protections only. "
-            "It cannot verify inline/IAT/EAT hooks; those require separate module-baseline analysis.");
+        ImGui::TextColored(muted,"Scope: memory protections only; inline/IAT/EAT hooks are not verified.");
     }else if(std::strcmp(mode,"@injection")==0){
-        ImGui::TextWrapped("Private executable or writable-executable memory is a possible "
-            "injection indicator, but is also used by legitimate JIT engines.");
+        ImGui::TextColored(muted,"Executable private regions are review indicators, not confirmed injection.");
     }
+    ImGui::Dummy(ImVec2(0,8));
     if(ImGui::BeginTable("memoryResults",4,ImGuiTableFlags_Borders|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
         ImGuiTableFlags_ScrollY,ImVec2(0,-40))){
@@ -1661,14 +1671,23 @@ static void modulesList() {
         ImGui::PopID();
     }
     if(openInspectorRequested) { ImGui::OpenPopup("Evidence inspector"); openInspectorRequested=false; }
-    ImGui::SetNextWindowSize(ImVec2(960,650),ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(
+        (std::max)(700.f,ImGui::GetIO().DisplaySize.x*.89f),
+        (std::max)(500.f,ImGui::GetIO().DisplaySize.y*.88f)),ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x*.5f,ImGui::GetIO().DisplaySize.y*.5f),ImGuiCond_Appearing,ImVec2(.5f,.5f));
     if(ImGui::BeginPopupModal("Evidence inspector",nullptr,ImGuiWindowFlags_NoSavedSettings)) {
         if(inspectedModule>=0 && inspectedModule<IM_ARRAYSIZE(inspectionModules)) {
             const auto& m=inspectionModules[inspectedModule];
-            ImGui::TextColored(orange(),"%s",m.title);
-            ImGui::SameLine();
-            ImGui::TextDisabled("  /  %s",m.implemented?"LIVE EVIDENCE":"NOT IMPLEMENTED");
-            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.09f,.13f,.20f,1));
+            ImGui::BeginChild("##inspectorBanner",ImVec2(0,108),ImGuiChildFlags_None);
+            ImGui::TextColored(ImVec4(.62f,.78f,1,1),"INVESTIGATION  /  %02d",inspectedModule+1);
+            ImGui::SetWindowFontScale(1.55f);
+            ImGui::TextUnformatted(m.title);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::TextDisabled("%s",m.implemented?"EVIDENCE INSPECTION":"MODULE UNAVAILABLE");
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0,10));
             ImGui::TextWrapped("%s",m.summary);
             if(!m.implemented) {
                 ImGui::Spacing();
@@ -1846,7 +1865,7 @@ static void modulesList() {
             }
         }
         ImGui::Separator();
-        if(ImGui::Button("Close",ImVec2(130,34)))ImGui::CloseCurrentPopup();
+        if(ImGui::Button("CLOSE INVESTIGATION",ImVec2(205,38)))ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }
@@ -2673,80 +2692,70 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // Black Edition: dedicated command rail, quiet title bar, broad data canvas.
-    // This layout does not contain any demonstration UI or fake scan progress.
+    // ATLAS: entirely different shell, no left rail, full-width operations canvas.
     if(page==1||page==5)page=0;
-    const ImVec4 pale(.92f,.94f,.98f,1.f);
-    const ImVec4 secondary(.48f,.54f,.63f,1.f);
-    const ImVec4 blue(.48f,.67f,1.f,1.f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.029f,.039f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,24));
-    ImGui::BeginChild("##blackCommandRail",ImVec2(212,0),ImGuiChildFlags_None);
-    if(syncLogoTexture)ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(52,52));
-    ImGui::Dummy(ImVec2(0,14));
-    ImGui::SetWindowFontScale(1.17f);
-    ImGui::TextColored(pale,"SYNC PC");
-    ImGui::TextColored(pale,"CHECKER");
+    const ImVec4 titleInk(.96f,.97f,1,1);
+    const ImVec4 subtleInk(.53f,.59f,.69f,1);
+    const ImVec4 accentInk(.63f,.77f,1,1);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.033f,.039f,.054f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
+    ImGui::BeginChild("##atlasHeader",ImVec2(0,83),ImGuiChildFlags_None);
+    if(syncLogoTexture){
+        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(44,44));
+        ImGui::SameLine(0,15);
+    }
+    ImGui::BeginGroup();
+    ImGui::SetWindowFontScale(1.24f);
+    ImGui::TextColored(titleInk,"SYNC PC CHECKER");
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextColored(secondary,"DEVELOPED BY MUDIN");
-    ImGui::Dummy(ImVec2(0,33));
-    ImGui::TextColored(secondary,"WORKSPACE");
-    ImGui::Dummy(ImVec2(0,12));
-    const char* labels[]={"Dashboard","Threat Analysis","Event Records",
-                          "Binary Lab","Preferences"};
-    const int targets[]={0,2,3,6,4};
+    ImGui::TextColored(subtleInk,"DEVELOPED BY MUDIN");
+    ImGui::EndGroup();
+    ImGui::SameLine(0,30);
+    ImGui::TextColored(accentInk,"ENDPOINT ANALYSIS");
+    float right=ImGui::GetWindowContentRegionMax().x;
+    ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
+    if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,7);
+    if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.030f,.042f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,11));
+    ImGui::BeginChild("##atlasNav",ImVec2(0,64),ImGuiChildFlags_None);
+    const char* nav[]={"01  DASHBOARD","02  THREAT ANALYSIS","03  EVENT RECORDS",
+                       "04  BINARY LAB","05  PREFERENCES"};
+    const int navPages[]={0,2,3,6,4};
     for(int i=0;i<5;i++){
-        ImGui::PushID(7700+i);
-        const bool active=page==targets[i];
+        ImGui::PushID(9100+i);
+        const bool active=page==navPages[i];
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.13f,.19f,.28f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.76f,.85f,1,1));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.22f,.34f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,accentInk);
         }
-        const ImVec2 pos=ImGui::GetCursorScreenPos();
-        if(ImGui::Button(labels[i],ImVec2(-1,50)))page=targets[i];
+        if(ImGui::Button(nav[i],ImVec2(i==1?188.f:i==2?175.f:155.f,41)))page=navPages[i];
         if(active){
-            const ImVec2 max=ImGui::GetItemRectMax();
+            ImVec2 lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(pos.x-18,pos.y+7),ImVec2(pos.x-14,max.y-7),
-                IM_COL32(103,158,255,255),2.f);
+                ImVec2(lo.x,hi.y-3),hi,IM_COL32(121,168,255,255));
             ImGui::PopStyleColor(2);
         }
         ImGui::PopID();
-        ImGui::Dummy(ImVec2(0,7));
+        if(i!=4)ImGui::SameLine(0,11);
     }
-    ImGui::Dummy(ImVec2(0,20));
-    ImGui::Separator();
-    ImGui::TextColored(secondary,"SCAN ENGINE");
-    ImGui::TextColored(scanning?blue:done?ImVec4(.49f,.84f,.69f,1):secondary,
-                       "%s",stateText());
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    ImGui::SameLine(0,0);
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.009f,.010f,.014f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(26,13));
-    ImGui::BeginChild("##blackWindowBar",ImVec2(0,68),ImGuiChildFlags_None);
-    ImGui::TextColored(secondary,"SYNC PC CHECKER  /  LOCAL SECURITY ANALYSIS");
-    const float right=ImGui::GetWindowContentRegionMax().x;
-    ImGui::SetCursorPos(ImVec2(right-111.f,6.f));
-    if(ImGui::Button("_##blackMinimize",ImVec2(44,34)))ShowWindow(hwnd,SW_MINIMIZE);
-    ImGui::SameLine(0,8);
-    if(ImGui::Button("X##blackClose",ImVec2(44,34)))PostMessageW(hwnd,WM_CLOSE,0,0);
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.019f,.022f,.028f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(28,24));
-    ImGui::BeginChild("##blackDataCanvas",ImVec2(0,0),ImGuiChildFlags_None);
-    const char* title=page==0?"Dashboard":page==2?"Threat Analysis":
-                      page==3?"Event Records":page==6?"Binary Lab":"Preferences";
-    ImGui::SetWindowFontScale(1.42f);
-    ImGui::TextColored(pale,"%s",title);
-    ImGui::SetWindowFontScale(1.f);
-    ImGui::TextColored(secondary,"Read-only Windows security inspection");
-    ImGui::Dummy(ImVec2(0,13));
-    ImGui::Separator();
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.015f,.019f,.028f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,26));
+    ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
+    const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
+        page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":"PREFERENCES";
+    ImGui::TextColored(accentInk,"SYNC / %s",section);
+    ImGui::SameLine(0,24);
+    ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     ImGui::Dummy(ImVec2(0,17));
     float available=ImGui::GetContentRegionAvail().x;
     if(page==0) {
@@ -3050,7 +3059,6 @@ static void renderUI() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    ImGui::EndGroup();
     ImGui::End();
     drawProcessDetails();
     drawEvidenceDetails();
