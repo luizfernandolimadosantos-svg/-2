@@ -7,7 +7,7 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <bcrypt.h>
-#include <winsvc.h>
+#include <winsvc.ha>
 #include <iphlpapi.h>
 #include <ws2tcpip.h>
 #include <winreg.h>
@@ -58,6 +58,12 @@ static std::atomic<int> stage{0};
 static std::string status="Ready for inspection";
 static int page=0;
 static bool confirmScan=false;
+static bool requestScanPopup=false;
+static std::atomic<bool> scanFailed{false};
+static std::atomic<bool> scanCancelled{false};
+static std::atomic<int> completedStages{0};
+static std::atomic<int> totalStages{4};
+static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
 static bool showUnavailable=true;
 static char fileInput[2048]="";
 static char searchInput[256]="";
@@ -269,37 +275,106 @@ static std::vector<Record> enumerateTcp() {
     return out;
 }
 
+
+// Read-only USBSTOR device inventory. This is not a historical connection timeline.
+static std::vector<Record> enumerateUsbStorage() {
+    std::vector<Record> out;
+    HKEY root=nullptr;
+    const wchar_t* key=L"SYSTEM\\CurrentControlSet\\Enum\\USBSTOR";
+    LONG rc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,key,0,KEY_READ,&root);
+    if(rc!=ERROR_SUCCESS) {
+        out.push_back({"USB","Unavailable","USBSTOR registry inventory could not be opened"});
+        return out;
+    }
+    for(DWORD i=0;i<512 && !cancelRequested;i++) {
+        wchar_t typeName[512]{};
+        DWORD n=512;
+        LONG result=RegEnumKeyExW(root,i,typeName,&n,nullptr,nullptr,nullptr,nullptr);
+        if(result==ERROR_NO_MORE_ITEMS)break;
+        if(result!=ERROR_SUCCESS)continue;
+        HKEY typeKey=nullptr;
+        if(RegOpenKeyExW(root,typeName,0,KEY_READ,&typeKey)!=ERROR_SUCCESS)continue;
+        for(DWORD j=0;j<256 && !cancelRequested;j++) {
+            wchar_t instance[512]{};
+            DWORD count=512;
+            LONG r=RegEnumKeyExW(typeKey,j,instance,&count,nullptr,nullptr,nullptr,nullptr);
+            if(r==ERROR_NO_MORE_ITEMS)break;
+            if(r!=ERROR_SUCCESS)continue;
+            out.push_back({"USB",utf8(typeName),utf8(instance)});
+        }
+        RegCloseKey(typeKey);
+    }
+    RegCloseKey(root);
+    return out;
+}
+
+// UDP IPv4 endpoints and owning processes, using the Windows IP Helper API.
+static std::vector<Record> enumerateUdp() {
+    std::vector<Record> out;
+    DWORD bytes=0;
+    DWORD rc=GetExtendedUdpTable(nullptr,&bytes,FALSE,AF_INET,UDP_TABLE_OWNER_PID,0);
+    if(rc!=ERROR_INSUFFICIENT_BUFFER || bytes==0)return out;
+    std::vector<unsigned char> buffer(bytes);
+    rc=GetExtendedUdpTable(buffer.data(),&bytes,FALSE,AF_INET,UDP_TABLE_OWNER_PID,0);
+    if(rc!=NO_ERROR) {
+        out.push_back({"Network","UDP unavailable","Windows IP Helper API returned an error"});
+        return out;
+    }
+    auto* table=reinterpret_cast<PMIB_UDPTABLE_OWNER_PID>(buffer.data());
+    for(DWORD i=0;i<table->dwNumEntries && !cancelRequested;i++) {
+        const auto& e=table->table[i];
+        IN_ADDR addr{};
+        addr.S_un.S_addr=e.dwLocalAddr;
+        char ip[INET_ADDRSTRLEN]{};
+        InetNtopA(AF_INET,&addr,ip,sizeof(ip));
+        std::ostringstream detail;
+        detail<<ip<<":"<<(unsigned)ntohs((u_short)e.dwLocalPort);
+        out.push_back({"Network UDP","PID "+std::to_string(e.dwOwningPid),detail.str()});
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
-        if(cancelRequested){scanning=false;return;}
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        completedStages=1;
         stage=2;
         auto services=enumerateServices();
-        if(cancelRequested){scanning=false;return;}
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        completedStages=2;
         stage=3;
         auto startup=enumerateStartup();
-        if(cancelRequested){scanning=false;return;}
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        completedStages=3;
         stage=4;
         auto network=enumerateTcp();
-        if(cancelRequested){scanning=false;return;}
+        auto udp=enumerateUdp();
+        auto usb=enumerateUsbStorage();
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        completedStages=4;
         stage=5;
         services.insert(services.end(),startup.begin(),startup.end());
         services.insert(services.end(),network.begin(),network.end());
+        services.insert(services.end(),udp.begin(),udp.end());
+        services.insert(services.end(),usb.begin(),usb.end());
         {
             std::lock_guard<std::mutex> lock(dataMutex);
             processes=std::move(p);
             records=std::move(services);
+            processCount=processes.size();
+            recordCount=records.size();
         }
         done=true;
     } catch(...) {
-        // Partial results are not reported as a successful completed scan.
+        scanFailed=true;
     }
     scanning=false;
 }
 static void startScan() {
     if(scanning)return;
-    cancelRequested=false;done=false;stage=0;scanning=true;
+    cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;completedStages=0;stage=0;scanning=true;
     std::thread(scanWorker).detach();
 }
 static std::string csvQuote(const std::string& s) {
@@ -320,7 +395,102 @@ static void exportCsv() {
     for(const auto& f:files)
         out<<"File,,,"<<csvQuote(utf8(fs::path(f.path).filename().wstring()))<<","
            <<csvQuote(utf8(f.path))<<","<<csvQuote(f.hash)<<","<<csvQuote(f.signature)<<"\n";
-    status="CSV saved to current working directory";
+    status="CSV saved: MacaquitoScanner_Report.csv";
+}
+
+static std::string htmlEscape(const std::string& value) {
+    std::string result;
+    for(char c:value) {
+        switch(c) {
+            case '&': result+="&amp;";break;
+            case '<': result+="&lt;";break;
+            case '>': result+="&gt;";break;
+            case '"': result+="&quot;";break;
+            case '\'':result+="&#39;";break;
+            default: result+=c;break;
+        }
+    }
+    return result;
+}
+static std::string jsonEscape(const std::string& value) {
+    std::string result="\"";
+    const char* hex="0123456789abcdef";
+    for(unsigned char c:value) {
+        if(c=='"' || c=='\\') {result+='\\';result+=(char)c;}
+        else if(c=='\n')result+="\\n";
+        else if(c=='\r')result+="\\r";
+        else if(c=='\t')result+="\\t";
+        else if(c<0x20) {
+            result+="\\u00";
+            result+=hex[c>>4];
+            result+=hex[c&15];
+        } else result+=(char)c;
+    }
+    return result+"\"";
+}
+static void exportHtml() {
+    std::lock_guard<std::mutex> lock(dataMutex);
+    std::ofstream out("MacaquitoScanner_Report.html",std::ios::binary);
+    if(!out){status="HTML export failed";return;}
+    out<<"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+          "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+          "<title>Macaquito Scanner Report</title>"
+          "<style>body{background:#101115;color:#e8e9ee;font:15px Segoe UI,Arial,sans-serif;"
+          "margin:40px auto;max-width:1100px;padding:0 18px}h1,h2{color:#ff8739}"
+          "table{width:100%;border-collapse:collapse;margin:16px 0 36px}"
+          "td,th{border-bottom:1px solid #34363e;padding:9px;text-align:left;word-break:break-word}"
+          "th{background:#22252d}small{color:#9da0a9}</style></head><body>"
+          "<h1>Macaquito Scanner</h1><p>Developer: Mudin</p>"
+          "<small>Read-only inventory. An inventory entry is not a threat finding.</small>";
+    out<<"<h2>Processes ("<<processes.size()<<")</h2><table><tr>"
+          "<th>PID</th><th>Parent</th><th>Name</th><th>Path</th></tr>";
+    for(const auto& p:processes)
+        out<<"<tr><td>"<<p.pid<<"</td><td>"<<p.parent<<"</td><td>"
+           <<htmlEscape(utf8(p.name))<<"</td><td>"<<htmlEscape(utf8(p.path))<<"</td></tr>";
+    out<<"</table><h2>System Inventory ("<<records.size()<<")</h2><table>"
+          "<tr><th>Category</th><th>Name</th><th>Detail</th></tr>";
+    for(const auto& r:records)
+        out<<"<tr><td>"<<htmlEscape(r.category)<<"</td><td>"<<htmlEscape(r.name)
+           <<"</td><td>"<<htmlEscape(r.detail)<<"</td></tr>";
+    out<<"</table><h2>File Integrity ("<<files.size()<<")</h2><table>"
+          "<tr><th>File</th><th>SHA-256</th><th>Signature</th></tr>";
+    for(const auto& f:files)
+        out<<"<tr><td>"<<htmlEscape(utf8(f.path))<<"</td><td>"
+           <<htmlEscape(f.hash)<<"</td><td>"<<htmlEscape(f.signature)<<"</td></tr>";
+    out<<"</table></body></html>";
+    status="HTML saved: MacaquitoScanner_Report.html";
+}
+static void exportJson() {
+    std::lock_guard<std::mutex> lock(dataMutex);
+    std::ofstream out("MacaquitoScanner_Report.json",std::ios::binary);
+    if(!out){status="JSON export failed";return;}
+    out<<"{\n  \"application\": \"Macaquito Scanner\",\n  \"developer\": \"Mudin\","
+          "\n  \"disclaimer\": \"Inventory is not a threat finding\",\n  \"processes\": [\n";
+    for(size_t i=0;i<processes.size();i++) {
+        const auto& p=processes[i];
+        out<<"    {\"pid\": "<<p.pid<<", \"parent\": "<<p.parent
+           <<", \"name\": "<<jsonEscape(utf8(p.name))
+           <<", \"path\": "<<jsonEscape(utf8(p.path))<<"}"
+           <<(i+1<processes.size()?",":"")<<"\n";
+    }
+    out<<"  ],\n  \"records\": [\n";
+    for(size_t i=0;i<records.size();i++) {
+        const auto& r=records[i];
+        out<<"    {\"category\": "<<jsonEscape(r.category)
+           <<", \"name\": "<<jsonEscape(r.name)
+           <<", \"detail\": "<<jsonEscape(r.detail)<<"}"
+           <<(i+1<records.size()?",":"")<<"\n";
+    }
+    out<<"  ],\n  \"files\": [\n";
+    for(size_t i=0;i<files.size();i++) {
+        const auto& f=files[i];
+        out<<"    {\"path\": "<<jsonEscape(utf8(f.path))
+           <<", \"sha256\": "<<jsonEscape(f.hash)
+           <<", \"signature\": "<<jsonEscape(f.signature)<<"}"
+           <<(i+1<files.size()?",":"")<<"\n";
+    }
+    out<<"  ]\n}\n";
+    status="JSON saved: MacaquitoScanner_Report.json";
 }
 static void inspectSelectedFile() {
     std::wstring path=wide(fileInput);
@@ -329,6 +499,7 @@ static void inspectSelectedFile() {
         auto r=inspectFile(path);
         std::lock_guard<std::mutex> lock(dataMutex);
         files.push_back(std::move(r));
+        fileCount=files.size();
         status="File inspection finished";
     } catch(...) {status="File inspection failed";}
 }
@@ -442,6 +613,8 @@ static void metric(const char* label,const std::string& value,float width) {
 }
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
+    if(scanFailed)return "Failed";
+    if(scanCancelled)return "Cancelled";
     if(done)return "Completed";
     return "Ready";
 }
@@ -455,8 +628,8 @@ static void modulesList() {
         {"Hooks & Interception","Hook verification is not implemented",false},
         {"Kernel & Drivers","Service and driver inventory",true},
         {"Persistence & Boot","Run / RunOnce entries and services",true},
-        {"Network & Firewall","TCP IPv4 connections; firewall analysis unavailable",true},
-        {"Hardware & USB","USB history is not implemented",false},
+        {"Network & Firewall","TCP/UDP IPv4 endpoints; firewall analysis not implemented",true},
+        {"Hardware & USB","USB storage registry inventory; connection timeline not implemented",true},
         {"Execution Forensics","Prefetch, Amcache and event analysis unavailable",false},
         {"Files & Signatures","Manual SHA-256 and offline Authenticode checks",true},
         {"FiveM Integrity","Reference-manifest verification unavailable",false},
@@ -468,7 +641,7 @@ static void modulesList() {
         ImGui::Text("%s",m.name);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x>150?ImGui::GetWindowWidth()-125:0);
         ImGui::TextColored(m.available?ImVec4(.45f,.78f,.59f,1):ImVec4(.69f,.70f,.75f,1),
-                           "%s",m.available?"AVAILABLE":"UNAVAILABLE");
+                           "%s",m.available?"AVAILABLE":"PLANNED");
         ImGui::TextDisabled("%s",m.detail);
         ImGui::EndChild();
         ImGui::PopID();
@@ -536,37 +709,18 @@ static void renderUI() {
     ImGui::TextDisabled("Developer: Mudin");
     ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
     const char* names[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
-    
-for (int i = 0; i < 6; i++) {
-    ImGui::PushID(i);
-
-    const bool selected = (page == i);
-
-    if (selected) {
-        ImGui::PushStyleColor(
-            ImGuiCol_Button,
-            ImVec4(.35f, .20f, .14f, 1.f)
-        );
-
-        ImGui::PushStyleColor(
-            ImGuiCol_Text,
-            ImVec4(1.f, .57f, .30f, 1.f)
-        );
+    for(int i=0;i<6;i++) {
+        ImGui::PushID(i);
+        const bool selected=(page==i);
+        if(selected) {
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.35f,.20f,.14f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,.57f,.30f,1));
+        }
+        const bool clicked=ImGui::Button(names[i],ImVec2(-1,43));
+        if(selected)ImGui::PopStyleColor(2);
+        if(clicked)page=i;
+        ImGui::PopID();
     }
-
-    const bool clicked =
-        ImGui::Button(names[i], ImVec2(-1, 43));
-
-    if (selected) {
-        ImGui::PopStyleColor(2);
-    }
-
-    if (clicked) {
-        page = i;
-    }
-
-    ImGui::PopID();
-}
     ImGui::Dummy(ImVec2(0,22));
     ImGui::Separator();
     ImGui::TextDisabled("SYSTEM ACCESS");
@@ -590,24 +744,24 @@ for (int i = 0; i < 6; i++) {
         ImGui::TextDisabled("All available modules. One complete workflow.");
         ImGui::Spacing();
         if(!scanning) {
-            if(accentButton("Start Full Scan",ImVec2(225,46)))ImGui::OpenPopup("Confirm Inspection");
+            if(accentButton("Start Full Scan",ImVec2(225,46)))requestScanPopup=true;
         } else {
             if(ImGui::Button("View Inspection",ImVec2(225,46)))page=1;
         }
         ImGui::EndChild();
         ImGui::Spacing();
-        metric("Processes",std::to_string(processes.size()),metricWidth);
+        metric("Processes",std::to_string(processCount.load()),metricWidth);
         ImGui::SameLine();
-        metric("System Records",std::to_string(records.size()),metricWidth);
+        metric("System Records",std::to_string(recordCount.load()),metricWidth);
         ImGui::SameLine();
-        metric("Files Verified",std::to_string(files.size()),metricWidth);
+        metric("Files Verified",std::to_string(fileCount.load()),metricWidth);
         ImGui::Spacing();
         sectionTitle("INSPECTION COVERAGE","Real collection status; no fabricated findings");
         ImGui::BeginChild("coverage",ImVec2(0,0),ImGuiChildFlags_Borders);
         ImGui::Text("Current status: %s",stateText());
         ImGui::Separator();
-        ImGui::TextDisabled("Available: Processes, Services, Drivers, Startup, TCP IPv4, Manual File Integrity");
-        ImGui::TextDisabled("Unavailable: Memory, Hooks, USB history, Execution forensics, FiveM reference checks");
+        ImGui::TextDisabled("Available: Processes, Services, Drivers, Startup, TCP/UDP IPv4, USB storage, File Integrity");
+        ImGui::TextDisabled("Planned: Memory, Hooks, USB timestamps, Execution forensics, FiveM reference checks");
         if(ImGui::Button("Browse Inspection Modules"))page=1;
         ImGui::EndChild();
     } else if(page==1) {
@@ -617,11 +771,11 @@ for (int i = 0; i < 6; i++) {
         if(scanning) {
             int idx=(std::min)(stage.load(),5);
             ImGui::TextDisabled("Current stage: %s",stages[idx]);
-            ImGui::ProgressBar(idx/5.f,ImVec2(-1,15));
+            ImGui::ProgressBar(completedStages.load()/(float)totalStages.load(),ImVec2(-1,15));
             if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
         } else {
             ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-            if(accentButton("Start Full Scan",ImVec2(210,42)))ImGui::OpenPopup("Confirm Inspection");
+            if(accentButton("Start Full Scan",ImVec2(210,42)))requestScanPopup=true;
         }
         ImGui::EndChild();
         ImGui::Spacing();
@@ -630,9 +784,11 @@ for (int i = 0; i < 6; i++) {
     } else if(page==2) {
         sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
                      "Inventory is not a threat finding. No automated threat rules are enabled.");
-        if(ImGui::Button("Export CSV",ImVec2(135,38)))exportCsv();
+        if(ImGui::Button("Export CSV",ImVec2(120,38)))exportCsv();
+        ImGui::SameLine();if(ImGui::Button("Export HTML",ImVec2(120,38)))exportHtml();
+        ImGui::SameLine();if(ImGui::Button("Export JSON",ImVec2(120,38)))exportJson();
         ImGui::SameLine();ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
-                          processes.size(),records.size(),files.size());
+                          processCount.load(),recordCount.load(),fileCount.load());
         ImGui::Spacing();
         if(ImGui::BeginTabBar("results")) {
             if(ImGui::BeginTabItem("Findings")) {
@@ -665,7 +821,7 @@ for (int i = 0; i < 6; i++) {
                 recordsTable();ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("USB Review")) {
-                ImGui::TextDisabled("USB forensics is unavailable in this build.");
+                ImGui::TextDisabled("USB storage inventory is collected under System Inventory. Historical timestamps are not implemented.");
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Modules")) {
@@ -676,7 +832,7 @@ for (int i = 0; i < 6; i++) {
     } else if(page==3) {
         sectionTitle("EXECUTION TIMELINE","Chronological correlation of Windows evidence");
         ImGui::BeginChild("timeline",ImVec2(0,210),ImGuiChildFlags_Borders);
-        ImGui::TextDisabled("NOT AVAILABLE");
+        ImGui::TextDisabled("PLANNED");
         ImGui::TextWrapped("Prefetch, Amcache, event log and USB timeline collection are not implemented.");
         ImGui::TextWrapped("The scanner will not generate synthetic events or timestamps.");
         ImGui::EndChild();
@@ -706,11 +862,16 @@ for (int i = 0; i < 6; i++) {
                 auto r=inspectFile(executablePath());
                 std::lock_guard<std::mutex> lock(dataMutex);
                 files.push_back(std::move(r));
+        fileCount=files.size();
                 status="Executable verification recorded in Results > File Integrity";
             } catch(...) {status="Executable verification failed";}
         }
         ImGui::TextDisabled("A self-signed certificate is not publicly trusted by default.");
         ImGui::EndChild();
+    }
+    if(requestScanPopup) {
+        ImGui::OpenPopup("Confirm Inspection");
+        requestScanPopup=false;
     }
     if(ImGui::BeginPopupModal("Confirm Inspection",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped("Inspect accessible Windows sources on this PC?");
