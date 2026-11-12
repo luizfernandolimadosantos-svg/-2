@@ -3784,54 +3784,199 @@ static std::string getSequentialItem(){
 }
 
 // Read-only extended process inspection. One PID at a time, no process memory reads.
+// Each field is collected independently; "unavailable" is not suspicious.
+static constexpr unsigned kProcessChecksPerPid=34;
+static std::atomic<unsigned long long> processChecksCompleted{0};
+static std::atomic<unsigned long long> processChecksUnavailable{0};
+static std::atomic<unsigned long long> processChecksPlanned{0};
 static std::vector<Record> inspectIndividualProcesses(
     const std::vector<Process>& processes){
     std::vector<Record> output;
-    output.reserve(processes.size()*2);
+    output.reserve(processes.size()*kProcessChecksPerPid);
     std::unordered_set<DWORD> known;
     for(const auto& p:processes)known.insert(p.pid);
+    std::unordered_map<DWORD,unsigned> threadCounts;
+    HANDLE threadSnapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
+    if(threadSnapshot!=INVALID_HANDLE_VALUE){
+        THREADENTRY32 te{};te.dwSize=sizeof(te);
+        if(Thread32First(threadSnapshot,&te)){
+            do{++threadCounts[te.th32OwnerProcessID];}
+            while(Thread32Next(threadSnapshot,&te));
+        }
+        CloseHandle(threadSnapshot);
+    }
     for(const auto& p:processes){
         if(cancelRequested)break;
-        setSequentialItem("Process details PID "+std::to_string(p.pid));
-        std::string facts="PID="+std::to_string(p.pid)+
-            " | Parent PID="+std::to_string(p.parent);
-        DWORD session=0;
-        if(ProcessIdToSessionId(p.pid,&session))
-            facts+=" | Session="+std::to_string(session);
-        else facts+=" | Session=unavailable";
-        if(p.parent && p.parent!=p.pid && !known.count(p.parent))
-            facts+=" | Parent not in snapshot (may have exited)";
+        const std::string pid=std::to_string(p.pid);
         HANDLE handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
-        if(handle){
-            DWORD handles=0;
-            if(GetProcessHandleCount(handle,&handles))
-                facts+=" | Handles="+std::to_string(handles);
-            FILETIME created{},exited{},kernel{},user{};
-            if(GetProcessTimes(handle,&created,&exited,&kernel,&user)){
-                ULARGE_INTEGER started{};
-                started.LowPart=created.dwLowDateTime;
-                started.HighPart=created.dwHighDateTime;
-                facts+=" | Creation FILETIME="+std::to_string(started.QuadPart);
-            }
-            DWORD code=0;
-            if(GetExitCodeProcess(handle,&code))
-                facts+=" | State="+std::string(code==STILL_ACTIVE?"active":"exited");
-            CloseHandle(handle);
-        }else{
-            facts+=" | Extended access unavailable (normal for protected processes)";
-        }
-        output.push_back({"Process Details",std::to_string(p.pid),facts});
-        ++sequentialDone;
+        const auto emit=[&](const char* check,const std::string& result,bool available){
+            setSequentialItem("PID "+pid+" / "+check);
+            output.push_back({"Process Check",pid+" / "+check,
+                result.empty()?std::string("Unavailable"):result});
+            if(available)++processChecksCompleted;
+            else ++processChecksUnavailable;
+            ++sequentialDone;
+        };
+        emit("PID",pid,true);
+        if(cancelRequested)break;
+        emit("Parent PID",std::to_string(p.parent),true);
+        if(cancelRequested)break;
+        emit("Parent in snapshot",p.parent==0?"Not applicable":
+            known.count(p.parent)?"Present":"Not observed (may have exited)",true);
+        if(cancelRequested)break;
+        emit("Executable name",std::string(p.name.begin(),p.name.end()),!p.name.empty());
+        if(cancelRequested)break;
+        emit("Snapshot path",p.path.empty()?"Unavailable":
+            std::string(p.path.begin(),p.path.end()),!p.path.empty());
+        if(cancelRequested)break;
+        DWORD session=0;
+        const bool sessionOk=ProcessIdToSessionId(p.pid,&session)!=FALSE;
+        emit("Session",sessionOk?std::to_string(session):"Unavailable",sessionOk);
+        if(cancelRequested)break;
+        DWORD handles=0;
+        const bool handlesOk=handle&&GetProcessHandleCount(handle,&handles);
+        emit("Handle count",handlesOk?std::to_string(handles):"Unavailable",handlesOk);
+        if(cancelRequested)break;
+        FILETIME created{},exited{},kernel{},user{};
+        const bool timesOk=handle&&GetProcessTimes(handle,&created,&exited,&kernel,&user);
+        ULARGE_INTEGER stamp{};
+        if(timesOk){stamp.LowPart=created.dwLowDateTime;stamp.HighPart=created.dwHighDateTime;}
+        emit("Creation FILETIME",timesOk?std::to_string(stamp.QuadPart):"Unavailable",timesOk);
+        if(cancelRequested)break;
+        if(timesOk){stamp.LowPart=kernel.dwLowDateTime;stamp.HighPart=kernel.dwHighDateTime;}
+        emit("Kernel CPU time (100ns)",timesOk?std::to_string(stamp.QuadPart):"Unavailable",timesOk);
+        if(cancelRequested)break;
+        if(timesOk){stamp.LowPart=user.dwLowDateTime;stamp.HighPart=user.dwHighDateTime;}
+        emit("User CPU time (100ns)",timesOk?std::to_string(stamp.QuadPart):"Unavailable",timesOk);
+        if(cancelRequested)break;
+        DWORD exitCode=0;
+        const bool stateOk=handle&&GetExitCodeProcess(handle,&exitCode);
+        emit("Process state",stateOk?(exitCode==STILL_ACTIVE?"Active":"Exited"):"Unavailable",stateOk);
+        if(cancelRequested)break;
+        DWORD priority=handle?GetPriorityClass(handle):0;
+        emit("Priority class",priority?std::to_string(priority):"Unavailable",priority!=0);
+        if(cancelRequested)break;
+        BOOL wow64=FALSE;
+        const bool wowOk=handle&&IsWow64Process(handle,&wow64);
+        emit("WOW64",wowOk?(wow64?"Yes":"No"):"Unavailable",wowOk);
+        if(cancelRequested)break;
+        // Protected processes can deny queries. Record access as unknown, not a finding.
+        const bool accessOk=handle!=nullptr;
+        emit("Limited query access",accessOk?"Available":"Denied or process exited",accessOk);
+        if(cancelRequested)break;
+        std::error_code ec;
+        const bool regular=!p.path.empty()&&fs::is_regular_file(fs::path(p.path),ec)&&!ec;
+        emit("Executable file exists",regular?"Yes":(ec?"Unavailable":"No / not a file"),!ec);
+        if(cancelRequested)break;
+        ec.clear();
+        const auto bytes=regular?fs::file_size(fs::path(p.path),ec):0;
+        emit("Executable file size",regular&&!ec?std::to_string(bytes)+" bytes":"Unavailable",
+             regular&&!ec);
+        if(cancelRequested)break;
+        const auto ti=threadCounts.find(p.pid);
+        emit("Thread count",ti!=threadCounts.end()?std::to_string(ti->second):"Unavailable",
+             ti!=threadCounts.end());
+        if(cancelRequested)break;
+        DWORD_PTR procMask=0,systemMask=0;
+        const bool affinityOk=handle&&GetProcessAffinityMask(handle,&procMask,&systemMask);
+        emit("Process affinity mask",affinityOk?std::to_string(static_cast<unsigned long long>(procMask)):"Unavailable",affinityOk);
+        if(cancelRequested)break;
+        emit("System affinity mask",affinityOk?std::to_string(static_cast<unsigned long long>(systemMask)):"Unavailable",affinityOk);
+        if(cancelRequested)break;
+        BOOL boostDisabled=FALSE;
+        const bool boostOk=handle&&GetProcessPriorityBoost(handle,&boostDisabled);
+        emit("Priority boost disabled",boostOk?(boostDisabled?"Yes":"No"):"Unavailable",boostOk);
+        if(cancelRequested)break;
+        wchar_t fullPath[32768]{};
+        DWORD pathLength=32768;
+        const bool fullPathOk=handle&&QueryFullProcessImageNameW(handle,0,fullPath,&pathLength);
+        emit("Queried image path",fullPathOk?
+             std::string(fullPath,fullPath+pathLength):
+             "Unavailable",fullPathOk);
+        if(cancelRequested)break;
+        IO_COUNTERS io{};
+        const bool ioOk=handle&&GetProcessIoCounters(handle,&io);
+        emit("IO read operations",ioOk?std::to_string(io.ReadOperationCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        emit("IO write operations",ioOk?std::to_string(io.WriteOperationCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        emit("IO other operations",ioOk?std::to_string(io.OtherOperationCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        emit("IO bytes read",ioOk?std::to_string(io.ReadTransferCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        emit("IO bytes written",ioOk?std::to_string(io.WriteTransferCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        emit("IO other bytes",ioOk?std::to_string(io.OtherTransferCount):"Unavailable",ioOk);
+        if(cancelRequested)break;
+        HANDLE memoryHandle=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,p.pid);
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        const bool memoryOk=memoryHandle&&GetProcessMemoryInfo(memoryHandle,
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),sizeof(pmc));
+        emit("Working set bytes",memoryOk?std::to_string(pmc.WorkingSetSize):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Peak working set bytes",memoryOk?std::to_string(pmc.PeakWorkingSetSize):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Private usage bytes",memoryOk?std::to_string(pmc.PrivateUsage):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Page faults",memoryOk?std::to_string(pmc.PageFaultCount):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Pagefile usage bytes",memoryOk?std::to_string(pmc.PagefileUsage):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Peak pagefile usage bytes",memoryOk?std::to_string(pmc.PeakPagefileUsage):"Unavailable",memoryOk);
+        if(cancelRequested)break;
+        emit("Quota paged pool bytes",memoryOk?std::to_string(pmc.QuotaPagedPoolUsage):"Unavailable",memoryOk);
+        if(memoryHandle)CloseHandle(memoryHandle);
+        if(handle)CloseHandle(handle);
     }
     return output;
 }
 
+
+// Snapshot reconciliation: identifies actual PIDs observed after the initial inventory.
+// This is not a continuous ETW trace and cannot recover short-lived missed processes.
+static std::atomic<unsigned> processNewPids{0},processExitedPids{0};
+static std::atomic<unsigned> processSecondSnapshot{0};
+static std::atomic<unsigned> forensicProducedRecords{0};
+static std::vector<Record> reconcileProcessSnapshots(
+    const std::vector<Process>& before,const std::vector<Process>& after){
+    std::unordered_map<DWORD,std::wstring> oldPids,newPids;
+    for(const auto& p:before)oldPids[p.pid]=p.name;
+    for(const auto& p:after)newPids[p.pid]=p.name;
+    std::vector<Record> changes;
+    unsigned added=0,exited=0;
+    for(const auto& p:after){
+        if(cancelRequested)break;
+        const auto it=oldPids.find(p.pid);
+        if(it==oldPids.end()){
+            changes.push_back({"Process Snapshot Delta","PID "+std::to_string(p.pid),
+                "Observed in second snapshot; not present in initial snapshot"});
+            ++added;
+        }else if(it->second!=p.name){
+            changes.push_back({"Process Snapshot Delta","PID "+std::to_string(p.pid),
+                "Name changed between snapshots; possible PID reuse"});
+        }
+    }
+    for(const auto& p:before){
+        if(cancelRequested)break;
+        if(!newPids.count(p.pid)){
+            changes.push_back({"Process Snapshot Delta","PID "+std::to_string(p.pid),
+                "Absent from second snapshot; may have exited"});
+            ++exited;
+        }
+    }
+    processNewPids=added;
+    processExitedPids=exited;
+    processSecondSnapshot=static_cast<unsigned>(after.size());
+    return changes;
+}
 static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
         const std::wstring winRoot=windowsRoot();
-        sequentialTotal=static_cast<unsigned>(p.size()*2);
+        sequentialTotal=static_cast<unsigned>(p.size()*(kProcessChecksPerPid+1));
+        processChecksPlanned=static_cast<unsigned long long>(p.size())*kProcessChecksPerPid;
+        processChecksCompleted=0;processChecksUnavailable=0;
         sequentialDone=0;
         for(auto& proc:p) {
             if(cancelRequested)break;
@@ -3842,7 +3987,7 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         auto processDetails=inspectIndividualProcesses(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        stageWorkItems[0]=static_cast<unsigned>(processDetails.size());
+        stageWorkItems[0]=static_cast<unsigned>(p.size());
         markInspectionStage(1);
         stage=2;
         sequentialDone=0;sequentialTotal=0;
@@ -4050,9 +4195,18 @@ static void scanWorker() {
         setSequentialItem("inspectYaraLocalFiles");
         auto yaraFindings=inspectYaraLocalFiles(p);
         ++sequentialDone;        if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        stageWorkItems[4]=static_cast<unsigned>(services.size());
+        // Reconcile a second actual Windows snapshot; this is a bounded
+        // discovery pass, not an invented process count or an ETW monitor.
+        setSequentialItem("Second process snapshot / PID reconciliation");
+        auto secondSnapshot=enumerateProcesses();
+        auto processChanges=reconcileProcessSnapshots(p,secondSnapshot);
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        forensicProducedRecords=static_cast<unsigned>(forensicHeaders.size()+
+            yaraFindings.size()+processChanges.size());
+        stageWorkItems[4]=forensicProducedRecords.load();
         markInspectionStage(5);
         stage=5;
+        services.insert(services.end(),processChanges.begin(),processChanges.end());
         services.insert(services.end(),startup.begin(),startup.end());
         services.insert(services.end(),network.begin(),network.end());
         services.insert(services.end(),udp.begin(),udp.end());
@@ -4135,6 +4289,9 @@ static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
     peFilesInspected=0;
+    processChecksPlanned=0;processChecksCompleted=0;processChecksUnavailable=0;
+    processNewPids=0;processExitedPids=0;processSecondSnapshot=0;
+    forensicProducedRecords=0;
     sequentialDone=0;sequentialTotal=0;
     setSequentialItem("");
     forensicSourceStatus=0;
@@ -4186,6 +4343,10 @@ static void exportCsv() {
     std::ofstream out("SyncPCChecker_Report.csv",std::ios::binary);
     if(!out){status="Could not write CSV";return;}
     out<<"Type,PID,ParentPID,Name,Path,SHA256,Signature,ReviewFlag,SecurityAssessment\n";
+    out<<"Scan Metric,,,First process snapshot,"<<stageWorkItems[0].load()<<",,,,\n";
+    out<<"Scan Metric,,,Second process snapshot,"<<processSecondSnapshot.load()<<",,,,\n";
+    out<<"Scan Metric,,,New PIDs,"<<processNewPids.load()<<",,,,\n";
+    out<<"Scan Metric,,,PIDs absent from second snapshot,"<<processExitedPids.load()<<",,,,\n";
     std::lock_guard<std::mutex> lock(dataMutex);
     for(const auto& p:processes)
         out<<"Process,"<<p.pid<<","<<p.parent<<","<<csvQuote(utf8(p.name))<<","
@@ -6691,6 +6852,12 @@ static void renderUI() {
         }
         if(done){
             if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
+                ImGui::Text("First process snapshot: %u",stageWorkItems[0].load());
+                ImGui::Text("Second process snapshot: %u",processSecondSnapshot.load());
+                ImGui::Text("New PIDs between snapshots: %u",processNewPids.load());
+                ImGui::Text("PIDs absent from second snapshot: %u",processExitedPids.load());
+                ImGui::TextDisabled("Two snapshots only: short-lived processes can be missed.");
+                ImGui::TextDisabled("Forensic count below covers header checks, YARA findings and PID changes only.");
                 const char* names[]={"Process inventory","Service inventory",
                     "Startup entries","Network and device inventory",
                     "Security and forensic artifacts","Result publication"};
@@ -6724,6 +6891,14 @@ static void renderUI() {
                 ImGui::TextDisabled("Forensic source checks were not completed in this run.");
             }
             ImGui::TextDisabled("Unavailable sources are not evidence of tampering.");
+            ImGui::Dummy(ImVec2(0,8));
+        }
+        if(done){
+            ImGui::TextColored(accent,"INDIVIDUAL PROCESS CHECKS");
+            ImGui::Text("Planned: %llu | Completed: %llu | Unavailable: %llu",
+                processChecksPlanned.load(),processChecksCompleted.load(),
+                processChecksUnavailable.load());
+            ImGui::TextDisabled("A process is counted once; checks are counted separately.");
             ImGui::Dummy(ImVec2(0,8));
         }
         ImGui::TextColored(accent,"INVESTIGATION MODULES");
