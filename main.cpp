@@ -2400,8 +2400,8 @@ static void runMemoryInspection(DWORD pid){
     }).detach();
 }
 static void drawMemoryInvestigation(const char* mode,bool embedded=false){
-    const ImVec4 accent(.64f,.78f,1,1);
-    const ImVec4 muted(.53f,.61f,.71f,1);
+    const ImVec4 accent(.84f,.84f,.84f,1);
+    const ImVec4 muted(.61f,.61f,.61f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.079f,0.079f,0.079f,1));
     ImGui::BeginChild("##memoryControls",ImVec2(0,204),ImGuiChildFlags_None);
     ImGui::TextColored(accent,"TARGET PROCESS");
@@ -3913,9 +3913,9 @@ static void renderUI() {
         ImGuiWindowFlags_NoBringToFrontOnFocus);
     // ATLAS: entirely different shell, no left rail, full-width operations canvas.
     if(page==1||page==5)page=0;
-    const ImVec4 titleInk(.96f,.97f,1,1);
-    const ImVec4 subtleInk(.53f,.59f,.69f,1);
-    const ImVec4 accentInk(.63f,.77f,1,1);
+    const ImVec4 titleInk(.97f,.97f,.97f,1);
+    const ImVec4 subtleInk(.60f,.60f,.60f,1);
+    const ImVec4 accentInk(.84f,.84f,.84f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.039f,0.039f,0.039f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,83),ImGuiChildFlags_None);
@@ -4247,7 +4247,7 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,1.f));
     } else if(page==0) {
         // Rebuilt command center; no legacy metric() tiles.
-        const ImVec4 pale(.93f,.96f,1,1),quiet(.52f,.61f,.73f,1),accent(.48f,.70f,1,1);
+        const ImVec4 pale(.96f,.96f,.96f,1),quiet(.62f,.62f,.62f,1),accent(.78f,.78f,.78f,1);
         const float full=ImGui::GetContentRegionAvail().x;
         const bool side=full>=790.f;
         const float rightWidth=side?270.f:0.f;
