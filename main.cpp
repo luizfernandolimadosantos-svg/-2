@@ -2077,71 +2077,93 @@ static std::vector<Record> inspectCheatNamedModules(
 // scans of large user profiles and never follows directory symlinks.
 static std::vector<Record> inspectArtifactLocations(){
     std::vector<Record> out;
-    wchar_t temp[MAX_PATH]={},windows[MAX_PATH]={};
-    const DWORD tlen=GetTempPathW(MAX_PATH,temp);
-    const UINT wlen=GetWindowsDirectoryW(windows,MAX_PATH);
-    struct Root {fs::path path;std::string label;bool recursive;};
+    struct Root {fs::path path;std::string label;int depth;};
     std::vector<Root> roots;
-    if(tlen && tlen<MAX_PATH)roots.push_back({fs::path(temp),"User TEMP",true});
-    if(wlen && wlen<MAX_PATH){
-        roots.push_back({fs::path(windows)/L"Prefetch","Windows Prefetch",false});
-        roots.push_back({fs::path(windows)/L"Temp","Windows TEMP",true});
+    auto addRoot=[&](const fs::path& p,const char* label,int depth){
+        std::error_code ec;
+        if(fs::is_directory(p,ec))roots.push_back({p,label,depth});
+    };
+    wchar_t buf[32768]={};
+    DWORD n=GetTempPathW(32768,buf);
+    if(n && n<32768)addRoot(fs::path(buf),"User TEMP",5);
+    n=GetWindowsDirectoryW(buf,32768);
+    if(n && n<32768){
+        addRoot(fs::path(buf)/L"Prefetch","Windows Prefetch",0);
+        addRoot(fs::path(buf)/L"Temp","Windows TEMP",4);
     }
-    wchar_t appdata[MAX_PATH]={};
-    const DWORD alen=GetEnvironmentVariableW(L"APPDATA",appdata,MAX_PATH);
-    if(alen && alen<MAX_PATH)
-        roots.push_back({fs::path(appdata)/L"Microsoft"/L"Windows"/L"Start Menu"/
-            L"Programs"/L"Startup","User Startup",false});
+    auto envRoot=[&](const wchar_t* key)->fs::path{
+        wchar_t value[32768]={};
+        const DWORD size=GetEnvironmentVariableW(key,value,32768);
+        return size && size<32768?fs::path(value):fs::path();
+    };
+    const fs::path user=envRoot(L"USERPROFILE");
+    if(!user.empty()){
+        addRoot(user/L"Desktop","Desktop",7);
+        addRoot(user/L"Downloads","Downloads",8);
+        addRoot(user/L"Documents","Documents",6);
+        addRoot(user/L"AppData"/L"Local","Local AppData",5);
+        addRoot(user/L"AppData"/L"Roaming","Roaming AppData",5);
+    }
+    const fs::path appdata=envRoot(L"APPDATA");
+    if(!appdata.empty())
+        addRoot(appdata/L"Microsoft"/L"Windows"/L"Start Menu"/
+                L"Programs"/L"Startup","User Startup",2);
+    const fs::path programData=envRoot(L"PROGRAMDATA");
+    if(!programData.empty())
+        addRoot(programData/L"Microsoft"/L"Windows"/L"Start Menu"/
+                L"Programs"/L"Startup","Common Startup",2);
     const wchar_t* extensions[]={L".exe",L".dll",L".sys",L".pf",
                                   L".ps1",L".bat",L".cmd",L".vbs",L".js",L".lnk"};
-    size_t total=0;
+    size_t inventoryCount=0,matchCount=0;
+    std::unordered_set<std::wstring> seenMatches;
     for(const auto& root:roots){
-        if(cancelRequested || total>=2200)break;
+        if(cancelRequested)break;
         std::error_code ec;
-        if(!fs::is_directory(root.path,ec))continue;
-        auto add=[&](const fs::directory_entry& e){
-            if(total>=2200 || cancelRequested)return;
+        fs::recursive_directory_iterator it(root.path,
+            fs::directory_options::skip_permission_denied,ec),end;
+        size_t visited=0;
+        while(it!=end && !cancelRequested && visited<20000){
+            if(it.depth()>=root.depth)it.disable_recursion_pending();
             std::error_code fileEc;
-            if(!e.is_regular_file(fileEc) || fileEc)return;
-            const std::wstring ext=lowerPath(e.path().extension().wstring());
-            bool allowed=false;
-            for(const wchar_t* x:extensions)if(ext==x){allowed=true;break;}
-            if(!allowed)return;
-            ++total;
-            const bool prefetch=ext==L".pf";
-            const bool named=isCheatNameRuleMatch(e.path().filename().wstring());
-            const std::string category=prefetch?"Artifact: Prefetch":
-                (ext==L".sys"?"Artifact: Driver":
-                (ext==L".dll"?"Artifact: DLL":
-                (ext==L".exe"?"Artifact: EXE":"Artifact: Script/Shortcut")));
-            const std::string status=named?"DETECTED - NAME RULE":"INVENTORY";
-            out.push_back({category,utf8(e.path().filename().wstring()),
-                status+" | Location: "+root.label+" | File: "+
-                utf8(e.path().wstring())+
-                (prefetch?
-                 " | Prefetch is an execution-related Windows artifact, not proof of malware.":
-                 " | Presence alone does not indicate malicious activity.")});
-        };
-        if(root.recursive){
-            fs::recursive_directory_iterator it(root.path,
-                fs::directory_options::skip_permission_denied,ec),end;
-            size_t visited=0;
-            while(it!=end && !cancelRequested && total<2200 && visited<6000){
-                if(it.depth()>3)it.disable_recursion_pending();
-                if(it->is_symlink(ec))it.disable_recursion_pending();
-                add(*it);++visited;
-                it.increment(ec);
-                if(ec)ec.clear();
+            if(it->is_symlink(fileEc))it.disable_recursion_pending();
+            if(it->is_regular_file(fileEc) && !fileEc){
+                const fs::path path=it->path();
+                const std::wstring ext=lowerPath(path.extension().wstring());
+                bool supported=false;
+                for(const wchar_t* x:extensions)if(ext==x){supported=true;break;}
+                if(supported){
+                    const bool match=isCheatNameRuleMatch(path.filename().wstring());
+                    const std::string name=utf8(path.filename().wstring());
+                    const std::string fullPath=utf8(path.wstring());
+                    if(match && matchCount<1200 &&
+                       seenMatches.insert(lowerPath(path.wstring())).second){
+                        ++matchCount;
+                        out.push_back({"FiveM Cheat Name Detection",name,
+                            "DETECTED - NAME RULE | Filename contains CHEAT or EXTERNAL. "
+                            "Location: "+root.label+" | Path: "+fullPath+
+                            " | This confirms a filename match, not actual cheating or malware."});
+                    }
+                    if(inventoryCount<2200){
+                        ++inventoryCount;
+                        const std::string category=ext==L".pf"?"Artifact: Prefetch":
+                            ext==L".sys"?"Artifact: Driver":
+                            ext==L".dll"?"Artifact: DLL":
+                            ext==L".exe"?"Artifact: EXE":"Artifact: Script/Shortcut";
+                        out.push_back({category,name,
+                            std::string(match?"DETECTED - NAME RULE":"INVENTORY")+
+                            " | Location: "+root.label+" | File: "+fullPath+
+                            " | File presence alone does not prove malware."});
+                    }
+                }
             }
-        }else{
-            fs::directory_iterator it(root.path,
-                fs::directory_options::skip_permission_denied,ec),end;
-            size_t visited=0;
-            while(it!=end && !cancelRequested && total<2200 && visited<6000){
-                add(*it);++visited;
-                it.increment(ec);
-                if(ec)ec.clear();
-            }
+            ++visited;
+            it.increment(ec);
+            if(ec)ec.clear();
+        }
+        if(visited>=20000){
+            out.push_back({"Artifact Scan Coverage",root.label,
+                "PARTIAL SCAN | Directory visit limit reached (20,000 entries). "
+                "Some files in this location may not have been checked."});
         }
     }
     return out;
