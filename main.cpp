@@ -900,12 +900,21 @@ static void modulesList() {
     };
     for(const auto& m:items) {
         ImGui::PushID(m.name);
-        ImGui::BeginChild("module",ImVec2(0,66),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("module",ImVec2(0,86),ImGuiChildFlags_Borders);
         ImGui::Text("%s",m.name);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x>150?ImGui::GetWindowWidth()-125:0);
         ImGui::TextColored(m.available?ImVec4(.45f,.78f,.59f,1):ImVec4(.69f,.70f,.75f,1),
                            "%s",m.available?"AVAILABLE":"PLANNED");
         ImGui::TextDisabled("%s",m.detail);
+        if(ImGui::SmallButton("Show Details"))ImGui::OpenPopup("Module coverage details");
+        if(ImGui::BeginPopup("Module coverage details")) {
+            ImGui::TextColored(orange(),"%s",m.name);
+            ImGui::Separator();
+            ImGui::TextWrapped("%s",m.detail);
+            ImGui::TextDisabled("Status: %s",m.available?"Available":"Not implemented");
+            ImGui::TextWrapped("Coverage status describes implemented inventory, not a guarantee of threat detection.");
+            ImGui::EndPopup();
+        }
         ImGui::EndChild();
         ImGui::PopID();
     }
@@ -1068,7 +1077,7 @@ static void drawServiceReviews() {
         serviceReviews=inspectServiceStates();
     ImGui::SameLine();
     ImGui::TextDisabled("Stopped automatic-start services are review candidates, not confirmed threats.");
-    if(ImGui::BeginTable("serviceReviewTable",4,ImGuiTableFlags_BordersInnerH|
+    if(ImGui::BeginTable("serviceReviewTable",5,ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
         ImVec2(0,-1))) {
         ImGui::TableSetupScrollFreeze(0,1);
@@ -1088,6 +1097,40 @@ static void drawServiceReviews() {
             ImGui::TextUnformatted(item.currentState==SERVICE_RUNNING?"Running":
                 item.currentState==SERVICE_STOPPED?"Stopped":"Other");
             ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s",item.assessment.c_str());
+            ImGui::TableSetColumnIndex(4);
+            ImGui::PushID((int)(&item-&serviceReviews[0]));
+            if(ImGui::SmallButton("Show Details"))ImGui::OpenPopup("Service details");
+            if(ImGui::BeginPopup("Service details")) {
+                ImGui::Text("Service: %s",utf8(item.name).c_str());
+                ImGui::TextWrapped("Display name: %s",utf8(item.display).c_str());
+                ImGui::Text("Start type: %s",item.startType==SERVICE_AUTO_START?"Automatic":
+                    item.startType==SERVICE_DEMAND_START?"Manual":
+                    item.startType==SERVICE_DISABLED?"Disabled":"Other");
+                ImGui::Text("State: %s",item.currentState==SERVICE_RUNNING?"Running":
+                    item.currentState==SERVICE_STOPPED?"Stopped":"Other");
+                ImGui::TextWrapped("Assessment: %s",item.assessment.c_str());
+                SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
+                if(scm) {
+                    SC_HANDLE svc=OpenServiceW(scm,item.name.c_str(),SERVICE_QUERY_CONFIG);
+                    if(svc) {
+                        DWORD needed=0;
+                        QueryServiceConfigW(svc,nullptr,0,&needed);
+                        if(needed>0 && needed<65536) {
+                            std::vector<BYTE> buffer(needed);
+                            auto* cfg=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+                            if(QueryServiceConfigW(svc,cfg,needed,&needed)) {
+                                if(cfg->lpBinaryPathName)ImGui::TextWrapped("Command: %s",utf8(cfg->lpBinaryPathName).c_str());
+                                if(cfg->lpServiceStartName)ImGui::TextWrapped("Account: %s",utf8(cfg->lpServiceStartName).c_str());
+                                ImGui::Text("Error control: %lu",(unsigned long)cfg->dwErrorControl);
+                            }
+                        }
+                        CloseServiceHandle(svc);
+                    }
+                    CloseServiceHandle(scm);
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -1117,6 +1160,7 @@ static void processTable(float height) {
         ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1.2f);
         ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3.f);
         ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,112.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& p:processes) {
@@ -1148,13 +1192,57 @@ static void processTable(float height) {
         ImGui::EndTable();
     }
 }
+
+// Selection-based evidence details: no access to external network or modification of the system.
+static bool evidenceDetailsOpen=false;
+static std::string evidenceTitle,evidenceCategory,evidenceDescription,evidenceAssessment;
+static std::wstring evidenceFile;
+static std::string evidenceHash,evidenceSignature;
+static void openEvidenceDetails(const std::string& category,const std::string& title,
+                                const std::string& description,const std::wstring& file=L"",
+                                const std::string& assessment="") {
+    evidenceCategory=category; evidenceTitle=title; evidenceDescription=description;
+    evidenceAssessment=assessment; evidenceFile=file;
+    evidenceHash.clear(); evidenceSignature.clear(); evidenceDetailsOpen=true;
+}
+static void drawEvidenceDetails() {
+    if(!evidenceDetailsOpen)return;
+    ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_FirstUseEver);
+    if(!ImGui::Begin("Evidence Details - Read Only",&evidenceDetailsOpen)) {
+        ImGui::End();return;
+    }
+    ImGui::TextColored(orange(),"%s",evidenceCategory.c_str());
+    ImGui::Separator();
+    ImGui::TextWrapped("Item: %s",evidenceTitle.c_str());
+    ImGui::Spacing();
+    ImGui::TextWrapped("%s",evidenceDescription.c_str());
+    if(!evidenceAssessment.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1.f,.48f,.43f,1.f),"Security assessment");
+        ImGui::TextWrapped("%s",evidenceAssessment.c_str());
+    }
+    if(!evidenceFile.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("File: %s",utf8(evidenceFile).c_str());
+        if(ImGui::Button("Verify SHA-256 and Authenticode")) {
+            evidenceHash=sha256(evidenceFile);
+            evidenceSignature=signatureStatus(evidenceFile);
+        }
+        if(!evidenceHash.empty())ImGui::TextWrapped("SHA-256: %s",evidenceHash.c_str());
+        if(!evidenceSignature.empty())ImGui::TextWrapped("Signature: %s",evidenceSignature.c_str());
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled("Evidence is observational; an indicator alone does not confirm a threat.");
+    ImGui::End();
+}
 static void recordsTable() {
-    if(ImGui::BeginTable("records",3,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
-        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,370))) {
+    if(ImGui::BeginTable("records",4,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))) {
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableSetupColumn("Name",ImGuiTableColumnFlags_WidthFixed,230);
-        ImGui::TableSetupColumn("Details");
+        ImGui::TableSetupColumn("Summary",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,120.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& r:records) {
@@ -1162,6 +1250,9 @@ static void recordsTable() {
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.detail.c_str());
+            ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
+            if(ImGui::SmallButton("Show Details"))openEvidenceDetails(r.category,r.name,r.detail);
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -1173,15 +1264,17 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    const float sidebar=210.f;
+    const float sidebar=264.f;
     ImGui::BeginChild("##sidebar",ImVec2(sidebar,0),ImGuiChildFlags_None);
-    ImGui::Dummy(ImVec2(0,8));
+    ImGui::Dummy(ImVec2(0,18));
     if(syncLogoTexture) {
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(58,59));
+        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(76,77));
         ImGui::SameLine();
         ImGui::BeginGroup();
+        ImGui::SetWindowFontScale(1.20f);
         ImGui::TextColored(orange(),"SYNC PC");
         ImGui::Text("CHECKER");
+        ImGui::SetWindowFontScale(1.f);
         ImGui::EndGroup();
     } else {
         ImGui::TextColored(orange(),"SYNC PC CHECKER");
@@ -1196,7 +1289,7 @@ static void renderUI() {
             ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(orange().x*.34f,orange().y*.34f,orange().z*.34f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,orange());
         }
-        const bool clicked=ImGui::Button(names[i],ImVec2(-1,43));
+        const bool clicked=ImGui::Button(names[i],ImVec2(-1,50));
         if(selected)ImGui::PopStyleColor(2);
         if(clicked)page=i;
         ImGui::PopID();
@@ -1284,8 +1377,8 @@ static void renderUI() {
                 ImGui::InputTextWithHint("##file","Select a file to verify...",fileInput,sizeof(fileInput));
                 ImGui::SameLine();if(ImGui::Button("Browse"))chooseFile();
                 if(accentButton("Calculate SHA-256 + Verify Signature"))inspectSelectedFile();
-                if(ImGui::BeginTable("files",3,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
-                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,310))) {
+                if(ImGui::BeginTable("files",4,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))) {
                     ImGui::TableSetupColumn("File",ImGuiTableColumnFlags_WidthStretch,2);
                     ImGui::TableSetupColumn("SHA-256",ImGuiTableColumnFlags_WidthStretch,2);
                     ImGui::TableSetupColumn("Signature",ImGuiTableColumnFlags_WidthStretch,2);
@@ -1296,6 +1389,10 @@ static void renderUI() {
                         ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",utf8(f.path).c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
+                         ImGui::TableSetColumnIndex(3);ImGui::PushID(&f);
+                         if(ImGui::SmallButton("Show Details"))openEvidenceDetails("File Integrity",utf8(f.path),
+                             "SHA-256: "+f.hash+"\nAuthenticode: "+f.signature,f.path);
+                         ImGui::PopID();
                     }
                     ImGui::EndTable();
                 }
@@ -1305,7 +1402,35 @@ static void renderUI() {
                 recordsTable();ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("USB Review")) {
-                ImGui::TextDisabled("USB storage inventory is collected under System Inventory. Historical timestamps are not implemented.");
+                ImGui::TextDisabled("USB storage devices registered in Windows. This is not a connection timeline.");
+                if(ImGui::BeginTable("usbDevices",4,ImGuiTableFlags_BordersInnerH|
+                    ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))) {
+                    ImGui::TableSetupScrollFreeze(0,1);
+                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,100);
+                    ImGui::TableSetupColumn("Device",ImGuiTableColumnFlags_WidthStretch,1.5f);
+                    ImGui::TableSetupColumn("Registry details",ImGuiTableColumnFlags_WidthStretch,3.f);
+                    ImGui::TableHeadersRow();
+                    std::lock_guard<std::mutex> lock(dataMutex);
+                    int found=0;
+                    for(const auto& r:records) {
+                        if(r.category!="USB")continue;
+                        ++found;
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+                        ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
+                        ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+                         ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
+                         if(ImGui::SmallButton("Show Details"))openEvidenceDetails("USB Registry",r.name,
+                             "Registry inventory: "+r.detail+"\nThis entry does not establish when a device was connected.");
+                         ImGui::PopID();
+                    }
+                    if(!found) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextDisabled("No USB inventory in current scan. Run Start Full Scan.");
+                    }
+                    ImGui::EndTable();
+                }
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Modules")) {
@@ -1390,6 +1515,7 @@ static void renderUI() {
     ImGui::EndChild();
     ImGui::End();
     drawProcessDetails();
+    drawEvidenceDetails();
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,nullptr,nullptr,nullptr,nullptr,
