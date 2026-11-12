@@ -7,7 +7,7 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <bcrypt.h>
-#include <winsvc.ha>
+#include <winsvc.h>
 #include <iphlpapi.h>
 #include <ws2tcpip.h>
 #include <winreg.h>
@@ -58,7 +58,7 @@ static std::atomic<int> stage{0};
 static std::string status="Ready for inspection";
 static int page=0;
 static bool confirmScan=false;
-static bool requestScanPopup=false;
+
 static std::atomic<bool> scanFailed{false};
 static std::atomic<bool> scanCancelled{false};
 static std::atomic<int> completedStages{0};
@@ -744,7 +744,7 @@ static void renderUI() {
         ImGui::TextDisabled("All available modules. One complete workflow.");
         ImGui::Spacing();
         if(!scanning) {
-            if(accentButton("Start Full Scan",ImVec2(225,46)))requestScanPopup=true;
+            if(accentButton("Start Full Scan",ImVec2(225,46))) { startScan(); page=1; }
         } else {
             if(ImGui::Button("View Inspection",ImVec2(225,46)))page=1;
         }
@@ -775,7 +775,7 @@ static void renderUI() {
             if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
         } else {
             ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-            if(accentButton("Start Full Scan",ImVec2(210,42)))requestScanPopup=true;
+            if(accentButton("Start Full Scan",ImVec2(210,42))) startScan();
         }
         ImGui::EndChild();
         ImGui::Spacing();
@@ -869,20 +869,6 @@ static void renderUI() {
         ImGui::TextDisabled("A self-signed certificate is not publicly trusted by default.");
         ImGui::EndChild();
     }
-    if(requestScanPopup) {
-        ImGui::OpenPopup("Confirm Inspection");
-        requestScanPopup=false;
-    }
-    if(ImGui::BeginPopupModal("Confirm Inspection",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Inspect accessible Windows sources on this PC?");
-        ImGui::TextDisabled("Read-only. No files or settings will be modified.");
-        if(accentButton("Start Inspection",ImVec2(155,40))) {
-            startScan();page=1;ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if(ImGui::Button("Cancel",ImVec2(120,40)))ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
     ImGui::EndChild();
     ImGui::End();
 }
@@ -901,7 +887,8 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     ImGuiIO& io=ImGui::GetIO();
     ImFontConfig fontCfg{};
     fontCfg.OversampleH=2;
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf",17.f,&fontCfg);
+    if(!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf",17.f,&fontCfg))
+        io.Fonts->AddFontDefault();
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(device,context);
     MSG msg{};
@@ -918,6 +905,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         swapchain->Present(1,0);
     }
+    if(scanning) cancelRequested=true;
     while(scanning) Sleep(10);
     ImGui_ImplDX11_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();
     renderTargetDestroy();
