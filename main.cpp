@@ -13,6 +13,8 @@
 #pragma comment(lib,"winhttp.lib")
 #include <tlhelp32.h>
 #include <psapi.h>
+#include <dbghelp.h>
+#pragma comment(lib,"dbghelp.lib")
 #include <commdlg.h>
 #include <d3d11.h>
 #include <wintrust.h>
@@ -4489,6 +4491,77 @@ static void openEvidenceDetails(const std::string& category,const std::string& t
     evidenceAssessment=assessment; evidenceFile=file;
     evidenceHash.clear(); evidenceSignature.clear(); evidenceDetailsOpen=true;
 }
+
+static std::string csvEscapeEvidence(const std::string& value){
+    std::string out="\"";
+    for(char c:value){
+        if(c=='"')out+="\"\"";
+        else if(c=='\r'||c=='\n')out+=' ';
+        else out+=c;
+    }
+    return out+"\"";
+}
+static bool exportEvidenceCsv(const std::vector<Record>& rows,std::string& message){
+    wchar_t module[MAX_PATH]={};
+    if(!GetModuleFileNameW(nullptr,module,MAX_PATH)){
+        message="Unable to locate the application folder.";return false;
+    }
+    std::error_code ec;
+    const fs::path output=fs::path(module).parent_path()/L"SyncPCChecker-evidence.csv";
+    std::ofstream file(output,std::ios::binary|std::ios::trunc);
+    if(!file){message="Cannot write CSV in the application folder.";return false;}
+    file<<"\xEF\xBB\xBF"<<"Category,Name,Status,Details\r\n";
+    for(const auto& r:rows){
+        const std::string status=
+            r.detail.find("DETECTED")!=std::string::npos?"Detected":
+            (r.detail.find("NEEDS REVIEW")!=std::string::npos ||
+             r.detail.find("REVIEW:")!=std::string::npos)?"Needs Review":"Information";
+        file<<csvEscapeEvidence(r.category)<<","
+            <<csvEscapeEvidence(r.name)<<","
+            <<csvEscapeEvidence(status)<<","
+            <<csvEscapeEvidence(r.detail)<<"\r\n";
+    }
+    file.flush();
+    if(!file){message="Failed to write complete CSV.";return false;}
+    message="Saved "+std::to_string(rows.size())+
+        " rows to SyncPCChecker-evidence.csv beside the application.";
+    return true;
+}
+
+// Privacy boundary: permit user-mode dump capture only for processes running
+// under the same Windows account as this application.
+static bool isSameAccountProcess(HANDLE target){
+    HANDLE ownToken=nullptr,targetToken=nullptr;
+    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&ownToken))return false;
+    if(!OpenProcessToken(target,TOKEN_QUERY,&targetToken)){
+        CloseHandle(ownToken);return false;
+    }
+    DWORD ownSize=0,targetSize=0;
+    GetTokenInformation(ownToken,TokenUser,nullptr,0,&ownSize);
+    GetTokenInformation(targetToken,TokenUser,nullptr,0,&targetSize);
+    std::vector<BYTE> own(ownSize),other(targetSize);
+    const bool valid=ownSize>0&&targetSize>0 &&
+        GetTokenInformation(ownToken,TokenUser,own.data(),ownSize,&ownSize) &&
+        GetTokenInformation(targetToken,TokenUser,other.data(),targetSize,&targetSize);
+    bool match=false;
+    if(valid){
+        auto* a=reinterpret_cast<TOKEN_USER*>(own.data());
+        auto* b=reinterpret_cast<TOKEN_USER*>(other.data());
+        match=EqualSid(a->User.Sid,b->User.Sid)!=FALSE;
+    }
+    CloseHandle(targetToken);CloseHandle(ownToken);
+    return match;
+}
+static bool isSensitiveDumpTarget(const std::wstring& path){
+    const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+    static const wchar_t* blocked[]={
+        L"lsass.exe",L"winlogon.exe",L"csrss.exe",L"services.exe",
+        L"smss.exe",L"securityhealthservice.exe",L"credentialuibroker.exe",
+        L"svchost.exe",L"system",L"registry"
+    };
+    for(const wchar_t* item:blocked)if(name==item)return true;
+    return false;
+}
 static void drawEvidenceDetails() {
     if(!evidenceDetailsOpen)return;
     ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_FirstUseEver);
@@ -4500,6 +4573,12 @@ static void drawEvidenceDetails() {
     ImGui::TextWrapped("Item: %s",evidenceTitle.c_str());
     ImGui::Spacing();
     ImGui::TextWrapped("%s",evidenceDescription.c_str());
+    if(ImGui::SmallButton("Copy Evidence")){
+        const std::string text="Category: "+evidenceCategory+
+            "\nItem: "+evidenceTitle+"\nEvidence: "+evidenceDescription+
+            "\nAssessment: "+evidenceAssessment;
+        ImGui::SetClipboardText(text.c_str());
+    }
     if(!evidenceAssessment.empty()) {
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.587f,0.587f,0.587f,1.f),"Security assessment");
@@ -5713,26 +5792,113 @@ static void renderUI() {
         }
         if(!shown)ImGui::TextDisabled("No matching evidence. Run a scan or adjust the search.");
     } else if(page==10) {
-        sectionTitle("Kernel Memory Dump",
-            "Authorized memory acquisition workflow and offline dump verification");
+        sectionTitle("Memory Dump",
+            "Create a local process memory dump and verify existing dump files");
         ImGui::TextWrapped(
-            "Kernel-level physical-memory acquisition requires a trusted, signed "
-            "acquisition component and administrator authorization. No kernel "
-            "driver is bundled with this scanner.");
+            "Create a user-mode minidump of this application or a process "
+            "owned by your Windows account. Protected/system processes are "
+            "excluded. Dumps can contain private data; keep them local.");
         ImGui::Spacing();
-        ImGui::TextColored(accentInk,"ACQUISITION WORKFLOW");
-        ImGui::BulletText("Acquire memory using an approved forensic acquisition tool.");
-        ImGui::BulletText("Save the dump to a protected local evidence directory.");
-        ImGui::BulletText("Select the resulting file here to verify its metadata and SHA-256.");
-        ImGui::BulletText("Analyze the acquired image offline with Volatility 3 or MemProcFS.");
+        ImGui::TextColored(accentInk,"PROCESS MEMORY CAPTURE");
+        static bool dumpConsent=false;
+        static int selectedPid=0;
+        static std::string captureStatus="No dump created.";
+        static std::wstring capturedPath;
+        const DWORD ownPid=GetCurrentProcessId();
+        if(selectedPid==0)selectedPid=(int)ownPid;
+        if(ImGui::SmallButton("SELECT SYNC PC CHECKER"))
+            selectedPid=(int)ownPid;
+        ImGui::SameLine();
+        ImGui::TextDisabled("PID %lu",static_cast<unsigned long>(ownPid));
+        ImGui::SetNextItemWidth(200.f);
+        ImGui::InputInt("Target process PID",&selectedPid,1,100);
+        ImGui::TextDisabled("Use a PID from the Processes tab. Same-account processes only.");
+        ImGui::Checkbox("I understand the dump may contain private information",
+                        &dumpConsent);
+        if(!dumpConsent)ImGui::BeginDisabled();
+        if(ImGui::Button("CREATE PROCESS DUMP",ImVec2(230,38))){
+            capturedPath.clear();
+            if(selectedPid<=0 || selectedPid==4){
+                captureStatus="Invalid or protected process PID.";
+            }else{
+                const DWORD pid=(DWORD)selectedPid;
+                HANDLE target=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
+                                          FALSE,pid);
+                if(!target){
+                    captureStatus="Cannot open process with normal user permissions. "
+                                  "No elevation attempted.";
+                }else{
+                    wchar_t imagePath[32768]={};
+                    DWORD imageLen=static_cast<DWORD>(std::size(imagePath));
+                    const bool knownPath=QueryFullProcessImageNameW(
+                        target,0,imagePath,&imageLen)!=FALSE;
+                    if(!knownPath || isSensitiveDumpTarget(imagePath) ||
+                       !isSameAccountProcess(target)){
+                        captureStatus="Process not eligible: protected, unknown "
+                                      "or owned by another account.";
+                    }else{
+                        wchar_t folder[MAX_PATH]={};
+                        const DWORD n=GetEnvironmentVariableW(
+                            L"LOCALAPPDATA",folder,MAX_PATH);
+                        if(!n || n>=MAX_PATH){
+                            captureStatus="Local application data folder unavailable.";
+                        }else{
+                            const fs::path directory=fs::path(folder)/
+                                L"SyncPCChecker"/L"MemoryDumps";
+                            std::error_code ec;
+                            fs::create_directories(directory,ec);
+                            if(ec){
+                                captureStatus="Cannot create dump directory.";
+                            }else{
+                                SYSTEMTIME now{};GetLocalTime(&now);
+                                wchar_t filename[128]={};
+                                swprintf_s(filename,
+                                    L"Process-%lu-%04u%02u%02u-%02u%02u%02u.dmp",
+                                    (unsigned long)pid,now.wYear,now.wMonth,
+                                    now.wDay,now.wHour,now.wMinute,now.wSecond);
+                                const fs::path output=directory/filename;
+                                HANDLE file=CreateFileW(output.c_str(),GENERIC_WRITE,
+                                    0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+                                if(file==INVALID_HANDLE_VALUE){
+                                    captureStatus="Cannot create dump file.";
+                                }else{
+                                    const BOOL ok=MiniDumpWriteDump(target,pid,file,
+                                        static_cast<MINIDUMP_TYPE>(
+                                            MiniDumpNormal|MiniDumpWithThreadInfo|
+                                            MiniDumpWithUnloadedModules),
+                                        nullptr,nullptr,nullptr);
+                                    const DWORD error=ok?ERROR_SUCCESS:GetLastError();
+                                    CloseHandle(file);
+                                    if(ok){
+                                        capturedPath=output.wstring();
+                                        captureStatus="Process minidump saved successfully.";
+                                    }else{
+                                        DeleteFileW(output.c_str());
+                                        captureStatus="Dump failed (Windows error "+
+                                            std::to_string(error)+").";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    CloseHandle(target);
+                }
+            }
+        }
+        if(!dumpConsent)ImGui::EndDisabled();
+        ImGui::TextWrapped("STATUS: %s",captureStatus.c_str());
+        if(!capturedPath.empty()){
+            ImGui::TextWrapped("Saved to: %s",utf8(capturedPath).c_str());
+            if(ImGui::SmallButton("COPY DUMP PATH"))
+                ImGui::SetClipboardText(utf8(capturedPath).c_str());
+        }
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextColored(accentInk,"LOCAL MEMORY IMAGE");
+        ImGui::TextColored(accentInk,"VERIFY EXISTING DUMP");
         static char dumpPath[32768]{};
         static std::string dumpStatus="No dump selected.";
         static std::string dumpHash;
         static unsigned long long dumpBytes=0;
-        static FILETIME dumpModified{};
         ImGui::SetNextItemWidth(-118.f);
         ImGui::InputText("##dumpPath",dumpPath,sizeof(dumpPath));
         ImGui::SameLine();
@@ -5744,18 +5910,18 @@ static void renderUI() {
             ofn.lpstrFile=selected;
             ofn.nMaxFile=static_cast<DWORD>(std::size(selected));
             ofn.lpstrFilter=
-                L"Memory images (*.raw;*.mem;*.dmp;*.bin)\0*.raw;*.mem;*.dmp;*.bin\0"
+                L"Memory dumps (*.dmp;*.mdmp;*.mem)\0*.dmp;*.mdmp;*.mem\0"
                 L"All files (*.*)\0*.*\0";
             ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|
                       OFN_NOCHANGEDIR|OFN_EXPLORER;
             if(GetOpenFileNameW(&ofn)){
                 const auto chosen=utf8(selected);
                 strncpy_s(dumpPath,sizeof(dumpPath),chosen.c_str(),_TRUNCATE);
-                dumpStatus="File selected. Select VERIFY IMAGE to inspect it.";
+                dumpStatus="File selected. Choose VERIFY DUMP.";
                 dumpHash.clear();
             }
         }
-        if(ImGui::Button("VERIFY IMAGE",ImVec2(180,36))){
+        if(ImGui::Button("VERIFY DUMP",ImVec2(180,36))){
             dumpHash.clear();
             dumpBytes=0;
             const std::wstring selected=wide(dumpPath);
@@ -5767,35 +5933,25 @@ static void renderUI() {
             }else{
                 dumpBytes=(static_cast<unsigned long long>(attrs.nFileSizeHigh)<<32)|
                     attrs.nFileSizeLow;
-                dumpModified=attrs.ftLastWriteTime;
-                // SHA-256 is computed from the selected file, not simulated.
                 dumpHash=sha256(selected);
                 dumpStatus=dumpHash.empty()?
-                    "Metadata read; SHA-256 could not be computed.":
-                    "File metadata and SHA-256 verified.";
+                    "File metadata read; SHA-256 unavailable.":
+                    "File metadata and SHA-256 calculated.";
             }
         }
-        ImGui::Spacing();
         ImGui::TextWrapped("STATUS: %s",dumpStatus.c_str());
-        if(dumpBytes){
-            ImGui::Text("Image size: %.2f GiB",
-                static_cast<double>(dumpBytes)/(1024.0*1024.0*1024.0));
-        }
+        if(dumpBytes)
+            ImGui::Text("File size: %.2f MiB",
+                static_cast<double>(dumpBytes)/(1024.0*1024.0));
         if(!dumpHash.empty()){
             ImGui::TextUnformatted("SHA-256");
             ImGui::TextWrapped("%s",dumpHash.c_str());
             if(ImGui::Button("COPY SHA-256"))
                 ImGui::SetClipboardText(dumpHash.c_str());
         }
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::TextColored(accentInk,"FORENSIC ANALYSIS");
-        ImGui::TextWrapped(
-            "This page verifies an existing memory-image file. It does not "
-            "acquire RAM, load a kernel driver, parse kernel structures, "
-            "or establish that a selected file is a valid memory image.");
         ImGui::TextDisabled(
-            "No stealth capture, driver installation, or protection bypass.");
+            "Verification calculates file metadata and a hash; it does not "
+            "validate dump contents or analyze kernel memory.");
     } else if(page==9) {
         sectionTitle("Artifact Explorer",
             "EXE, DLL, SYS, Prefetch, TEMP, Startup and executable scripts");
@@ -5861,9 +6017,15 @@ static void renderUI() {
                     snapshot.push_back(r);
             }
         }
+        static std::string artifactExportMessage;
         ImGui::Text("Collected artifacts: %zu",snapshot.size());
         ImGui::SameLine(0,18);
         if(ImGui::SmallButton("OPEN BINARY LAB##artifact"))page=6;
+        ImGui::SameLine(0,18);
+        if(ImGui::SmallButton("EXPORT CSV##artifact"))
+            exportEvidenceCsv(snapshot,artifactExportMessage);
+        if(!artifactExportMessage.empty())
+            ImGui::TextDisabled("%s",artifactExportMessage.c_str());
         ImGui::Separator();
         std::string query=artifactSearch;
         std::transform(query.begin(),query.end(),query.begin(),
@@ -5877,6 +6039,8 @@ static void renderUI() {
             ImGui::TableSetupColumn("Evidence and location",ImGuiTableColumnFlags_WidthStretch,3.f);
             ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,95);
             ImGui::TableHeadersRow();
+            std::vector<const Record*> visibleArtifacts;
+            visibleArtifacts.reserve(snapshot.size());
             for(const auto& r:snapshot){
                 const bool matchType=artifactType==0 ||
                     (artifactType==1&&r.category=="Artifact: EXE") ||
@@ -5903,6 +6067,21 @@ static void renderUI() {
                 std::transform(hay.begin(),hay.end(),hay.begin(),
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&hay.find(query)==std::string::npos)continue;
+                visibleArtifacts.push_back(&r);
+            }
+            ImGuiListClipper artifactClipper;
+            artifactClipper.Begin((int)visibleArtifacts.size());
+            while(artifactClipper.Step())
+                for(int row=artifactClipper.DisplayStart;
+                    row<artifactClipper.DisplayEnd;++row){
+                    const Record& r=*visibleArtifacts[(size_t)row];
+                    const bool detected=isDetectedRecord(r) ||
+                        r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
+                        r.category=="FiveM Cheat Name Detection";
+                    const bool suspect=!detected &&
+                        (isSuspectRecord(r) ||
+                         r.detail.find("NEEDS REVIEW")!=std::string::npos ||
+                         r.detail.find("REVIEW:")!=std::string::npos);
                 ImGui::TableNextRow();
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(65,65,65,180));
