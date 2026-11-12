@@ -1,46 +1,46 @@
-name: Build Macaquito Scanner
+
+name: Build Sync PC Checker
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   windows-build:
     runs-on: windows-latest
-    permissions:
-      contents: read
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Dear ImGui
-        shell: pwsh
-        run: git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git imgui
-
-      - name: Configure MSVC
+      - name: Install MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Download Dear ImGui
+        shell: cmd
+        run: |
+          git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git imgui
 
       - name: Compile Windows application
         shell: cmd
         run: |
           if not exist dist mkdir dist
-          cl /nologo /std:c++20 /EHsc /utf-8 /W3 /O2 /DUNICODE /D_UNICODE /Iimgui /Iimgui\backends main.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp /Fe:dist\MacaquitoScanner.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib d3d11.lib dxgi.lib comdlg32.lib wintrust.lib crypt32.lib bcrypt.lib advapi32.lib iphlpapi.lib ws2_32.lib
+          cl /nologo /std:c++20 /EHsc /utf-8 /W3 /O2 /DUNICODE /D_UNICODE /Iimgui /Iimgui\backends main.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp /Fe:dist\SyncPCChecker.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib d3d11.lib dxgi.lib comdlg32.lib wintrust.lib crypt32.lib bcrypt.lib advapi32.lib iphlpapi.lib ws2_32.lib ole32.lib
 
-      - name: Embed administrator UAC manifest
+      - name: Apply administrator manifest
         shell: cmd
         run: |
-          mt.exe -nologo -manifest app.manifest -outputresource:dist\MacaquitoScanner.exe;#1
+          mt.exe -nologo -manifest app.manifest -outputresource:dist\SyncPCChecker.exe;#1
 
-      - name: Generate final executable SHA-256
+      - name: Generate SHA256
         shell: pwsh
         run: |
-          $hash = (Get-FileHash "dist/MacaquitoScanner.exe" -Algorithm SHA256).Hash
-          "$hash  MacaquitoScanner.exe" | Set-Content "dist/MacaquitoScanner.sha256.txt"
-          Get-Content "dist/MacaquitoScanner.sha256.txt"
+          Get-FileHash dist/SyncPCChecker.exe -Algorithm SHA256 | Format-List
 
-      - name: Upload portable executable and hash
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: MacaquitoScanner-Windows
-          path: dist/*
+          name: Sync-PC-Checker
+          path: dist/SyncPCChecker.exe
+          if-no-files-found: error
