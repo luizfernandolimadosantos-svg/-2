@@ -1,4 +1,8 @@
 #include <cstdio>
+#include <cstdlib>
+#ifdef SYNC_WITH_YARA
+#include <yara.h>
+#endif
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -336,7 +340,7 @@ static const char* localized(const char* english){
         {"Restore Defaults","Restaurar padrões"},
         {"Settings saved successfully.","Configurações salvas com sucesso."},
         {"Verify Scanner Executable","Verificar executável do scanner"},
-        {"FULL INSPECTION  /  PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO"},
+        {"FULL INSPECTION  /  VERIFIED PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO"},
         {"SYSTEM INTEGRITY","INTEGRIDADE DO SISTEMA"},
         {"EXECUTION ARTIFACTS","ARTEFATOS DE EXECUÇÃO"},
         {"PROCESS ANALYSIS","ANÁLISE DE PROCESSOS"},
@@ -3359,6 +3363,400 @@ static std::vector<Record> inspectExtraSecurityPolicies(){
     return out;
 }
 
+
+// Session-to-session comparison. Metadata only; no evidence files are copied.
+static std::vector<Record> previousScanRecords;
+static std::vector<Process> previousScanProcesses;
+static bool hasPreviousScan=false;
+static std::atomic<unsigned long long> stageElapsedMs[6]{};
+static std::chrono::steady_clock::time_point stageStartedAt;
+static void markInspectionStage(unsigned completed){
+    if(completed==0 || completed>6)return;
+    const auto now=std::chrono::steady_clock::now();
+    stageElapsedMs[completed-1].store(static_cast<unsigned long long>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now-stageStartedAt).count()));
+    stageStartedAt=now;
+    completedStages=static_cast<int>(completed);
+}
+static std::string recordKey(const Record& r){
+    return r.category+"\\x1f"+r.name+"\\x1f"+r.detail;
+}
+static void drawEvidenceComparison(){
+    std::lock_guard<std::mutex> lock(dataMutex);
+    if(!hasPreviousScan){
+        ImGui::TextWrapped("Run another complete inspection to compare with the previous session. Comparisons stay in memory and are not persisted.");
+        return;
+    }
+    std::unordered_set<std::string> oldKeys,newKeys;
+    for(const auto& r:previousScanRecords)oldKeys.insert(recordKey(r));
+    for(const auto& r:records)newKeys.insert(recordKey(r));
+    size_t added=0,removed=0;
+    for(const auto& k:newKeys)if(!oldKeys.count(k))++added;
+    for(const auto& k:oldKeys)if(!newKeys.count(k))++removed;
+    ImGui::Text("New records: %zu  |  No longer observed: %zu",added,removed);
+    ImGui::TextDisabled("Differences can reflect normal Windows activity, permissions, or collection coverage.");
+    if(ImGui::BeginTable("##scanDiff",3,
+        ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,320))){
+        ImGui::TableSetupColumn("Change",ImGuiTableColumnFlags_WidthFixed,115);
+        ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Evidence",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        unsigned shown=0;
+        auto row=[&](const char* change,const Record& r){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(change);
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextWrapped("%s | %s",r.name.c_str(),r.detail.c_str());
+        };
+        for(const auto& r:records){
+            if(shown>=150)break;
+            if(!oldKeys.count(recordKey(r))){row("NEW",r);++shown;}
+        }
+        for(const auto& r:previousScanRecords){
+            if(shown>=150)break;
+            if(!newKeys.count(recordKey(r))){row("NOT OBSERVED",r);++shown;}
+        }
+        ImGui::EndTable();
+    }
+}
+static void drawEvidenceInspector(){
+    std::lock_guard<std::mutex> lock(dataMutex);
+    static int selected=-1;
+    static char query[160]{};
+    ImGui::InputTextWithHint("##evidenceSearch","Search category, name or details...",query,sizeof(query));
+    ImGui::TextDisabled("%zu records available | Read-only evidence inspector",records.size());
+    if(ImGui::BeginChild("##evidenceList",ImVec2(0,270),ImGuiChildFlags_Borders)){
+        unsigned shown=0;
+        for(size_t i=0;i<records.size() && shown<500;++i){
+            const auto& r=records[i];
+            const std::string text=r.category+" / "+r.name+" / "+r.detail;
+            if(query[0] && text.find(query)==std::string::npos)continue;
+            ImGui::PushID(static_cast<int>(i));
+            if(ImGui::Selectable((r.category+" | "+r.name).c_str(),
+                                 selected==static_cast<int>(i)))
+                selected=static_cast<int>(i);
+            ImGui::PopID();++shown;
+        }
+    }
+    ImGui::EndChild();
+    if(selected>=0 && static_cast<size_t>(selected)<records.size()){
+        const auto& r=records[static_cast<size_t>(selected)];
+        ImGui::Separator();
+        ImGui::Text("SOURCE: %s",r.category.c_str());
+        ImGui::Text("NAME: %s",r.name.c_str());
+        ImGui::TextWrapped("DETAILS: %s",r.detail.c_str());
+        if(ImGui::Button("COPY EVIDENCE")){
+            const std::string text=r.category+" | "+r.name+" | "+r.detail;
+            ImGui::SetClipboardText(text.c_str());
+        }
+        ImGui::TextDisabled("An indicator alone does not confirm a threat.");
+    }
+}
+
+
+// Forensic source validation: bounded reads, no changes to source artifacts.
+// These are metadata/header checks, not complete format-specific parsers.
+
+// Bounded parsers: malformed or unsupported data never becomes a threat verdict.
+static bool readLe32(const std::vector<unsigned char>& b,size_t o,uint32_t& v){
+    if(o>b.size() || b.size()-o<4)return false;
+    v=uint32_t(b[o])|(uint32_t(b[o+1])<<8)|
+      (uint32_t(b[o+2])<<16)|(uint32_t(b[o+3])<<24);
+    return true;
+}
+static bool readLe64(const std::vector<unsigned char>& b,size_t o,uint64_t& v){
+    uint32_t lo=0,hi=0;
+    if(!readLe32(b,o,lo)||!readLe32(b,o+4,hi))return false;
+    v=uint64_t(lo)|(uint64_t(hi)<<32);
+    return true;
+}
+static std::string safeAscii(const std::vector<unsigned char>& b,size_t offset,size_t length){
+    if(offset>b.size()||length>b.size()-offset)return {};
+    std::string out;
+    for(size_t i=0;i<length;++i){
+        const auto c=b[offset+i];
+        if(c==0)break;
+        out.push_back(c>=32&&c<=126?char(c):'?');
+    }
+    return out;
+}
+
+// Prefetch executable name is a 60-byte UTF-16LE field, not ASCII.
+static std::string prefetchExecutableName(const std::vector<unsigned char>& b){
+    if(b.size()<0x10+60)return {};
+    std::wstring name;
+    for(size_t o=0x10;o<0x10+60;o+=2){
+        const uint16_t c=static_cast<uint16_t>(b[o])|
+                         (static_cast<uint16_t>(b[o+1])<<8);
+        if(c==0)break;
+        if(c<32 || (c>=0xD800 && c<=0xDFFF))return {};
+        name.push_back(static_cast<wchar_t>(c));
+    }
+    return utf8(name);
+}
+// Forensic parser guards: reject out-of-bounds sections before interpreting.
+static bool prefetchSectionBounds(const std::vector<unsigned char>& b,
+                                  size_t offset,size_t entrySize,size_t count){
+    return offset<=b.size() && (entrySize==0 || count<=(b.size()-offset)/entrySize);
+}
+static std::vector<Record> parsePrefetchFile(const std::filesystem::path& path){
+    std::vector<Record> out;
+    std::error_code ec;
+    const auto length=std::filesystem::file_size(path,ec);
+    if(ec||length<8||length>32ull*1024*1024){
+        out.push_back({"Prefetch","Unreadable / unsupported size",
+            "Source file inaccessible or outside 8 B - 32 MiB safety bounds"});
+        return out;
+    }
+    std::ifstream f(path,std::ios::binary);
+    if(!f)return {{"Prefetch","Access denied","Could not open source file"}};
+    std::vector<unsigned char> b(static_cast<size_t>(length));
+    if(!f.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size())))
+        return {{"Prefetch","Read error","Short read; source not interpreted"}};
+    // MAM is a compressed container, not an ordinary SCCA header.
+    if(b[0]=='M'&&b[1]=='A'&&b[2]=='M')
+        return {{"Prefetch","Compressed container",
+            "MAM container detected; decompression not available in this build"}};
+    uint32_t version=0,declared=0,runCount=0;
+    if(!readLe32(b,0,version)||std::memcmp(b.data()+4,"SCCA",4)!=0)
+        return {{"Prefetch","Unknown signature","Not an SCCA prefetch stream"}};
+    if(version!=17&&version!=23&&version!=26&&version!=30&&version!=31)
+        return {{"Prefetch","Unsupported version","SCCA version "+std::to_string(version)}};
+    if(!readLe32(b,12,declared)||declared!=b.size()||b.size()<0xD4)
+        return {{"Prefetch","Invalid length","Declared and actual file lengths differ"}};
+    const std::string executable=prefetchExecutableName(b);
+    // Offsets are version-dependent. Run count offsets here are validated
+    // only for the known uncompressed layouts.
+    size_t countOffset=0;
+    if(version==17)countOffset=0x90;
+    else if(version==23)countOffset=0x98;
+    else countOffset=0xD0;
+    if(!readLe32(b,countOffset,runCount))
+        return {{"Prefetch","Truncated metadata","Cannot read run count"}};
+    if(runCount>10000000)
+        return {{"Prefetch","Implausible metadata","Run count outside expected bounds"}};
+    // The file metrics table has an offset/count pair at 0x54/0x58.
+    // Only verify bounds here: entry layout differs by Windows version.
+    uint32_t metricOffset=0,metricCount=0;
+    if(!readLe32(b,0x54,metricOffset)||!readLe32(b,0x58,metricCount)||
+       metricCount>100000 || metricOffset>b.size()){
+        return {{"Prefetch","Invalid section","File metrics table offset/count is invalid"}};
+    }
+    // Do not guess the per-version entry size; table contents remain unparsed.
+    out.push_back({"Prefetch Parsed",executable.empty()?"Unnamed executable":executable,
+        "SCCA version="+std::to_string(version)+
+        " | bytes="+std::to_string(b.size())+
+        " | file metrics entries (header)="+std::to_string(metricCount)+
+        " | recorded run count="+std::to_string(runCount)+
+        " | Source metadata, not proof of recent execution"});
+    return out;
+}
+static void enumerateAmcacheTree(HKEY parent,const std::wstring& branch,
+                                 std::vector<Record>& out,unsigned depth,
+                                 size_t& budget){
+    if(depth>3||budget==0||cancelRequested)return;
+    DWORD index=0;
+    while(budget && index<300 && !cancelRequested){
+        wchar_t name[512]{};
+        DWORD nameLength=511;
+        FILETIME modified{};
+        const LSTATUS status=RegEnumKeyExW(parent,index++,name,&nameLength,
+                                            nullptr,nullptr,nullptr,&modified);
+        if(status==ERROR_NO_MORE_ITEMS)break;
+        if(status!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(parent,name,0,KEY_READ,&child)!=ERROR_SUCCESS)continue;
+        const std::wstring full=branch+L"\\"+name;
+        --budget;
+        DWORD values=0;
+        RegQueryInfoKeyW(child,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,
+                         &values,nullptr,nullptr,nullptr,nullptr);
+        if(values){
+            const std::string path=utf8(full);
+            out.push_back({"Amcache Registry",path,
+                "Subkey accessible | value entries="+std::to_string(values)+
+                " | Key presence does not establish execution"});
+        }
+        enumerateAmcacheTree(child,full,out,depth+1,budget);
+        RegCloseKey(child);
+    }
+}
+static std::vector<Record> inspectForensicSourceHeaders(){
+    std::vector<Record> out;
+    wchar_t win[MAX_PATH]{};
+    if(!GetWindowsDirectoryW(win,MAX_PATH))
+        return {{"Forensic Sources","Windows root","Windows directory unavailable"}};
+    const std::filesystem::path root(win);
+    const auto prefetch=root/L"Prefetch";
+    std::error_code ec;
+    if(std::filesystem::exists(prefetch,ec)&&!ec){
+        size_t checked=0,parsed=0,compressed=0,invalid=0;
+        std::filesystem::directory_iterator it(prefetch,
+            std::filesystem::directory_options::skip_permission_denied,ec),end;
+        while(!ec&&it!=end&&checked<250&&!cancelRequested){
+            if(it->is_regular_file(ec)&&it->path().extension()==L".pf"){
+                ++checked;
+                auto items=parsePrefetchFile(it->path());
+                for(auto& r:items){
+                    if(r.category=="Prefetch Parsed")++parsed;
+                    else if(r.name=="Compressed container")++compressed;
+                    else ++invalid;
+                    if(out.size()<280)out.push_back(std::move(r));
+                }
+            }
+            it.increment(ec);
+        }
+        out.push_back({"Prefetch","Coverage",
+            "Inspected="+std::to_string(checked)+
+            " | Parsed="+std::to_string(parsed)+
+            " | Compressed unsupported="+std::to_string(compressed)+
+            " | Other unsupported/errors="+std::to_string(invalid)});
+    }else out.push_back({"Prefetch","Unavailable",
+        "Prefetch directory unavailable or access denied"});
+    const auto amcache=root/L"AppCompat"/L"Programs"/L"Amcache.hve";
+    ec.clear();
+    if(std::filesystem::exists(amcache,ec)&&!ec){
+        HKEY hive=nullptr;
+        // RegLoadAppKey opens an application hive without mounting it globally.
+        // On active Windows installations the hive may be locked by the OS.
+        const LONG status=RegLoadAppKeyW(amcache.c_str(),&hive,
+                                         KEY_READ,0,0);
+        if(status==ERROR_SUCCESS && hive){
+            size_t budget=250;
+            enumerateAmcacheTree(hive,L"Amcache",out,0,budget);
+            RegCloseKey(hive);
+            out.push_back({"Amcache","Registry enumeration",
+                "Read-only key enumeration completed (up to 250 subkeys); "
+                "schema-specific file metadata decoding remains unsupported"});
+        }else out.push_back({"Amcache","Hive inaccessible",
+            "RegLoadAppKeyW returned "+std::to_string(status)+
+            " | Live hive may be locked; no tampering conclusion"});
+    }else out.push_back({"Amcache","Source unavailable",
+        "Amcache hive not found or inaccessible"});
+    HKEY key=nullptr;
+    const LSTATUS status=RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCompatCache",
+        0,KEY_QUERY_VALUE,&key);
+    if(status==ERROR_SUCCESS){
+        DWORD type=0,size=0;
+        const LSTATUS result=RegQueryValueExW(key,L"AppCompatCache",nullptr,
+            &type,nullptr,&size);
+        if(result==ERROR_SUCCESS && type==REG_BINARY && size>=4 &&
+           size<=8*1024*1024){
+            std::vector<unsigned char> data(size);
+            if(RegQueryValueExW(key,L"AppCompatCache",nullptr,&type,
+                                data.data(),&size)==ERROR_SUCCESS){
+                uint32_t signature=0;
+                readLe32(data,0,signature);
+                std::ostringstream ss;
+                ss<<std::hex<<std::uppercase<<signature;
+                out.push_back({"ShimCache","Binary format",
+                    "Value bytes="+std::to_string(size)+
+                    " | Header DWORD=0x"+ss.str()+
+                    " | Version-specific record decoding not implemented; "
+                    "execution cannot be inferred"});
+            }
+        }else out.push_back({"ShimCache","Unavailable / unsupported",
+            "Registry value unavailable or outside bounded binary size"});
+        RegCloseKey(key);
+    }else out.push_back({"ShimCache","Source unavailable",
+        "AppCompatCache registry key inaccessible"});
+    return out;
+}
+static std::vector<Record> correlateForensicEvidence(const std::vector<Record>& input){
+    std::vector<Record> out;
+    bool eventLog=false,policy=false,provenance=false;
+    for(const auto& r:input){
+        const std::string joined=r.category+" "+r.name+" "+r.detail;
+        if(joined.find("1102")!=std::string::npos ||
+           joined.find("Event log cleared")!=std::string::npos)eventLog=true;
+        if(joined.find("Defender")!=std::string::npos &&
+           (joined.find("policy")!=std::string::npos ||
+            joined.find("Policy")!=std::string::npos))policy=true;
+        if(joined.find("Unsigned")!=std::string::npos ||
+           joined.find("unsigned")!=std::string::npos)provenance=true;
+    }
+    if(eventLog && policy)
+        out.push_back({"Evidence Correlation","Event log + security policy",
+            "Two categories of potentially relevant indicators co-occur. "
+            "Review timestamps and sources; causality is NOT established."});
+    if(policy && provenance)
+        out.push_back({"Evidence Correlation","Policy + executable provenance",
+            "Independent review recommended. Co-occurrence alone is NOT proof of malicious activity."});
+    return out;
+}
+
+
+// Optional libyara integration. Build with SYNC_WITH_YARA and link libyara.
+// The operator supplies a trusted rules file. No network access or rule download.
+#ifdef SYNC_WITH_YARA
+static int syncYaraCallback(YR_SCAN_CONTEXT*,int message,void* messageData,void* userData){
+    if(message==CALLBACK_MSG_RULE_MATCHING && messageData && userData){
+        auto* names=static_cast<std::vector<std::string>*>(userData);
+        const auto* rule=static_cast<const YR_RULE*>(messageData);
+        if(names->size()<32)names->push_back(rule->identifier?rule->identifier:"unnamed");
+    }
+    return CALLBACK_CONTINUE;
+}
+static std::vector<Record> inspectYaraLocalFiles(const std::vector<Process>& p){
+    std::vector<Record> results;
+    const char* env=std::getenv("SYNC_YARA_RULES");
+    if(!env || !*env){
+        results.push_back({"YARA","Configuration",
+            "Disabled: set SYNC_YARA_RULES to a trusted local compiled rules file"});
+        return results;
+    }
+    if(yr_initialize()!=ERROR_SUCCESS){
+        results.push_back({"YARA","Initialization","libyara initialization failed"});
+        return results;
+    }
+    YR_RULES* rules=nullptr;
+    const int load=yr_rules_load(env,&rules);
+    if(load!=ERROR_SUCCESS || !rules){
+        results.push_back({"YARA","Rules","Cannot load compiled YARA rules"});
+        yr_finalize();return results;
+    }
+    // The caller controls the rules. Bound file count and scan timeout.
+    size_t count=0;
+    for(const auto& proc:p){
+        if(cancelRequested || count>=20)break;
+        // No file is scanned unless it is a regular file with a reasonable size.
+        std::error_code ec;
+        const std::filesystem::path path(proc.path);
+        if(path.empty() || !std::filesystem::is_regular_file(path,ec) || ec)continue;
+        const auto size=std::filesystem::file_size(path,ec);
+        if(ec || size>64ull*1024*1024)continue;
+        ++count;
+        std::vector<std::string> matches;
+        const auto narrow=path.u8string();
+        const std::string fileName(narrow.begin(),narrow.end());
+        const int status=yr_rules_scan_file(rules,fileName.c_str(),0,
+            syncYaraCallback,&matches,15);
+        if(status!=ERROR_SUCCESS){
+            results.push_back({"YARA","Scan error",
+                "One file could not be scanned; no conclusion"});
+            continue;
+        }
+        for(const auto& rule:matches)
+            results.push_back({"YARA Rule Match",rule,
+                "Matched a local process executable. Review rule quality and context."});
+    }
+    results.push_back({"YARA","Coverage",
+        "Local executable files scanned: "+std::to_string(count)+
+        " (limit 20, 64 MiB/file, 15 s/file)"});
+    yr_rules_destroy(rules);
+    yr_finalize();
+    return results;
+}
+#else
+static std::vector<Record> inspectYaraLocalFiles(const std::vector<Process>&){
+    return {{"YARA","Integration",
+        "Not compiled: build with SYNC_WITH_YARA and a compatible libyara SDK"}};
+}
+#endif
+
 static void scanWorker() {
     try {
         stage=1;
@@ -3369,15 +3767,15 @@ static void scanWorker() {
             assessProcess(proc,winRoot);
         }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        completedStages=1;
+        markInspectionStage(1);
         stage=2;
         auto services=enumerateServices();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        completedStages=2;
+        markInspectionStage(2);
         stage=3;
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        completedStages=3;
+        markInspectionStage(3);
         stage=4;
         auto network=enumerateTcp();
         auto udp=enumerateUdp();
@@ -3385,7 +3783,7 @@ static void scanWorker() {
         auto usb=enumerateUsbStorage();
         auto defender=enumerateDefenderDetections();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        completedStages=4;
+        markInspectionStage(4);
         stage=5;
         auto security=inspectWindowsSecurityConfiguration();
         auto policyRules=inspectPolicyRuleSet();
@@ -3442,8 +3840,10 @@ static void scanWorker() {
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
         auto auditPlatform=inspectAuditAndPlatformEvidence();
         auto extraPolicies=inspectExtraSecurityPolicies();
+        auto forensicHeaders=inspectForensicSourceHeaders();
+        auto yaraFindings=inspectYaraLocalFiles(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        completedStages=5;
+        markInspectionStage(5);
         stage=5;
         services.insert(services.end(),startup.begin(),startup.end());
         services.insert(services.end(),network.begin(),network.end());
@@ -3457,6 +3857,8 @@ static void scanWorker() {
         services.insert(services.end(),advancedIntegrity.begin(),advancedIntegrity.end());
         services.insert(services.end(),auditPlatform.begin(),auditPlatform.end());
         services.insert(services.end(),extraPolicies.begin(),extraPolicies.end());
+        services.insert(services.end(),forensicHeaders.begin(),forensicHeaders.end());
+        services.insert(services.end(),yaraFindings.begin(),yaraFindings.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -3487,6 +3889,8 @@ static void scanWorker() {
         services.insert(services.end(),serviceImagePaths.begin(),serviceImagePaths.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
+        auto correlations=correlateForensicEvidence(services);
+        services.insert(services.end(),correlations.begin(),correlations.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
@@ -3497,34 +3901,39 @@ static void scanWorker() {
             processCount=processes.size();
             recordCount=records.size();
         }
-        completedStages=6;
+        markInspectionStage(6);
         done=true;
     } catch(...) {
         scanFailed=true;
     }
     scanning=false;
 }
-// Visual presentation pacing only; actual scan completion is never delayed.
+// Progress reflects completed worker milestones, not an artificial timer.
 static double inspectionProgressStart=0.0;
-// Four sequential 120-second presentation windows (8 minutes total).
-// These are NOT measured scanning durations; the worker may finish earlier.
-static constexpr double inspectionPresentationSeconds=480.0;
 static double inspectionPresentationFraction(){
     if(inspectionProgressStart<=0.0)return 0.0;
-    const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionProgressStart);
-    return std::clamp(elapsed/inspectionPresentationSeconds,0.0,1.0);
+    if(scanFailed || scanCancelled)return std::clamp(completedStages.load()/6.0,0.0,0.99);
+    if(done)return 1.0;
+    return std::clamp(completedStages.load()/6.0,0.0,0.99);
 }
 static int inspectionDisplayPercent(){
-    // Exact 100% unlocks only after actual worker completion and presentation.
-    const double p=inspectionPresentationFraction();
-    if(scanFailed || scanCancelled || !done)return (std::min)(99,(int)(p*100.0));
-    return std::clamp((int)(p*100.0),0,100);
+    return (int)std::round(inspectionPresentationFraction()*100.0);
 }
 
 static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
     peFilesInspected=0;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        if(done && !scanFailed && !scanCancelled){
+            previousScanRecords=records;
+            previousScanProcesses=processes;
+            hasPreviousScan=true;
+        }
+    }
+    stageStartedAt=std::chrono::steady_clock::now();
+    for(auto& elapsed:stageElapsedMs)elapsed=0;
     inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
     try{
@@ -5580,54 +5989,46 @@ static void drawAtlasProgress(bool compact=false){
     const float fraction=smoothInspectionVisual(
         static_cast<float>(inspectionPresentationFraction()));
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled(localized("FULL INSPECTION  /  PROGRESS"));
+    ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
     ImGui::SameLine();
     ImGui::Text("%.1f%%",fraction*100.f);
     drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
                                   compact?14.f:19.f);
     if(compact)return;
     ImGui::Spacing();
-    // One focused activity track at a time beneath the overall progress.
-    // Visual phases are timed; the collection worker runs independently.
+    // Show exactly one active worker milestone; no fabricated stage timing.
     const char* phaseNames[]={
-        "SYSTEM INTEGRITY",
-        "EVENT LOG ANALYSIS",
-        "EXECUTION ARTIFACTS",
-        "PROCESS ANALYSIS",
-        "DRIVER AND MODULE AUDIT",
-        "PERSISTENCE REVIEW",
-        "EVIDENCE CORRELATION",
-        "FINAL INTEGRITY REVIEW"
+        "PROCESS INVENTORY","SERVICE INVENTORY","STARTUP ENTRIES",
+        "NETWORK AND DEVICE INVENTORY","SECURITY AND FORENSIC ARTIFACTS",
+        "PUBLISHING RESULTS"
     };
     const char* phaseNamesPt[]={
-        "INTEGRIDADE DO SISTEMA",
-        "ANÁLISE DE LOGS DE EVENTOS",
-        "ARTEFATOS DE EXECUÇÃO",
-        "ANÁLISE DE PROCESSOS",
-        "AUDITORIA DE DRIVERS E MÓDULOS",
-        "REVISÃO DE PERSISTÊNCIA",
-        "CORRELAÇÃO DE EVIDÊNCIAS",
-        "REVISÃO FINAL DE INTEGRIDADE"
+        "INVENTÁRIO DE PROCESSOS","INVENTÁRIO DE SERVIÇOS","INICIALIZAÇÃO",
+        "REDE E DISPOSITIVOS","SEGURANÇA E ARTEFATOS FORENSES",
+        "PUBLICAÇÃO DOS RESULTADOS"
     };
-    constexpr int phaseCount=8;
-    const double elapsed=inspectionProgressStart>0.0 ?
-        (std::max)(0.0,ImGui::GetTime()-inspectionProgressStart):0.0;
-    const double phaseSeconds=inspectionPresentationSeconds/phaseCount;
-    const int activeIndex=std::clamp(static_cast<int>(elapsed/phaseSeconds),
-                                     0,phaseCount-1);
-    const float activeProgress=std::clamp(
-        static_cast<float>((elapsed-activeIndex*phaseSeconds)/phaseSeconds),
-        0.f,1.f);
+    constexpr int phaseCount=6;
+    const int completed=std::clamp(completedStages.load(),0,6);
+    const int activeIndex=std::clamp(completed,0,5);
     const char* activeName=displayLanguage==1?
         phaseNamesPt[activeIndex]:phaseNames[activeIndex];
     ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
     ImGui::SameLine();
     ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
-    ImGui::TextUnformatted(activeName);
-    ImGui::SameLine();
-    ImGui::Text("%.1f%%",activeProgress*100.f);
-    drawProfessionalProgressTrack("active-stage",activeName,activeProgress,
-                                  width,11.f);
+    ImGui::TextUnformatted(done?
+        (displayLanguage==1?"TODAS AS ETAPAS CONCLUÍDAS":"ALL STAGES COMPLETE"):activeName);
+    // A stage reaches 100% only when its worker milestone is completed.
+    // Use indeterminate activity rather than inventing a percentage within it.
+    if(!done && scanning){
+        const float t=static_cast<float>(ImGui::GetTime());
+        const float pulse=0.12f+0.08f*(std::sin(t*2.2f)+1.f);
+        drawProfessionalProgressTrack("active-stage",activeName,pulse,width,11.f);
+        ImGui::TextDisabled("%s",displayLanguage==1?
+            "Analisando... progresso desta etapa não mensurável":
+            "Analyzing... per-stage progress is not measurable");
+    }else{
+        drawProfessionalProgressTrack("active-stage",activeName,done?1.f:0.f,width,11.f);
+    }
     ImGui::Spacing();
     const char* phase=scanFailed?"INSPECTION FAILED":
         scanCancelled?"INSPECTION CANCELLED":
@@ -5636,7 +6037,7 @@ static void drawAtlasProgress(bool compact=false){
             stages[std::clamp(stage.load(),0,5)]):"READY";
     ImGui::TextDisabled("%s",localized(phase));
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Progress uses timed visual stages. Actual evidence collection may finish sooner; results unlock after both finish.");
+        ImGui::SetTooltip("Progress reflects completed worker milestones. Active stages do not report fabricated percentages.");
 }
 
 static void renderUI() {
@@ -6063,6 +6464,31 @@ static void renderUI() {
             ImGui::PopStyleColor();
             ImGui::Dummy(ImVec2(0,10));
         }
+        if(done){
+            if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
+                const char* names[]={"Process inventory","Service inventory",
+                    "Startup entries","Network and device inventory",
+                    "Security and forensic artifacts","Result publication"};
+                for(int i=0;i<6;++i)
+                    ImGui::Text("%s: %.2f s",names[i],stageElapsedMs[i].load()/1000.0);
+                ImGui::TextDisabled("Elapsed time is measured for completed worker stages.");
+            }
+        }
+        if(done){
+            std::lock_guard<std::mutex> lock(dataMutex);
+            size_t correlated=0,sourceChecks=0;
+            for(const auto& r:records){
+                if(r.category=="Evidence Correlation")++correlated;
+                if(r.category=="Prefetch Headers" || r.category=="Amcache Header" ||
+                   r.category=="ShimCache Source")++sourceChecks;
+            }
+            ImGui::TextColored(accent,"FORENSIC SOURCE COVERAGE");
+            ImGui::Text("Source status checks: %zu  |  Correlation notices: %zu",
+                        sourceChecks,correlated);
+            ImGui::TextDisabled("Read-only checks. Prefetch MAM and Windows-specific records may be unsupported.");
+            ImGui::TextDisabled("Access denied or missing evidence is not proof of tampering.");
+            ImGui::Dummy(ImVec2(0,8));
+        }
         ImGui::TextColored(accent,"INVESTIGATION MODULES");
         ImGui::TextColored(quiet,"Select a module to inspect collected evidence");
         ImGui::Dummy(ImVec2(0,8));
@@ -6079,6 +6505,14 @@ static void renderUI() {
             if(ImGui::BeginTabItem("Findings")) {
                 ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
                 processTable(-1.f);
+                ImGui::EndTabItem();
+            }
+            if(ImGui::BeginTabItem("Evidence Inspector")){
+                drawEvidenceInspector();
+                ImGui::EndTabItem();
+            }
+            if(ImGui::BeginTabItem("Scan Comparison")){
+                drawEvidenceComparison();
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Service Review")) {
