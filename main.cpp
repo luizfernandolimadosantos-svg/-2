@@ -3368,14 +3368,23 @@ static std::vector<Record> inspectExtraSecurityPolicies(){
 static std::vector<Record> previousScanRecords;
 static std::vector<Process> previousScanProcesses;
 static bool hasPreviousScan=false;
-static std::atomic<unsigned long long> stageElapsedMs[6]{};
+// Microsecond resolution avoids reporting completed fast stages as "0 ms".
+static std::atomic<unsigned long long> stageElapsedUs[6]{};
+static std::atomic<unsigned long long> scanElapsedUs{0};
+static std::atomic<unsigned> stageWorkItems[6]{};
+
 static std::chrono::steady_clock::time_point stageStartedAt;
 static void markInspectionStage(unsigned completed){
     if(completed==0 || completed>6)return;
     const auto now=std::chrono::steady_clock::now();
-    stageElapsedMs[completed-1].store(static_cast<unsigned long long>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now-stageStartedAt).count()));
+    stageElapsedUs[completed-1].store(static_cast<unsigned long long>(
+        std::chrono::duration_cast<std::chrono::microseconds>(now-stageStartedAt).count()));
     stageStartedAt=now;
+    if(completed==6){
+        unsigned long long total=0;
+        for(const auto& elapsed:stageElapsedUs)total+=elapsed.load();
+        scanElapsedUs=total;
+    }
     completedStages=static_cast<int>(completed);
 }
 static std::string recordKey(const Record& r){
@@ -3771,14 +3780,17 @@ static void scanWorker() {
             assessProcess(proc,winRoot);
         }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[0]=static_cast<unsigned>(p.size());
         markInspectionStage(1);
         stage=2;
         auto services=enumerateServices();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[1]=static_cast<unsigned>(services.size());
         markInspectionStage(2);
         stage=3;
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[2]=static_cast<unsigned>(startup.size());
         markInspectionStage(3);
         stage=4;
         auto network=enumerateTcp();
@@ -3787,6 +3799,8 @@ static void scanWorker() {
         auto usb=enumerateUsbStorage();
         auto defender=enumerateDefenderDetections();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[3]=static_cast<unsigned>(
+            network.size()+udp.size()+tcp6.size()+usb.size()+defender.size());
         markInspectionStage(4);
         stage=5;
         auto security=inspectWindowsSecurityConfiguration();
@@ -3849,6 +3863,7 @@ static void scanWorker() {
         forensicSourceStatus.store(1);
         auto yaraFindings=inspectYaraLocalFiles(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[4]=static_cast<unsigned>(services.size());
         markInspectionStage(5);
         stage=5;
         services.insert(services.end(),startup.begin(),startup.end());
@@ -3908,6 +3923,7 @@ static void scanWorker() {
             processCount=processes.size();
             recordCount=records.size();
         }
+        stageWorkItems[5]=static_cast<unsigned>(recordCount.load());
         markInspectionStage(6);
         done=true;
     } catch(...) {
@@ -3944,7 +3960,9 @@ static void startScan() {
         }
     }
     stageStartedAt=std::chrono::steady_clock::now();
-    for(auto& elapsed:stageElapsedMs)elapsed=0;
+    for(auto& elapsed:stageElapsedUs)elapsed=0;
+    for(auto& count:stageWorkItems)count=0;
+    scanElapsedUs=0;
     inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
     try{
@@ -6480,13 +6498,20 @@ static void renderUI() {
                 const char* names[]={"Process inventory","Service inventory",
                     "Startup entries","Network and device inventory",
                     "Security and forensic artifacts","Result publication"};
-                for(int i=0;i<6;++i)
-                    {
-                    const auto ms=stageElapsedMs[i].load();
-                    if(ms<10)ImGui::Text("%s: %llu ms",names[i],ms);
-                    else ImGui::Text("%s: %.2f s",names[i],ms/1000.0);
+                for(int i=0;i<6;++i){
+                    const auto us=stageElapsedUs[i].load();
+                    const auto count=stageWorkItems[i].load();
+                    if(us<1000)
+                        ImGui::Text("%s: %.2f ms  |  %u items",
+                            names[i],us/1000.0,count);
+                    else
+                        ImGui::Text("%s: %.3f s  |  %u items",
+                            names[i],us/1000000.0,count);
                 }
-                ImGui::TextDisabled("Elapsed time is measured for completed worker stages.");
+                ImGui::Separator();
+                ImGui::Text("Measured worker time: %.3f s",scanElapsedUs.load()/1000000.0);
+                ImGui::TextDisabled("Items are collected entries, not a measure of forensic depth.");
+                ImGui::TextDisabled("Stage 5 includes collection and enrichment; counts may overlap.");
             }
         }
         if(done || scanFailed){
