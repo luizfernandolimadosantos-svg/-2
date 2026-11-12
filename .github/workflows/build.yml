@@ -1,43 +1,29 @@
-
 name: Build Sync PC Checker
-
 on:
   push:
     branches: [main]
   workflow_dispatch:
-
 jobs:
   windows-build:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install MSVC
         uses: ilammy/msvc-dev-cmd@v1
-
       - name: Download Dear ImGui
         shell: cmd
-        run: |
-          git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git imgui
-
+        run: git clone --depth 1 --branch v1.91.9b https://github.com/ocornut/imgui.git imgui
       - name: Compile Windows application
         shell: cmd
         run: |
           if not exist dist mkdir dist
-          cl /nologo /std:c++20 /EHsc /utf-8 /W3 /O2 /DUNICODE /D_UNICODE /Iimgui /Iimgui\backends main.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp /Fe:dist\SyncPCChecker.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib d3d11.lib dxgi.lib comdlg32.lib wintrust.lib crypt32.lib bcrypt.lib advapi32.lib iphlpapi.lib ws2_32.lib ole32.lib
-
+          cl /nologo /std:c++20 /EHsc /utf-8 /W3 /O2 /GL /Gy /Gw /DUNICODE /D_UNICODE /Iimgui /Iimgui\backends main.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp /Fe:dist\SyncPCChecker.exe /link /SUBSYSTEM:WINDOWS /LTCG /OPT:REF /OPT:ICF user32.lib gdi32.lib d3d11.lib dxgi.lib comdlg32.lib wintrust.lib crypt32.lib bcrypt.lib advapi32.lib iphlpapi.lib ws2_32.lib ole32.lib psapi.lib windowscodecs.lib
       - name: Apply administrator manifest
         shell: cmd
-        run: |
-          mt.exe -nologo -manifest app.manifest -outputresource:dist\SyncPCChecker.exe;#1
-
+        run: mt.exe -nologo -manifest app.manifest -outputresource:dist\SyncPCChecker.exe;#1
       - name: Generate SHA256
         shell: pwsh
-        run: |
-          Get-FileHash dist/SyncPCChecker.exe -Algorithm SHA256 | Format-List
-
+        run: Get-FileHash dist/SyncPCChecker.exe -Algorithm SHA256 | Format-List
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
