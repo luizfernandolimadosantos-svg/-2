@@ -2188,13 +2188,34 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     // invisible drag item cannot intercept minimize/close.
     // Let ImGui receive mouse events first. Old native hitboxes intercepted
     // controls in the header, causing unresponsive buttons and accidental drags.
+    if(msg==WM_NCCALCSIZE && w){
+        // Remove the native non-client frame (including the white strip at the
+        // top/bottom) while retaining WS_THICKFRAME for normal window resizing.
+        return 0;
+    }
     if(msg==WM_NCHITTEST){
-        // The custom chrome has no native title bar. Allow dragging from
-        // the empty top strip, but keep the logo, navigation and controls clickable.
         POINT pt{GET_X_LPARAM(l),GET_Y_LPARAM(l)};
         ScreenToClient(h,&pt);
         RECT rc{};GetClientRect(h,&rc);
-        if(pt.y>=0&&pt.y<14&&pt.x>=0&&pt.x<rc.right-120)return HTCAPTION;
+        // Since the entire window is now client area, provide resize handles
+        // ourselves so removing the border never disables resizing.
+        if(!IsZoomed(h)){
+            constexpr int grip=7;
+            const bool left=pt.x>=0&&pt.x<grip;
+            const bool right=pt.x>=rc.right-grip&&pt.x<rc.right;
+            const bool top=pt.y>=0&&pt.y<grip;
+            const bool bottom=pt.y>=rc.bottom-grip&&pt.y<rc.bottom;
+            if(top&&left)return HTTOPLEFT;
+            if(top&&right)return HTTOPRIGHT;
+            if(bottom&&left)return HTBOTTOMLEFT;
+            if(bottom&&right)return HTBOTTOMRIGHT;
+            if(left)return HTLEFT;
+            if(right)return HTRIGHT;
+            if(top)return HTTOP;
+            if(bottom)return HTBOTTOM;
+        }
+        // Preserve dragging from the empty top strip, leaving UI controls free.
+        if(pt.y>=7&&pt.y<14&&pt.x>=0&&pt.x<rc.right-120)return HTCAPTION;
     }
     if(ImGui_ImplWin32_WndProcHandler(h,msg,w,l)) return true;
     switch(msg) {
