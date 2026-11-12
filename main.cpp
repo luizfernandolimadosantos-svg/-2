@@ -2646,6 +2646,16 @@ static void draw(){
 } // namespace binaryInspector
 
 
+// Shared primary action button for dashboard, file verification and settings.
+static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.19f,.37f,.69f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.26f,.46f,.81f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.14f,.29f,.56f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.f,1.f,1.f,1.f));
+    const bool pressed=ImGui::Button(label,size);
+    ImGui::PopStyleColor(4);
+    return pressed;
+}
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
