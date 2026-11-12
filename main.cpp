@@ -1377,55 +1377,47 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=0.f;st.ChildRounding=5.f;st.FrameRounding=4.f;
-    st.PopupRounding=5.f;st.ScrollbarRounding=3.f;st.TabRounding=3.f;
-    st.GrabRounding=3.f;st.WindowBorderSize=0;st.ChildBorderSize=0;
-    st.FrameBorderSize=0;st.WindowPadding=ImVec2(22,20);
-    st.FramePadding=ImVec2(13,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
-    st.ItemSpacing=ImVec2(11,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
-    st.ItemInnerSpacing=ImVec2(9,7);st.ScrollbarSize=9.f;
+    st.WindowRounding=0.f;st.ChildRounding=3.f;st.FrameRounding=3.f;
+    st.PopupRounding=4.f;st.ScrollbarRounding=3.f;st.TabRounding=3.f;
+    st.GrabRounding=3.f;
+    st.WindowBorderSize=0.f;st.ChildBorderSize=1.f;st.FrameBorderSize=1.f;
+    st.WindowPadding=ImVec2(16,14);
+    st.FramePadding=ImVec2(11,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
+    st.ItemSpacing=ImVec2(9,densityIndex==0?6.f:densityIndex==2?11.f:8.f);
+    st.ItemInnerSpacing=ImVec2(8,5);st.ScrollbarSize=11.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.065f,.076f,.090f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.11f,.125f,.143f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.095f,.13f,.15f,1);
-    c[ImGuiCol_Border]=ImVec4(.18f,.26f,.29f,.8f);
-    c[ImGuiCol_Separator]=ImVec4(.17f,.24f,.27f,1);
-    c[ImGuiCol_Text]=ImVec4(.91f,.97f,.96f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.57f,.70f,.72f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.13f,.17f,.23f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.23f,.25f,1);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.21f,.28f,.30f,1);
-    c[ImGuiCol_Button]=ImVec4(.16f,.23f,.33f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.23f,.34f,.47f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.24f,.34f,.35f,1);
-    c[ImGuiCol_Header]=ImVec4(.14f,.22f,.24f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.20f,.30f,.32f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.23f,.34f,.35f,1);
-    c[ImGuiCol_CheckMark]=orange();
-    c[ImGuiCol_SliderGrab]=orange();
-    c[ImGuiCol_SliderGrabActive]=orange();
-    c[ImGuiCol_Tab]=ImVec4(.10f,.16f,.18f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.17f,.26f,.28f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.20f,.30f,.32f,1);
-    c[ImGuiCol_TabDimmed]=ImVec4(.08f,.13f,.15f,1);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.13f,.20f,.22f,1);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.20f,.28f,.30f,1);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.16f,.23f,.25f,.8f);
-    c[ImGuiCol_TableRowBg]=ImVec4(.08f,.12f,.14f,.55f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.14f,.19f,.21f,.55f);
-    c[ImGuiCol_NavHighlight]=orange();
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.06f,.09f,.11f,1);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.23f,.33f,.35f,1);
-    c[ImGuiCol_PlotHistogram]=orange();
-}
-static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
-    ImGui::PushStyleColor(ImGuiCol_Button,orange());
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(std::min(1.f,orange().x+.12f),std::min(1.f,orange().y+.12f),std::min(1.f,orange().z+.12f),1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(orange().x*.8f,orange().y*.8f,orange().z*.8f,1));
-    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.08f,.08f,.10f,1));
-    bool clicked=ImGui::Button(text,size);
-    ImGui::PopStyleColor(4);
-    return clicked;
+    c[ImGuiCol_WindowBg]=ImVec4(.040f,.050f,.066f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.068f,.081f,.102f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.088f,.105f,.132f,1);
+    c[ImGuiCol_Border]=ImVec4(.17f,.21f,.27f,1);
+    c[ImGuiCol_Separator]=ImVec4(.17f,.21f,.27f,1);
+    c[ImGuiCol_Text]=ImVec4(.91f,.94f,.96f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.51f,.59f,.68f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.095f,.12f,.15f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.14f,.19f,.23f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.17f,.24f,.29f,1);
+    c[ImGuiCol_Button]=ImVec4(.13f,.18f,.22f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.18f,.27f,.31f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.20f,.35f,.37f,1);
+    c[ImGuiCol_Header]=ImVec4(.13f,.22f,.26f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.18f,.31f,.35f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.20f,.37f,.39f,1);
+    c[ImGuiCol_CheckMark]=ImVec4(.30f,.86f,.72f,1);
+    c[ImGuiCol_SliderGrab]=ImVec4(.32f,.75f,.66f,1);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.40f,.89f,.76f,1);
+    c[ImGuiCol_Tab]=ImVec4(.10f,.15f,.19f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(.17f,.27f,.31f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.19f,.33f,.35f,1);
+    c[ImGuiCol_TabDimmed]=ImVec4(.09f,.12f,.15f,1);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.11f,.16f,.20f,1);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.19f,.25f,.30f,1);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.14f,.19f,.24f,1);
+    c[ImGuiCol_TableRowBg]=ImVec4(.07f,.09f,.12f,1);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.09f,.12f,.15f,1);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.20f,.68f,.57f,.35f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.06f,.08f,.10f,1);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.22f,.30f,.34f,1);
+    c[ImGuiCol_NavHighlight]=ImVec4(.29f,.83f,.70f,1);
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
@@ -1436,19 +1428,20 @@ static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,14));
 }
 static void metric(const char* label,const std::string& value,float width) {
-    ImGui::BeginChild(label,ImVec2(width,122),ImGuiChildFlags_Borders,
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.138f,.164f,1));
+    ImGui::BeginChild(label,ImVec2(width,112),ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_NoScrollbar);
-    ImVec2 pos=ImGui::GetWindowPos();
-    ImVec2 sz=ImGui::GetWindowSize();
+    const ImVec2 mn=ImGui::GetWindowPos();
     ImGui::GetWindowDrawList()->AddRectFilled(
-        ImVec2(pos.x+1,pos.y+1),ImVec2(pos.x+5,pos.y+sz.y-1),
-        ImGui::ColorConvertFloat4ToU32(orange()),2.f);
-    ImGui::Dummy(ImVec2(0,6));
+        ImVec2(mn.x+16,mn.y+15),ImVec2(mn.x+19,mn.y+45),IM_COL32(69,212,176,255),2.f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+15);
     ImGui::TextDisabled("%s",label);
-    ImGui::SetWindowFontScale(1.9f);
-    ImGui::Text("%s",value.c_str());
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+15);
+    ImGui::SetWindowFontScale(1.8f);
+    ImGui::TextColored(ImVec4(.88f,.96f,.94f,1),"%s",value.c_str());
     ImGui::SetWindowFontScale(1.f);
     ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
@@ -2297,11 +2290,11 @@ static void select(){
 }
 static void draw(){
     ImGui::SetWindowFontScale(1.55f);
-    ImGui::TextUnformatted("Binary Workbench");
+    ImGui::TextUnformatted("Binary Intelligence Studio");
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextDisabled("Local executable intelligence  /  Inspired by Detect It Easy");
+    ImGui::TextDisabled("Offline PE analysis  |  DLL imports  |  Extracted strings  |  Hex viewer");
     ImGui::Dummy(ImVec2(0,14));
-    ImGui::TextColored(orange(),"TARGET FILE");
+    ImGui::TextColored(ImVec4(.38f,.88f,.74f,1),"SELECT A BINARY");
     ImGui::SetNextItemWidth(-300.f);
     ImGui::InputTextWithHint("##binaryPath","Select a Windows executable or DLL...",selected,sizeof(selected));
     ImGui::SameLine();
@@ -2330,13 +2323,15 @@ static void draw(){
     ImGui::SameLine(0,22);
     ImGui::Text("SIZE  %llu bytes",(unsigned long long)r.bytes);
     ImGui::TextWrapped("SHA-256  %s",r.sha256.c_str());
+    ImGui::TextDisabled("Sections: %zu   |   Imported entries: %zu   |   Strings: %zu",
+        r.sections.size(),r.imports.size(),r.strings.size());
     if(r.packedHint)ImGui::TextColored(ImVec4(1,.73f,.31f,1),"SUSPECT  /  High entropy detected; inspect sections.");
     ImGui::Dummy(ImVec2(0,12));
     const char* tabs[]={"OVERVIEW","PE SECTIONS","IMPORTS / DLLs","STRINGS","HEX VIEW"};
     for(int i=0;i<5;i++){
         ImGui::PushID(i);
         bool active=tab==i;
-        if(active)ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.32f,.38f,1));
+        if(active)ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.80f,.88f,.98f,1));
         if(ImGui::Button(tabs[i],ImVec2(i==2?156.f:125.f,36)))tab=i;
         if(active)ImGui::PopStyleColor();
         ImGui::PopID();
@@ -2345,7 +2340,7 @@ static void draw(){
     ImGui::Separator();
     ImGui::BeginChild("##binaryView",ImVec2(0,0),ImGuiChildFlags_None);
     if(tab==0){
-        ImGui::TextColored(orange(),"STATIC ANALYSIS NOTES");
+        ImGui::TextColored(ImVec4(.38f,.88f,.74f,1),"STATIC ANALYSIS NOTES");
         for(const auto& n:r.notes){ImGui::Bullet();ImGui::SameLine();ImGui::TextWrapped("%s",n.c_str());}
         ImGui::Dummy(ImVec2(0,8));
         ImGui::TextDisabled("Analysis is read-only and does not execute the selected file.");
@@ -2424,71 +2419,47 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // New product layout: top system masthead, compact left navigation,
-    // independently scrolling investigation workspace.
+    // Obsidian console: a large central analysis viewport with a bottom dock.
+    // No overlay hit-testing; navigation uses ordinary ImGui buttons.
     if(page==1||page==5)page=0;
-    const ImVec4 ink(.93f,.95f,.98f,1.f);
-    const ImVec4 quiet(.57f,.64f,.73f,1.f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.078f,.112f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,12));
-    ImGui::BeginChild("##productMasthead",ImVec2(0,76),ImGuiChildFlags_None);
+    const ImVec4 mint(.38f,.88f,.74f,1.f);
+    const ImVec4 soft(.57f,.66f,.73f,1.f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.047f,.063f,.080f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(27,14));
+    ImGui::BeginChild("##consoleIdentity",ImVec2(0,79),ImGuiChildFlags_None);
     if(syncLogoTexture){
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(42,42));
-        ImGui::SameLine(0,16);
+        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(46,46));
+        ImGui::SameLine(0,15);
     }
     ImGui::BeginGroup();
-    ImGui::TextColored(ink,"SYNC PC CHECKER");
-    ImGui::TextColored(quiet,"DEVELOPED BY MUDIN");
+    ImGui::SetWindowFontScale(1.22f);
+    ImGui::TextUnformatted("SYNC PC CHECKER");
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::TextColored(soft,"DEVELOPED BY MUDIN");
     ImGui::EndGroup();
-    ImGui::SameLine(0,26);
-    ImGui::TextColored(done?ImVec4(.43f,.83f,.69f,1):quiet,"%s",stateText());
-    // Place window controls relative to the available content width.
-    float controlX=ImGui::GetWindowContentRegionMax().x-108.f;
-    if(ImGui::GetCursorPosX()<controlX)ImGui::SameLine(0,0);
-    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),controlX));
-    if(ImGui::Button("_min##windowMin",ImVec2(44,34)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,36);
+    ImGui::TextColored(mint,"SECURITY OPERATIONS");
+    float right=ImGui::GetWindowContentRegionMax().x;
+    ImGui::SetCursorPos(ImVec2(right-110.f,17.f));
+    if(ImGui::Button("_##minObsidian",ImVec2(45,34)))ShowWindow(hwnd,SW_MINIMIZE);
     ImGui::SameLine(0,8);
-    if(ImGui::Button("X##windowClose",ImVec2(44,34)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    if(ImGui::Button("X##closeObsidian",ImVec2(45,34)))PostMessageW(hwnd,WM_CLOSE,0,0);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.083f,.100f,.135f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(14,24));
-    ImGui::BeginChild("##productRail",ImVec2(178,0),ImGuiChildFlags_None);
-    ImGui::TextColored(quiet,"NAVIGATION");
-    ImGui::Dummy(ImVec2(0,18));
-    const char* names[]={"OVERVIEW","THREAT CENTER","ACTIVITY","BINARY LAB","SETTINGS"};
-    const int targets[]={0,2,3,6,4};
-    for(int i=0;i<5;++i){
-        ImGui::PushID(2000+i);
-        const bool active=page==targets[i];
-        if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.27f,.41f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ink);
-        }
-        if(ImGui::Button(names[i],ImVec2(-1,48)))page=targets[i];
-        if(active)ImGui::PopStyleColor(2);
-        ImGui::PopID();
-        ImGui::Dummy(ImVec2(0,10));
-    }
-    ImGui::Dummy(ImVec2(0,20));
+    const float dockHeight=83.f;
+    const float contentHeight=(std::max)(120.f,ImGui::GetContentRegionAvail().y-dockHeight-8.f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.093f,.116f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(29,23));
+    ImGui::BeginChild("##obsidianWorkspace",ImVec2(0,contentHeight),ImGuiChildFlags_None);
+    const char* section=page==0?"OVERVIEW":page==2?"THREAT CENTER":
+        page==3?"ACTIVITY LOG":page==6?"BINARY LAB":"SETTINGS";
+    ImGui::TextColored(mint,"// %s",section);
+    ImGui::SameLine(0,22);
+    ImGui::TextColored(soft,"SYSTEM STATUS: %s",stateText());
     ImGui::Separator();
-    ImGui::TextColored(quiet,"LOCAL INSPECTION");
-    ImGui::TextWrapped("Read-only evidence collection");
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-    ImGui::SameLine(0,0);
-    ImGui::BeginGroup();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,25));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.102f,.119f,.157f,1));
-    ImGui::BeginChild("##productWorkspace",ImVec2(0,0),ImGuiChildFlags_None);
-    ImGui::TextColored(quiet,"WORKSPACE  /  %s",
-        page==0?"OVERVIEW":page==2?"THREAT CENTER":page==3?"ACTIVITY":
-        page==6?"BINARY LAB":"SETTINGS");
-    ImGui::Separator();
-    ImGui::Dummy(ImVec2(0,14));
+    ImGui::Dummy(ImVec2(0,15));
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
@@ -2770,9 +2741,32 @@ static void renderUI() {
         ImGui::EndChild();
     }
     ImGui::EndChild();
-    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
-    ImGui::EndGroup();
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0,8));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.061f,.079f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,12));
+    ImGui::BeginChild("##obsidianDock",ImVec2(0,dockHeight),ImGuiChildFlags_None);
+    const char* dockLabels[]={"01  OVERVIEW","02  THREATS","03  ACTIVITY",
+        "04  BINARY LAB","05  SETTINGS"};
+    const int dockPages[]={0,2,3,6,4};
+    const float gap=11.f;
+    const float buttonWidth=(std::max)(90.f,(ImGui::GetContentRegionAvail().x-4*gap)/5.f);
+    for(int i=0;i<5;i++){
+        ImGui::PushID(6100+i);
+        const bool active=page==dockPages[i];
+        if(active){
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.33f,.34f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,mint);
+        }
+        if(ImGui::Button(dockLabels[i],ImVec2(buttonWidth,46)))page=dockPages[i];
+        if(active)ImGui::PopStyleColor(2);
+        ImGui::PopID();
+        if(i!=4)ImGui::SameLine(0,gap);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
     ImGui::End();
     drawProcessDetails();
     drawEvidenceDetails();
