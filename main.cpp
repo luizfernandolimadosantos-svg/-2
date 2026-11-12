@@ -606,26 +606,38 @@ static std::vector<Record> enumerateUdp() {
 // IPv6 TCP owner inventory. Endpoints are read using the Windows IP Helper API.
 static std::vector<Record> enumerateTcp6() {
     std::vector<Record> out;
-    DWORD bytes=0;
-    DWORD rc=GetExtendedTcpTable(nullptr,&bytes,FALSE,AF_INET6,TCP_TABLE_OWNER_PID_ALL,0);
-    if(rc!=ERROR_INSUFFICIENT_BUFFER || bytes==0 || bytes>32*1024*1024)return out;
+    DWORD bytes = 0;
+    DWORD rc = GetExtendedTcpTable(nullptr, &bytes, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (rc != ERROR_INSUFFICIENT_BUFFER || bytes < sizeof(DWORD) || bytes > 32u * 1024u * 1024u)
+        return out;
+
     std::vector<BYTE> buffer(bytes);
-    rc=GetExtendedTcpTable(buffer.data(),&bytes,FALSE,AF_INET6,TCP_TABLE_OWNER_PID_ALL,0);
-    if(rc!=NO_ERROR)return out;
-    auto* table=reinterpret_cast<MIB_TCP6TABLE_OWNER_PID*>(buffer.data());
-    for(DWORD i=0;i<table->dwNumEntries && !cancelRequested;i++) {
-        const auto& e=table->table[i];
-        char local[INET6_ADDRSTRLEN]{},remote[INET6_ADDRSTRLEN]{};
-        IN6_ADDR localAddress{}, remoteAddress{};
-        std::memcpy(&localAddress, e.ucLocalAddr, sizeof(localAddress));
-        std::memcpy(&remoteAddress, e.ucRemoteAddr, sizeof(remoteAddress));
-        InetNtopA(AF_INET6, &localAddress, local, sizeof(local));
-        InetNtopA(AF_INET6, &remoteAddress, remote, sizeof(remote));
+    rc = GetExtendedTcpTable(buffer.data(), &bytes, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (rc != NO_ERROR || bytes < sizeof(DWORD) || bytes > buffer.size())
+        return out;
+
+    DWORD count = 0;
+    std::memcpy(&count, buffer.data(), sizeof(count));
+    const size_t headerSize = sizeof(DWORD);
+    const size_t rowSize = sizeof(MIB_TCP6ROW_OWNER_PID);
+    if (count > (static_cast<size_t>(bytes) - headerSize) / rowSize)
+        return out;
+
+    for (DWORD i = 0; i < count && !cancelRequested; ++i) {
+        MIB_TCP6ROW_OWNER_PID e{};
+        std::memcpy(&e, buffer.data() + headerSize + static_cast<size_t>(i) * rowSize, rowSize);
+
+        char local[INET6_ADDRSTRLEN]{};
+        char remote[INET6_ADDRSTRLEN]{};
+        if (!InetNtopA(AF_INET6, e.ucLocalAddr, local, sizeof(local)) ||
+            !InetNtopA(AF_INET6, e.ucRemoteAddr, remote, sizeof(remote)))
+            continue;
+
         std::ostringstream detail;
-        detail<<"["<<local<<"]:"<<ntohs(static_cast<u_short>(e.dwLocalPort))
-              <<" -> ["<<remote<<"]:"<<ntohs(static_cast<u_short>(e.dwRemotePort))
-              <<" | state "<<e.dwState;
-        out.push_back({"Network IPv6","PID "+std::to_string(e.dwOwningPid),detail.str()});
+        detail << "[" << local << "]:" << ntohs(static_cast<u_short>(e.dwLocalPort))
+               << " -> [" << remote << "]:" << ntohs(static_cast<u_short>(e.dwRemotePort))
+               << " | state " << e.dwState;
+        out.push_back({"Network IPv6", "PID " + std::to_string(e.dwOwningPid), detail.str()});
     }
     return out;
 }
