@@ -3770,29 +3770,98 @@ static std::vector<Record> inspectYaraLocalFiles(const std::vector<Process>&){
 }
 #endif
 
+// One-at-a-time execution telemetry; worker runs checks in a single sequence.
+static std::atomic<unsigned> sequentialDone{0},sequentialTotal{0};
+static std::mutex sequentialLabelMutex;
+static std::string sequentialCurrent;
+static void setSequentialItem(const std::string& label){
+    std::lock_guard<std::mutex> lock(sequentialLabelMutex);
+    sequentialCurrent=label;
+}
+static std::string getSequentialItem(){
+    std::lock_guard<std::mutex> lock(sequentialLabelMutex);
+    return sequentialCurrent;
+}
+
+// Read-only extended process inspection. One PID at a time, no process memory reads.
+static std::vector<Record> inspectIndividualProcesses(
+    const std::vector<Process>& processes){
+    std::vector<Record> output;
+    output.reserve(processes.size()*2);
+    std::unordered_set<DWORD> known;
+    for(const auto& p:processes)known.insert(p.pid);
+    for(const auto& p:processes){
+        if(cancelRequested)break;
+        setSequentialItem("Process details PID "+std::to_string(p.pid));
+        std::string facts="PID="+std::to_string(p.pid)+
+            " | Parent PID="+std::to_string(p.parent);
+        DWORD session=0;
+        if(ProcessIdToSessionId(p.pid,&session))
+            facts+=" | Session="+std::to_string(session);
+        else facts+=" | Session=unavailable";
+        if(p.parent && p.parent!=p.pid && !known.count(p.parent))
+            facts+=" | Parent not in snapshot (may have exited)";
+        HANDLE handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
+        if(handle){
+            DWORD handles=0;
+            if(GetProcessHandleCount(handle,&handles))
+                facts+=" | Handles="+std::to_string(handles);
+            FILETIME created{},exited{},kernel{},user{};
+            if(GetProcessTimes(handle,&created,&exited,&kernel,&user)){
+                ULARGE_INTEGER started{};
+                started.LowPart=created.dwLowDateTime;
+                started.HighPart=created.dwHighDateTime;
+                facts+=" | Creation FILETIME="+std::to_string(started.QuadPart);
+            }
+            DWORD code=0;
+            if(GetExitCodeProcess(handle,&code))
+                facts+=" | State="+std::string(code==STILL_ACTIVE?"active":"exited");
+            CloseHandle(handle);
+        }else{
+            facts+=" | Extended access unavailable (normal for protected processes)";
+        }
+        output.push_back({"Process Details",std::to_string(p.pid),facts});
+        ++sequentialDone;
+    }
+    return output;
+}
+
 static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
         const std::wstring winRoot=windowsRoot();
+        sequentialTotal=static_cast<unsigned>(p.size()*2);
+        sequentialDone=0;
         for(auto& proc:p) {
             if(cancelRequested)break;
+            setSequentialItem("Process PID "+std::to_string(proc.pid));
             assessProcess(proc,winRoot);
+            ++sequentialDone;
         }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        stageWorkItems[0]=static_cast<unsigned>(p.size());
+        auto processDetails=inspectIndividualProcesses(p);
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        stageWorkItems[0]=static_cast<unsigned>(processDetails.size());
         markInspectionStage(1);
         stage=2;
+        sequentialDone=0;sequentialTotal=0;
+        setSequentialItem("Service inventory");
         auto services=enumerateServices();
+        services.insert(services.end(),processDetails.begin(),processDetails.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
-        stageWorkItems[1]=static_cast<unsigned>(services.size());
+        stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size());
         markInspectionStage(2);
         stage=3;
+        sequentialDone=0;sequentialTotal=0;
+        setSequentialItem("Startup inventory");
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[2]=static_cast<unsigned>(startup.size());
         markInspectionStage(3);
         stage=4;
+        sequentialDone=0;sequentialTotal=0;
+        setSequentialItem("Network and device inventory");
         auto network=enumerateTcp();
         auto udp=enumerateUdp();
         auto tcp6=enumerateTcp6();
@@ -3803,10 +3872,24 @@ static void scanWorker() {
             network.size()+udp.size()+tcp6.size()+usb.size()+defender.size());
         markInspectionStage(4);
         stage=5;
+        sequentialDone=0;
+        sequentialTotal=39;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectWindowsSecurityConfiguration");
         auto security=inspectWindowsSecurityConfiguration();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectPolicyRuleSet");
         auto policyRules=inspectPolicyRuleSet();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectFirmwareAndDmaIndicators");
         auto firmwareIndicators=inspectFirmwareAndDmaIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectFiveMSafeTestMarkers");
         auto fiveMTest=inspectFiveMSafeTestMarkers();
+        ++sequentialDone;
         // Capture-protection diagnostics: inspect only our own window.
         // A protected window is not evidence of malware, and this does not
         // enumerate or bypass other applications' capture settings.
@@ -3825,44 +3908,148 @@ static void scanWorker() {
             }
         }
 
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectImageExecutionOptions");
         auto ifeo=inspectImageExecutionOptions();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectAdvancedPersistence");
         auto advancedPersistence=inspectAdvancedPersistence();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExtendedEndpoint");
         auto extendedEndpoint=inspectExtendedEndpoint();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectDesktopWindowVisibility");
         auto windowVisibility=inspectDesktopWindowVisibility(hwnd);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectLogonConfiguration");
         auto logon=inspectLogonConfiguration();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectHostsFile");
         auto hosts=inspectHostsFile();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectCheatNamedProcesses");
         auto cheatNameProcesses=inspectCheatNamedProcesses(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectCheatNamedModules");
         auto cheatNameModules=inspectCheatNamedModules(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectArtifactLocations");
         auto artifactLocations=inspectArtifactLocations();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectAdditionalEvidence");
         auto additionalEvidence=inspectAdditionalEvidence(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExpandedPersistenceIndicators");
         auto expandedPersistence=inspectExpandedPersistenceIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectStartupFolderIndicators");
         auto startupFileIndicators=inspectStartupFolderIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectSpecialPersistenceKeys");
         auto specialPersistence=inspectSpecialPersistenceKeys();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExecutableAlternateStreams");
         auto executableStreams=inspectExecutableAlternateStreams(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectImageExecutionHijackSettings");
         auto executionConfig=inspectImageExecutionHijackSettings();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectFilenameMasquerading");
         auto masquerading=inspectFilenameMasquerading(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectShellInitialization");
         auto shellInitialization=inspectShellInitialization();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectSecurityPolicyWeakening");
         auto securityWeakening=inspectSecurityPolicyWeakening();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectBamExecutionHistory");
         auto bamHistory=inspectBamExecutionHistory();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectDefenderExclusionIndicators");
         auto defenderExclusions=inspectDefenderExclusionIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectScheduledTaskNames");
         auto scheduledTaskNames=inspectScheduledTaskNames();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectUserComRegistrationIndicators");
         auto comRegistrations=inspectUserComRegistrationIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectServiceImagePathIndicators");
         auto serviceImagePaths=inspectServiceImagePathIndicators();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectPeStructure");
         auto peFindings=inspectPeStructure(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExecutableProvenance");
         auto provenance=inspectExecutableProvenance(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectLoadedModuleProvenance");
         auto loadedModules=inspectLoadedModuleProvenance(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectTemporaryExecutables");
         auto temporaryExecutables=inspectTemporaryExecutables(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("collectWindowsTimeline");
         auto timeline=collectWindowsTimeline();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectBypassEvidenceIntegrity");
         auto bypassIntegrity=inspectBypassEvidenceIntegrity();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExtendedBypassEvidence");
         auto bypassExtended=inspectExtendedBypassEvidence(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectAdditionalCheatIndicators");
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectAuditAndPlatformEvidence");
         auto auditPlatform=inspectAuditAndPlatformEvidence();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectExtraSecurityPolicies");
         auto extraPolicies=inspectExtraSecurityPolicies();
+        ++sequentialDone;
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectForensicSourceHeaders");
         auto forensicHeaders=inspectForensicSourceHeaders();
+        ++sequentialDone;
         forensicSourceChecks.store(static_cast<unsigned>(forensicHeaders.size()));
         forensicSourceStatus.store(1);
-        auto yaraFindings=inspectYaraLocalFiles(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectYaraLocalFiles");
+        auto yaraFindings=inspectYaraLocalFiles(p);
+        ++sequentialDone;        if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[4]=static_cast<unsigned>(services.size());
         markInspectionStage(5);
         stage=5;
@@ -3948,6 +4135,8 @@ static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
     peFilesInspected=0;
+    sequentialDone=0;sequentialTotal=0;
+    setSequentialItem("");
     forensicSourceStatus=0;
     forensicSourceChecks=0;
     forensicCorrelationNotices=0;
@@ -6049,12 +6238,19 @@ static void drawAtlasProgress(bool compact=false){
     // A stage reaches 100% only when its worker milestone is completed.
     // Use indeterminate activity rather than inventing a percentage within it.
     if(!done && scanning){
+        const unsigned total=sequentialTotal.load();
+        const unsigned checked=sequentialDone.load();
         const float t=static_cast<float>(ImGui::GetTime());
         const float pulse=0.12f+0.08f*(std::sin(t*2.2f)+1.f);
-        drawProfessionalProgressTrack("active-stage",activeName,pulse,width,11.f);
-        ImGui::TextDisabled("%s",displayLanguage==1?
-            "Analisando... progresso desta etapa não mensurável":
-            "Analyzing... per-stage progress is not measurable");
+        const float progress=total?std::clamp(checked/static_cast<float>(total),0.f,1.f):pulse;
+        drawProfessionalProgressTrack("active-stage",activeName,progress,width,11.f);
+        if(total)ImGui::TextDisabled("%u / %u %s",checked,total,
+            displayLanguage==1?"itens verificados":"items checked");
+        else ImGui::TextDisabled("%s",displayLanguage==1?
+            "Aguardando contagem da etapa":"Waiting for stage item count");
+        const std::string current=getSequentialItem();
+        if(!current.empty())ImGui::TextWrapped("%s: %s",
+            displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
     }else{
         drawProfessionalProgressTrack("active-stage",activeName,done?1.f:0.f,width,11.f);
     }
