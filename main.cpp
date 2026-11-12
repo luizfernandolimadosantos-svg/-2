@@ -3,6 +3,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <ctime>
+#include <cmath>
+#include <iterator>
 #include <winhttp.h>
 #include <shellapi.h>
 #pragma comment(lib,"shell32.lib")
@@ -1395,16 +1397,16 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=0.f;st.ChildRounding=12.f;st.FrameRounding=10.f;
-    st.PopupRounding=12.f;st.ScrollbarRounding=8.f;st.TabRounding=9.f;
-    st.GrabRounding=8.f;st.WindowBorderSize=0;st.ChildBorderSize=0;
+    st.WindowRounding=0.f;st.ChildRounding=5.f;st.FrameRounding=4.f;
+    st.PopupRounding=5.f;st.ScrollbarRounding=3.f;st.TabRounding=3.f;
+    st.GrabRounding=3.f;st.WindowBorderSize=0;st.ChildBorderSize=0;
     st.FrameBorderSize=0;st.WindowPadding=ImVec2(22,20);
     st.FramePadding=ImVec2(13,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
     st.ItemSpacing=ImVec2(11,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
     st.ItemInnerSpacing=ImVec2(9,7);st.ScrollbarSize=9.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.047f,.069f,.088f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.080f,.109f,.130f,1);
+    c[ImGuiCol_WindowBg]=ImVec4(.065f,.076f,.090f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.11f,.125f,.143f,1);
     c[ImGuiCol_PopupBg]=ImVec4(.095f,.13f,.15f,1);
     c[ImGuiCol_Border]=ImVec4(.18f,.26f,.29f,.8f);
     c[ImGuiCol_Separator]=ImVec4(.17f,.24f,.27f,1);
@@ -2127,307 +2129,278 @@ static void recordsTable() {
     }
 }
 
-// VirusTotal API v3: explicit, user-triggered hash-only reputation lookups.
+// Offline binary inspection: no network requests and no code execution.
 // API key stays in RAM. Files are never uploaded. HTTP runs off the UI thread.
-namespace vt {
-struct Value {
-    enum Kind { Null, Object, Array, String, Number, Boolean } kind=Null;
-    std::map<std::string,Value> object;
-    std::vector<Value> array;
-    std::string scalar;
-    const Value& at(const std::string& key) const {
-        auto it=object.find(key);
-        if(it!=object.end())return it->second;
-        static const Value empty{};
-        return empty;
-    }
-    int integer() const {try{return std::stoi(scalar);}catch(...){return 0;}}
-};
-struct Reader {
-    const std::string& s; size_t i=0; int depth=0;
-    void ws(){while(i<s.size() && (s[i]==' '||s[i]=='\r'||s[i]=='\n'||s[i]=='\t'))++i;}
-    std::string quoted() {
-        std::string o;
-        if(i>=s.size()||s[i++]!='"')return o;
-        while(i<s.size()) {
-            char c=s[i++];
-            if(c=='"')break;
-            if(c=='\\'&&i<s.size()){
-                char e=s[i++];
-                switch(e){case 'n':o+='\n';break;case 'r':o+='\r';break;
-                    case 't':o+='\t';break;case '"':o+='"';break;
-                    case '\\':o+='\\';break;
-                    case 'u':if(i+4<=s.size()){i+=4;o+='?';}break;
-                    default:o+=e;break;}
-            }else o+=c;
-        }
-        return o;
-    }
-    Value read() {
-        ws(); Value v;
-        if(i>=s.size()||depth>40)return v;
-        ++depth;
-        char c=s[i];
-        if(c=='{'){
-            v.kind=Value::Object;++i;ws();
-            while(i<s.size()&&s[i]!='}'){
-                ws();if(i>=s.size()||s[i]!='"')break;
-                auto k=quoted();ws();
-                if(i>=s.size()||s[i++]!=':')break;
-                v.object.emplace(std::move(k),read());ws();
-                if(i<s.size()&&s[i]==',')++i;else break;
-            }
-            if(i<s.size()&&s[i]=='}')++i;
-        }else if(c=='['){
-            v.kind=Value::Array;++i;ws();
-            while(i<s.size()&&s[i]!=']'){
-                v.array.push_back(read());ws();
-                if(i<s.size()&&s[i]==',')++i;else break;
-            }
-            if(i<s.size()&&s[i]==']')++i;
-        }else if(c=='"'){v.kind=Value::String;v.scalar=quoted();}
-        else {
-            const size_t start=i;
-            while(i<s.size()&&s[i]!=','&&s[i]!=']'&&s[i]!='}'&&
-                s[i]!=' '&&s[i]!='\r'&&s[i]!='\n')++i;
-            v.scalar=s.substr(start,i-start);
-            v.kind=(v.scalar=="true"||v.scalar=="false")?Value::Boolean:Value::Number;
-        }
-        --depth;return v;
-    }
-};
-struct Engine {std::string name,category,result;};
+
+namespace binaryInspector {
+struct Section {std::string name; uint32_t rva=0,raw=0,size=0,flags=0; double entropy=0;};
 struct Report {
-    std::string hash,status="Not queried",name,type,analysisDate,sha1,md5,magic,description;
-    int malicious=0,suspicious=0,undetected=0,harmless=0,timeout=0;
-    std::vector<Engine> engines;
-    bool found=false;
+    std::wstring path;
+    std::string status="Choose an executable, DLL or other file.";
+    std::string sha256,format,architecture,compileTime;
+    uint64_t bytes=0;
+    bool pe=false,packedHint=false;
+    std::vector<Section> sections;
+    std::vector<std::string> imports,strings,notes;
+    std::vector<unsigned char> head;
 };
-static std::mutex mutex;
 static Report report;
+static std::mutex guard;
 static std::atomic<bool> busy{false};
-static char key[256]{};
-static char hashInput[96]{};
-static char filePath[2048]{};
-static bool showAllEngines=false;
-static std::string narrowError(DWORD e){return "Windows network error "+std::to_string(e);}
-static std::string request(const std::string& hash,const std::string& apiKey,DWORD& code,std::string& error){
-    code=0;
-    HINTERNET session=WinHttpOpen(L"SyncPCChecker/1.0",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
-    if(!session){error=narrowError(GetLastError());return {};}
-    WinHttpSetTimeouts(session,6000,6000,12000,12000);
-    HINTERNET conn=WinHttpConnect(session,L"www.virustotal.com",INTERNET_DEFAULT_HTTPS_PORT,0);
-    if(!conn){error=narrowError(GetLastError());WinHttpCloseHandle(session);return {};}
-    std::wstring path=L"/api/v3/files/"+std::wstring(hash.begin(),hash.end());
-    HINTERNET req=WinHttpOpenRequest(conn,L"GET",path.c_str(),nullptr,
-        WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE);
-    std::string response;
-    if(req){
-        std::wstring header=L"x-apikey: "+std::wstring(apiKey.begin(),apiKey.end())+L"\r\nAccept: application/json\r\n";
-        BOOL ok=WinHttpSendRequest(req,header.c_str(),(DWORD)-1L,
-            WINHTTP_NO_REQUEST_DATA,0,0,0);
-        if(ok)ok=WinHttpReceiveResponse(req,nullptr);
-        if(ok){
-            DWORD size=sizeof(code);
-            WinHttpQueryHeaders(req,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,
-                WINHTTP_HEADER_NAME_BY_INDEX,&code,&size,WINHTTP_NO_HEADER_INDEX);
-            for(;;){
-                DWORD available=0;
-                if(!WinHttpQueryDataAvailable(req,&available)||available==0)break;
-                if(response.size()+available>4*1024*1024){error="Report exceeds 4 MB";break;}
-                std::string chunk(available,'\0');
-                DWORD got=0;
-                if(!WinHttpReadData(req,chunk.data(),available,&got))break;
-                response.append(chunk.data(),got);
-            }
-        }else error=narrowError(GetLastError());
-        WinHttpCloseHandle(req);
-    }else error=narrowError(GetLastError());
-    WinHttpCloseHandle(conn);WinHttpCloseHandle(session);
-    return response;
+static char selected[32768]{};
+static char search[160]{};
+static int tab=0;
+static std::string lower(std::string a){
+    std::transform(a.begin(),a.end(),a.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    return a;
 }
-static bool validHash(const std::string& h){
-    if(h.size()!=64)return false;
-    for(char c:h)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F')))return false;
-    return true;
+static uint16_t u16(const std::vector<unsigned char>& b,size_t off){
+    if(off>b.size()||b.size()-off<2)return 0;
+    return uint16_t(b[off])|(uint16_t(b[off+1])<<8);
 }
-static void query(const std::string& h,const std::string& apiKey){
-    if(busy.exchange(true))return;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        report=Report{};report.hash=h;report.status="Requesting VirusTotal report...";
+static uint32_t u32(const std::vector<unsigned char>& b,size_t off){
+    if(off>b.size()||b.size()-off<4)return 0;
+    return uint32_t(b[off])|(uint32_t(b[off+1])<<8)|
+        (uint32_t(b[off+2])<<16)|(uint32_t(b[off+3])<<24);
+}
+static uint64_t u64(const std::vector<unsigned char>& b,size_t off){
+    return uint64_t(u32(b,off))|(uint64_t(u32(b,off+4))<<32);
+}
+static std::string cstr(const std::vector<unsigned char>& b,size_t off,size_t limit=256){
+    std::string out;
+    if(off>=b.size())return out;
+    for(size_t i=off;i<b.size()&&out.size()<limit;++i){
+        if(b[i]==0)break;
+        if(b[i]<32||b[i]>126)break;
+        out.push_back((char)b[i]);
     }
-    std::thread([h,apiKey](){
-        Report r;r.hash=h;
-        DWORD http=0;std::string err;
-        auto body=request(h,apiKey,http,err);
-        if(http==200){
-            Reader parser{body};const auto root=parser.read();
-            const auto& attrs=root.at("data").at("attributes");
-            if(attrs.kind!=Value::Object)r.status="Invalid API response";
-            else{
-                r.found=true;r.status="Report available";
-                r.name=attrs.at("meaningful_name").scalar;
-                r.type=attrs.at("type_description").scalar;
-                r.sha1=attrs.at("sha1").scalar;
-                r.md5=attrs.at("md5").scalar;
-                r.magic=attrs.at("magic").scalar;
-                r.description=attrs.at("type_tag").scalar;
-                r.analysisDate=attrs.at("last_analysis_date").scalar;
-                const auto& stats=attrs.at("last_analysis_stats");
-                r.malicious=stats.at("malicious").integer();
-                r.suspicious=stats.at("suspicious").integer();
-                r.undetected=stats.at("undetected").integer();
-                r.harmless=stats.at("harmless").integer();
-                r.timeout=stats.at("timeout").integer();
-                const auto& results=attrs.at("last_analysis_results");
-                for(const auto& pair:results.object){
-                    const auto& item=pair.second;
-                    Engine e{pair.first,item.at("category").scalar,item.at("result").scalar};
-                    if(e.result=="null")e.result.clear();
-                    r.engines.push_back(std::move(e));
-                }
-                std::sort(r.engines.begin(),r.engines.end(),[](const Engine& a,const Engine& b){
-                    auto rank=[](const std::string& c){return c=="malicious"?0:c=="suspicious"?1:2;};
-                    if(rank(a.category)!=rank(b.category))return rank(a.category)<rank(b.category);
-                    return a.name<b.name;
-                });
-            }
-        }else if(http==404)r.status="Hash not found in VirusTotal";
-        else if(http==401||http==403)r.status="API key invalid or access denied";
-        else if(http==429)r.status="Rate limit reached; try again later";
-        else if(!err.empty())r.status=err;
-        else r.status="VirusTotal HTTP "+std::to_string(http);
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            report=std::move(r);
-        }
-        busy=false;
-    }).detach();
+    return out;
 }
-static void chooseFile(){
+static double entropy(const std::vector<unsigned char>& b,size_t off,size_t n){
+    if(off>=b.size())return 0;
+    n=(std::min)(n,b.size()-off);
+    if(!n)return 0;
+    size_t freq[256]{};
+    for(size_t i=0;i<n;++i)++freq[b[off+i]];
+    double h=0;
+    for(auto f:freq)if(f){double p=(double)f/n;h-=p*std::log2(p);}
+    return h;
+}
+static Report analyze(const std::wstring& path){
+    Report r;r.path=path;
+    std::error_code ec;
+    const auto sz=fs::file_size(path,ec);
+    if(ec){r.status="Cannot read file metadata.";return r;}
+    r.bytes=sz;
+    if(sz>128ull*1024*1024){r.status="File exceeds 128 MiB local inspection limit.";return r;}
+    std::ifstream f(fs::path(path),std::ios::binary);
+    if(!f){r.status="Cannot open file (access denied or missing).";return r;}
+    std::vector<unsigned char> b((std::istreambuf_iterator<char>(f)),{});
+    r.sha256=sha256(path);
+    r.head.assign(b.begin(),b.begin()+(std::min)(b.size(),size_t(4096)));
+    r.format="Unknown / data";
+    if(b.size()>=2&&b[0]=='M'&&b[1]=='Z')r.format="DOS executable / possible PE";
+    if(b.size()>=4&&b[0]==0x7f&&b[1]=='E'&&b[2]=='L'&&b[3]=='F')r.format="ELF executable";
+    if(b.size()>=4&&b[0]=='P'&&b[1]=='K')r.format="ZIP archive";
+    if(b.size()>=4&&b[0]=='%'&&b[1]=='P'&&b[2]=='D'&&b[3]=='F')r.format="PDF document";
+    if(b.size()>=0x40&&b[0]=='M'&&b[1]=='Z'){
+        size_t pe=u32(b,0x3c);
+        if(pe<=b.size()&&b.size()-pe>=24&&u32(b,pe)==0x00004550){
+            r.pe=true;r.format="Windows Portable Executable (PE)";
+            const uint16_t machine=u16(b,pe+4);
+            r.architecture=machine==0x8664?"x64":machine==0x14c?"x86":
+                machine==0xaa64?"ARM64":"Other / unknown";
+            const size_t count=(std::min)(size_t(u16(b,pe+6)),size_t(96));
+            const size_t opt=pe+24;
+            const size_t sectionStart=opt+u16(b,pe+20);
+            const bool is64=u16(b,opt)==0x20b;
+            const size_t dirs=opt+(is64?112:96);
+            if(opt>b.size()||b.size()-opt<2)
+                r.notes.push_back("Optional header is truncated.");
+            auto rvaToOff=[&](uint32_t rva)->size_t{
+                for(const auto& sec:r.sections)
+                    if(rva>=sec.rva&&uint64_t(rva)-sec.rva<sec.size&&
+                       uint64_t(sec.raw)+(rva-sec.rva)<b.size())
+                        return size_t(sec.raw)+(rva-sec.rva);
+                return size_t(-1);
+            };
+            for(size_t i=0;i<count;++i){
+                const size_t pos=sectionStart+i*40;
+                if(pos>b.size()||b.size()-pos<40)break;
+                Section sec;
+                sec.name=cstr(b,pos,8);
+                sec.rva=u32(b,pos+12);
+                sec.size=u32(b,pos+16);
+                sec.raw=u32(b,pos+20);
+                sec.flags=u32(b,pos+36);
+                sec.entropy=entropy(b,sec.raw,sec.size);
+                if(sec.size>1024&&sec.entropy>7.45){
+                    r.packedHint=true;
+                    r.notes.push_back("High-entropy section "+sec.name+
+                        " (may be compressed, packed or encrypted; not proof of malware).");
+                }
+                if((sec.flags&0x20000000)&&(sec.flags&0x80000000))
+                    r.notes.push_back("Writable and executable section: "+sec.name);
+                r.sections.push_back(sec);
+            }
+            if(dirs<=b.size()&&b.size()-dirs>=16){
+                uint32_t importsRva=u32(b,dirs+8);
+                size_t pos=rvaToOff(importsRva);
+                for(size_t i=0;i<256&&pos<b.size()&&b.size()-pos>=20;i++,pos+=20){
+                    uint32_t lookup=u32(b,pos),nameRva=u32(b,pos+12),iat=u32(b,pos+16);
+                    if(!lookup&&!nameRva&&!iat)break;
+                    std::string dll=cstr(b,rvaToOff(nameRva),180);
+                    if(dll.empty())continue;
+                    r.imports.push_back(dll);
+                    uint32_t thunkRva=lookup?lookup:iat;
+                    size_t thunk=rvaToOff(thunkRva);
+                    for(size_t j=0;j<1000&&thunk<b.size()&&b.size()-thunk>=(is64?8:4);++j){
+                        uint64_t entry=is64?u64(b,thunk):u32(b,thunk);
+                        if(!entry)break;
+                        thunk+=is64?8:4;
+                        if(entry&(is64?0x8000000000000000ull:0x80000000ull))continue;
+                        if(entry>UINT32_MAX)continue;
+                        size_t nameOff=rvaToOff((uint32_t)entry);
+                        if(nameOff==size_t(-1)||nameOff>b.size()||b.size()-nameOff<2)continue;
+                        std::string func=cstr(b,nameOff+2,150);
+                        if(!func.empty()&&r.imports.size()<6000)r.imports.push_back("    "+func);
+                    }
+                }
+            }
+        }
+    }
+    std::string current;
+    for(unsigned char c:b){
+        if(c>=32&&c<=126){
+            if(current.size()<300)current.push_back((char)c);
+        }else{
+            if(current.size()>=7&&r.strings.size()<10000)r.strings.push_back(current);
+            current.clear();
+        }
+    }
+    if(current.size()>=7&&r.strings.size()<10000)r.strings.push_back(current);
+    if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
+    r.notes.push_back("Static inspection only. Decompiled source code cannot be recovered reliably from compiled binaries.");
+    r.status="Local analysis completed.";
+    return r;
+}
+static void select(){
     wchar_t path[32768]{};
-    OPENFILENAMEW dlg{};dlg.lStructSize=sizeof(dlg);
-    dlg.hwndOwner=hwnd;dlg.lpstrFile=path;dlg.nMaxFile=32768;
-    dlg.lpstrFilter=L"All files\0*.*\0";
-    dlg.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
-    if(GetOpenFileNameW(&dlg)){
-        const auto digest=sha256(path);
-        std::string utf=utf8(path);
-        strncpy_s(filePath,sizeof(filePath),utf.c_str(),_TRUNCATE);
-        if(validHash(digest))strncpy_s(hashInput,sizeof(hashInput),digest.c_str(),_TRUNCATE);
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize=sizeof(ofn);
+    ofn.hwndOwner=hwnd;
+    ofn.lpstrFile=path;
+    ofn.nMaxFile=32768;
+    ofn.lpstrFilter=L"Executables and libraries\0*.exe;*.dll;*.sys;*.ocx\0All files\0*.*\0";
+    ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+    if(GetOpenFileNameW(&ofn)){
+        strncpy_s(selected,sizeof(selected),utf8(path).c_str(),_TRUNCATE);
     }
 }
 static void draw(){
     ImGui::SetWindowFontScale(1.55f);
-    ImGui::TextUnformatted("File Intelligence");
+    ImGui::TextUnformatted("Binary Workbench");
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextDisabled("VirusTotal API v3  /  Reputation lookup  /  Privacy-first");
-    ImGui::Dummy(ImVec2(0,12));
-    ImGui::BeginChild("##vtSubmit",ImVec2(0,256),ImGuiChildFlags_Borders);
-    ImGui::TextColored(orange(),"01  /  SELECT A SAMPLE");
-    ImGui::TextDisabled("Select a local file or paste a SHA-256 hash.");
-    ImGui::SetNextItemWidth(-156.f);
-    ImGui::InputTextWithHint("##vtHash","SHA-256 hash (64 hexadecimal characters)",hashInput,sizeof(hashInput));
+    ImGui::TextDisabled("Local executable intelligence  /  Inspired by Detect It Easy");
+    ImGui::Dummy(ImVec2(0,14));
+    ImGui::TextColored(orange(),"TARGET FILE");
+    ImGui::SetNextItemWidth(-300.f);
+    ImGui::InputTextWithHint("##binaryPath","Select a Windows executable or DLL...",selected,sizeof(selected));
     ImGui::SameLine();
-    if(ImGui::Button("Browse file",ImVec2(139,0)))chooseFile();
-    if(filePath[0]){
-        ImGui::TextColored(ImVec4(.45f,.83f,.73f,1),"FILE READY");
-        ImGui::SameLine();
-        ImGui::TextWrapped("%s",filePath);
+    if(ImGui::Button("Browse...",ImVec2(112,0)))select();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(busy.load()||!selected[0]);
+    if(ImGui::Button("ANALYZE FILE",ImVec2(155,0))){
+        std::wstring path=wide(selected);
+        busy=true;
+        std::thread([path](){
+            Report r=analyze(path);
+            {std::lock_guard<std::mutex> lock(guard);report=std::move(r);}
+            busy=false;
+        }).detach();
     }
-    ImGui::Dummy(ImVec2(0,6));
-    ImGui::TextUnformatted("VirusTotal API key");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##vtKey","Enter your API key (not saved)",key,sizeof(key),ImGuiInputTextFlags_Password);
-    ImGui::Dummy(ImVec2(0,5));
-    const bool ready=validHash(hashInput)&&key[0]&&!busy.load();
-    ImGui::BeginDisabled(!ready);
-    if(accentButton(busy.load()?"CHECKING...":"START CHECK",ImVec2(190,42)))query(hashInput,key);
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("Hash lookup only. Your file is not uploaded.");
-    ImGui::EndChild();
-    ImGui::Dummy(ImVec2(0,16));
+    if(busy.load())ImGui::TextColored(orange(),"Reading binary structure...");
     Report r;
-    {std::lock_guard<std::mutex> lock(mutex);r=report;}
-    ImGui::TextColored(orange(),"02  /  ANALYSIS REPORT");
-    ImGui::TextDisabled("STATUS  /  %s",r.status.c_str());
-    if(busy.load())ImGui::TextDisabled("Request in progress. Waiting for VirusTotal...");
-    if(!r.found){
-        ImGui::Dummy(ImVec2(0,12));
-        ImGui::TextWrapped("Choose a file and press START CHECK. "
-            "Only existing VirusTotal reports are retrieved. A missing report "
-            "does not establish that a file is safe.");
-        return;
-    }
+    {std::lock_guard<std::mutex> lock(guard);r=report;}
+    ImGui::TextDisabled("%s",r.status.c_str());
+    ImGui::Dummy(ImVec2(0,10));
+    if(r.path.empty())return;
+    ImGui::Text("FORMAT  %s",r.format.c_str());
+    ImGui::SameLine(0,22);
+    ImGui::Text("ARCH  %s",r.architecture.empty()?"N/A":r.architecture.c_str());
+    ImGui::SameLine(0,22);
+    ImGui::Text("SIZE  %llu bytes",(unsigned long long)r.bytes);
+    ImGui::TextWrapped("SHA-256  %s",r.sha256.c_str());
+    if(r.packedHint)ImGui::TextColored(ImVec4(1,.73f,.31f,1),"SUSPECT  /  High entropy detected; inspect sections.");
     ImGui::Dummy(ImVec2(0,12));
-    const float w=(ImGui::GetContentRegionAvail().x-30.f)/4.f;
-    auto tile=[&](const char* title,int count,ImVec4 color){
-        ImGui::PushID(title);
-        ImGui::BeginChild("##stat",ImVec2(w,86),ImGuiChildFlags_Borders);
-        ImGui::TextDisabled("%s",title);
-        ImGui::SetWindowFontScale(1.8f);
-        ImGui::TextColored(color,"%d",count);
-        ImGui::SetWindowFontScale(1.f);
-        ImGui::EndChild();
+    const char* tabs[]={"OVERVIEW","PE SECTIONS","IMPORTS / DLLs","STRINGS","HEX VIEW"};
+    for(int i=0;i<5;i++){
+        ImGui::PushID(i);
+        bool active=tab==i;
+        if(active)ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.32f,.38f,1));
+        if(ImGui::Button(tabs[i],ImVec2(i==2?156.f:125.f,36)))tab=i;
+        if(active)ImGui::PopStyleColor();
         ImGui::PopID();
-    };
-    tile("MALICIOUS",r.malicious,ImVec4(1,.40f,.43f,1));ImGui::SameLine(0,10);
-    tile("SUSPICIOUS",r.suspicious,ImVec4(1,.73f,.32f,1));ImGui::SameLine(0,10);
-    tile("UNDETECTED",r.undetected,ImVec4(.79f,.85f,.93f,1));ImGui::SameLine(0,10);
-    tile("HARMLESS",r.harmless,ImVec4(.36f,.82f,.65f,1));
-    ImGui::Dummy(ImVec2(0,12));
-    if(ImGui::CollapsingHeader("FILE DETAILS  /  HASHES AND CLASSIFICATION",ImGuiTreeNodeFlags_DefaultOpen)){
-        ImGui::Text("Name: %s",r.name.empty()?"Not provided":r.name.c_str());
-        ImGui::Text("Type: %s",r.type.empty()?"Not provided":r.type.c_str());
-        if(!r.magic.empty())ImGui::TextWrapped("File identification: %s",r.magic.c_str());
-        ImGui::TextWrapped("SHA-256: %s",r.hash.c_str());
-        if(!r.sha1.empty())ImGui::TextWrapped("SHA-1: %s",r.sha1.c_str());
-        if(!r.md5.empty())ImGui::TextWrapped("MD5: %s",r.md5.c_str());
-        if(!r.analysisDate.empty()){
-            try{
-                const auto epoch=(time_t)std::stoll(r.analysisDate);
-                std::tm tm{};
-                if(gmtime_s(&tm,&epoch)==0){
-                    char date[48]{};
-                    strftime(date,sizeof(date),"%Y-%m-%d %H:%M UTC",&tm);
-                    ImGui::Text("Last analysis: %s",date);
-                }
-            }catch(...){}
+        if(i<4)ImGui::SameLine(0,7);
+    }
+    ImGui::Separator();
+    ImGui::BeginChild("##binaryView",ImVec2(0,0),ImGuiChildFlags_None);
+    if(tab==0){
+        ImGui::TextColored(orange(),"STATIC ANALYSIS NOTES");
+        for(const auto& n:r.notes){ImGui::Bullet();ImGui::SameLine();ImGui::TextWrapped("%s",n.c_str());}
+        ImGui::Dummy(ImVec2(0,8));
+        ImGui::TextDisabled("Analysis is read-only and does not execute the selected file.");
+    }else if(tab==1){
+        if(ImGui::BeginTable("##peSections",5,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable)){
+            ImGui::TableSetupColumn("Section");ImGui::TableSetupColumn("RVA");
+            ImGui::TableSetupColumn("File offset");ImGui::TableSetupColumn("Raw bytes");
+            ImGui::TableSetupColumn("Entropy");ImGui::TableHeadersRow();
+            for(const auto& sec:r.sections){
+                ImGui::TableNextRow();
+                if(sec.entropy>7.45&&sec.size>1024)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(93,68,21,120));
+                ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(sec.name.c_str());
+                ImGui::TableSetColumnIndex(1);ImGui::Text("0x%08X",sec.rva);
+                ImGui::TableSetColumnIndex(2);ImGui::Text("0x%08X",sec.raw);
+                ImGui::TableSetColumnIndex(3);ImGui::Text("%u",sec.size);
+                ImGui::TableSetColumnIndex(4);ImGui::Text("%.2f",sec.entropy);
+            }
+            ImGui::EndTable();
         }
-        ImGui::TextDisabled("Timeouts: %d  |  Verdicts reflect third-party engines, not proof of infection.",r.timeout);
-    }
-    ImGui::Dummy(ImVec2(0,12));
-    ImGui::TextColored(orange(),"03  /  SECURITY ENGINE VERDICTS");
-    ImGui::Checkbox("Show all engines",&showAllEngines);
-    ImGui::SameLine(0,18);
-    if(ImGui::Button("Open full VirusTotal report")){
-        const std::string url="https://www.virustotal.com/gui/file/"+r.hash+"/detection";
-        ShellExecuteA(hwnd,"open",url.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
-    }
-    if(ImGui::BeginTable("##vtEngines",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
-        ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,ImVec2(0,0))){
-        ImGui::TableSetupColumn("Security engine",ImGuiTableColumnFlags_WidthStretch,.34f);
-        ImGui::TableSetupColumn("Verdict",ImGuiTableColumnFlags_WidthStretch,.20f);
-        ImGui::TableSetupColumn("Detection / classification",ImGuiTableColumnFlags_WidthStretch,.46f);
-        ImGui::TableHeadersRow();
-        for(const auto& e:r.engines){
-            if(!showAllEngines&&e.category!="malicious"&&e.category!="suspicious")continue;
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.name.c_str());
-            ImGui::TableSetColumnIndex(1);
-            if(e.category=="malicious")ImGui::TextColored(ImVec4(1,.43f,.43f,1),"MALICIOUS");
-            else if(e.category=="suspicious")ImGui::TextColored(ImVec4(1,.79f,.33f,1),"SUSPECT");
-            else ImGui::TextUnformatted(e.category.c_str());
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(e.result.empty()?"No detection name":e.result.c_str());
+    }else if(tab==2||tab==3){
+        ImGui::SetNextItemWidth(360);
+        ImGui::InputTextWithHint("##binaryFilter","Filter DLLs, APIs, strings...",search,sizeof(search));
+        const auto& rows=tab==2?r.imports:r.strings;
+        const std::string filter=lower(search);
+        ImGui::TextDisabled("%zu entries collected",rows.size());
+        ImGuiListClipper clipper;
+        // Filtering uses a local index; avoids drawing thousands of rows each frame.
+        std::vector<size_t> indices;
+        for(size_t i=0;i<rows.size();++i)if(filter.empty()||lower(rows[i]).find(filter)!=std::string::npos)
+            indices.push_back(i);
+        clipper.Begin((int)indices.size());
+        while(clipper.Step())for(int j=clipper.DisplayStart;j<clipper.DisplayEnd;++j)
+            ImGui::TextUnformatted(rows[indices[j]].c_str());
+    }else{
+        ImGui::TextDisabled("First %zu bytes of the file (read-only).",r.head.size());
+        for(size_t i=0;i<r.head.size();i+=16){
+            char line[128]{};
+            int n=std::snprintf(line,sizeof(line),"%08llX  ",(unsigned long long)i);
+            for(size_t j=0;j<16;++j)
+                n+=std::snprintf(line+n,sizeof(line)-n,j+i<r.head.size()?"%02X ":"   ",
+                    j+i<r.head.size()?r.head[j+i]:0);
+            n+=std::snprintf(line+n,sizeof(line)-n,"  |");
+            for(size_t j=0;j<16&&i+j<r.head.size();++j){
+                unsigned char c=r.head[i+j];
+                n+=std::snprintf(line+n,sizeof(line)-n,"%c",c>=32&&c<=126?c:'.');
+            }
+            ImGui::TextUnformatted(line);
         }
-        ImGui::EndTable();
     }
+    ImGui::EndChild();
 }
-} // namespace vt
+} // namespace binaryInspector
+
 
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
@@ -2453,66 +2426,62 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // Premium desktop layout: wide command ribbon + content canvas.
-    if(page==1 || page==5)page=0;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,14));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.035f,.045f,.073f,1));
-    ImGui::BeginChild("##premiumTitle",ImVec2(0,78),ImGuiChildFlags_None);
-    if(syncLogoTexture){
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(44,44));
-        ImGui::SameLine(0,15);
-    }
-    ImGui::BeginGroup();
-    ImGui::SetWindowFontScale(1.35f);
-    ImGui::TextUnformatted("SYNC PC CHECKER");
+    // Studio layout: neutral tool palette, narrow icon rail, wide content.
+    if(page==1||page==5)page=0;
+    const float railWidth=214.f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.087f,.104f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,20));
+    ImGui::BeginChild("##studioRail",ImVec2(railWidth,0),ImGuiChildFlags_None);
+    if(syncLogoTexture)ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(48,48));
+    ImGui::Dummy(ImVec2(0,12));
+    ImGui::SetWindowFontScale(1.28f);
+    ImGui::TextUnformatted("SYNC PC");
+    ImGui::TextUnformatted("CHECKER");
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextDisabled("SECURITY INTELLIGENCE  /  MUDIN");
-    ImGui::EndGroup();
-    ImGui::SameLine(0,30);
-    ImGui::TextColored(scanning?orange():done?ImVec4(.38f,.84f,.69f,1):
-        ImVec4(.68f,.74f,.84f,1),"%s",stateText());
-    ImGui::SameLine();
-    float right=ImGui::GetWindowContentRegionMax().x;
-    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),right-115.f));
-    if(ImGui::Button("-##min",ImVec2(44,36)))ShowWindow(hwnd,SW_MINIMIZE);
-    ImGui::SameLine(0,8);
-    if(ImGui::Button("X##close",ImVec2(44,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
-
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.068f,.084f,.123f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,13));
-    ImGui::BeginChild("##premiumNavigation",ImVec2(0,66),ImGuiChildFlags_None);
-    const char* navLabels[]={"Dashboard","Investigations","Event Timeline","VirusTotal","Settings"};
-    const int navTargets[]={0,2,3,6,4};
-    for(int i=0;i<5;i++){
-        ImGui::PushID(900+i);
-        const bool selected=page==navTargets[i];
-        if(selected){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.24f,.37f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.95f,.97f,1,1));
-        }
-        const ImVec2 pos=ImGui::GetCursorScreenPos();
-        const bool clicked=ImGui::Button(navLabels[i],ImVec2(
-            i==1?168.f:i==2?158.f:139.f,40.f));
-        if(selected){
-            const ImVec2 end=ImGui::GetItemRectMax();
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(pos.x,pos.y+38),ImVec2(end.x,pos.y+41),
-                ImGui::ColorConvertFloat4ToU32(orange()),1.f);
-            ImGui::PopStyleColor(2);
-        }
-        if(clicked)page=navTargets[i];
-        ImGui::PopID();
-        if(i!=4)ImGui::SameLine(0,12);
-    }
-    ImGui::EndChild();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    ImGui::TextDisabled("MUDIN  /  SECURITY");
+    ImGui::Dummy(ImVec2(0,32));
+    ImGui::TextDisabled("WORKSPACE");
     ImGui::Dummy(ImVec2(0,10));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,23));
-    ImGui::BeginChild("##premiumCanvas",ImVec2(0,0),ImGuiChildFlags_None);
+    const char* names[]={"01   Command","02   Investigate","03   Event Log",
+        "04   Binary Lab","05   Preferences"};
+    const int pages[]={0,2,3,6,4};
+    for(int i=0;i<5;i++){
+        ImGui::PushID(500+i);
+        const bool active=page==pages[i];
+        if(active){
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.19f,.24f,.28f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.93f,.96f,.96f,1));
+        }
+        const bool clicked=ImGui::Button(names[i],ImVec2(-1,52));
+        if(active)ImGui::PopStyleColor(2);
+        if(clicked)page=pages[i];
+        ImGui::PopID();
+        ImGui::Dummy(ImVec2(0,7));
+    }
+    ImGui::Dummy(ImVec2(0,18));
+    ImGui::Separator();
+    ImGui::TextDisabled("ENGINE");
+    ImGui::TextColored(done?ImVec4(.42f,.78f,.64f,1):orange(),"%s",stateText());
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0,0);
+    ImGui::BeginGroup();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,20));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.10f,.115f,.135f,1));
+    ImGui::BeginChild("##studioMain",ImVec2(0,0),ImGuiChildFlags_None);
+    ImGui::TextDisabled("SYNC PC CHECKER   /   ENDPOINT ANALYSIS");
+    ImGui::SameLine(0,18);
+    ImGui::TextColored(scanning?orange():done?ImVec4(.46f,.84f,.69f,1):
+        ImVec4(.7f,.76f,.8f,1),"%s",stateText());
+    const float topRight=ImGui::GetWindowContentRegionMax().x;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),topRight-114.f));
+    if(ImGui::Button("_##min",ImVec2(43,32)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,8);
+    if(ImGui::Button("X##close",ImVec2(43,32)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,12));
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
@@ -2732,7 +2701,7 @@ static void renderUI() {
                     ImGui::EndPopup();
                 }
     } else if(page==6) {
-        vt::draw();
+        binaryInspector::draw();
     } else if(page==4) {
         sectionTitle("Workspace Preferences","Adjust appearance and investigation options");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
@@ -2794,7 +2763,9 @@ static void renderUI() {
         ImGui::EndChild();
     }
     ImGui::EndChild();
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
+    ImGui::EndGroup();
     ImGui::End();
     drawProcessDetails();
     drawEvidenceDetails();
