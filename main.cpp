@@ -3710,7 +3710,31 @@ static void renderUI() {
     const bool waitingForPresentation=
         inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 &&
         (scanning || done);
-    if(waitingForPresentation && page!=0) {
+    // Preferences (page 4) remains available during inspection.
+    // Once progress reaches 100%, animate the shackle opening before
+    // revealing scan-derived content. Reset on each new inspection.
+    static bool wasWaitingForUnlock=false;
+    static double unlockAnimationStart=-1.0;
+    if(waitingForPresentation){
+        wasWaitingForUnlock=true;
+        unlockAnimationStart=-1.0;
+    }else if(wasWaitingForUnlock){
+        unlockAnimationStart=ImGui::GetTime();
+        wasWaitingForUnlock=false;
+    }
+    const double unlockElapsed=unlockAnimationStart>=0.0 ?
+        ImGui::GetTime()-unlockAnimationStart : 100.0;
+    const bool unlocking=!waitingForPresentation &&
+        unlockElapsed<1.65;
+    if((waitingForPresentation || unlocking) && page!=0 && page!=4) {
+        const float opening=unlocking?
+            std::clamp(static_cast<float>(unlockElapsed/1.25),0.f,1.f):0.f;
+        const float eased=opening*opening*(3.f-2.f*opening);
+        const float fade=unlocking?
+            1.f-std::clamp((opening-.72f)/.28f,0.f,1.f):1.f;
+        const auto fadeAlpha=[&](int alpha){
+            return static_cast<int>(alpha*fade);
+        };
         const ImVec2 area=ImGui::GetCursorScreenPos();
         const ImVec2 avail=ImGui::GetContentRegionAvail();
         const float w=(std::max)(300.f,avail.x);
@@ -3719,46 +3743,53 @@ static void renderUI() {
         // Frosted-glass approximation: layered translucent panels and
         // diffuse highlights. No unimplemented GPU blur is claimed.
         curtain->AddRectFilled(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(9,18,32,247),14.f);
+            IM_COL32(9,18,32,fadeAlpha(247)),14.f);
         curtain->AddRectFilledMultiColor(
             ImVec2(area.x+12,area.y+12),ImVec2(area.x+w-12,area.y+h-12),
-            IM_COL32(35,68,107,85),IM_COL32(23,43,75,65),
-            IM_COL32(13,25,43,95),IM_COL32(25,46,78,80));
+            IM_COL32(35,68,107,fadeAlpha(85)),IM_COL32(23,43,75,fadeAlpha(65)),
+            IM_COL32(13,25,43,fadeAlpha(95)),IM_COL32(25,46,78,fadeAlpha(80)));
         for(int ring=9;ring>=1;--ring){
             const float r=95.f+ring*13.f;
             curtain->AddCircleFilled(
                 ImVec2(area.x+w*.5f,area.y+h*.39f),r,
-                IM_COL32(69,127,206,2),48);
+                IM_COL32(69,127,206,fadeAlpha(2)),48);
         }
         curtain->AddRect(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(72,116,166,130),14.f,0,1.2f);
+            IM_COL32(72,116,166,fadeAlpha(130)),14.f,0,1.2f);
         // Lock silhouette rendered directly with ImDrawList.
         const ImVec2 center(area.x+w*.5f,area.y+h*.39f);
-        curtain->AddCircleFilled(center,54.f,IM_COL32(27,52,83,220),48);
-        curtain->AddCircle(center,54.f,IM_COL32(91,150,222,160),48,1.6f);
+        curtain->AddCircleFilled(center,54.f,IM_COL32(27,52,83,fadeAlpha(220)),48);
+        curtain->AddCircle(center,54.f,IM_COL32(91,150,222,fadeAlpha(160)),48,1.6f);
         curtain->PathClear();
-        curtain->PathArcTo(ImVec2(center.x,center.y-9.f),19.f,3.14159265f,6.2831853f,24);
-        curtain->PathStroke(IM_COL32(201,227,255,255),0,5.f);
+        // The shackle rotates and rises as the scan unlocks.
+        const ImVec2 shackleCenter(center.x-9.f*eased,
+                                   center.y-9.f-13.f*eased);
+        curtain->PathArcTo(shackleCenter,19.f,
+            3.14159265f-0.62f*eased,
+            6.2831853f-0.62f*eased,24);
+        curtain->PathStroke(IM_COL32(201,227,255,fadeAlpha(255)),0,5.f);
         curtain->AddRectFilled(
             ImVec2(center.x-26.f,center.y-13.f),
             ImVec2(center.x+26.f,center.y+26.f),
-            IM_COL32(110,173,245,255),7.f);
+            IM_COL32(110,173,245,fadeAlpha(255)),7.f);
         curtain->AddCircleFilled(
-            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(13,31,54,255),16);
+            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(13,31,54,fadeAlpha(255)),16);
         curtain->AddRectFilled(
             ImVec2(center.x-2.f,center.y+3.f),
             ImVec2(center.x+2.f,center.y+14.f),
-            IM_COL32(13,31,54,255),2.f);
+            IM_COL32(13,31,54,fadeAlpha(255)),2.f);
         ImGui::SetCursorScreenPos(ImVec2(area.x,center.y+76.f));
         ImGui::PushTextWrapPos(area.x+w-24.f);
         ImGui::SetWindowFontScale(1.35f);
-        const char* heading="INSPECTION LOCKED";
+        const char* heading=unlocking?"INSPECTION UNLOCKED":"INSPECTION LOCKED";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(heading).x)*.5f);
         ImGui::TextColored(ImVec4(.90f,.96f,1.f,1.f),"%s",heading);
         ImGui::SetWindowFontScale(1.f);
         ImGui::Dummy(ImVec2(0,9.f));
-        const char* detail="Results unlock when the scan reaches 100%.";
+        const char* detail=unlocking?
+            "Access granted. Opening inspection results...":
+            "Results unlock when the scan reaches 100%.";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(detail).x)*.5f);
         ImGui::TextColored(ImVec4(.62f,.73f,.86f,1.f),"%s",detail);
@@ -3769,8 +3800,14 @@ static void renderUI() {
             (w-buttonWidth)*.5f);
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.35f,.59f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.22f,.46f,.75f,1.f));
-        if(ImGui::Button("RETURN TO SCAN",ImVec2(buttonWidth,45.f)))
-            page=0;
+        if(waitingForPresentation){
+            if(ImGui::Button("RETURN TO SCAN",ImVec2(buttonWidth,45.f)))
+                page=0;
+        }else{
+            ImGui::BeginDisabled();
+            ImGui::Button("UNLOCKING...",ImVec2(buttonWidth,45.f));
+            ImGui::EndDisabled();
+        }
         ImGui::PopStyleColor(2);
         ImGui::Dummy(ImVec2(0,1.f));
     } else if(page==0) {
