@@ -967,41 +967,155 @@ static const char* stateText() {
     return "Ready";
 }
 static const char* stages[]={"Preparing","Processes","Services & Drivers","Startup Entries","Network Connections","Finalizing"};
+// Module inspector: renders actual collected evidence, not generic coverage popups.
+struct InspectionModule {
+    const char* title;
+    const char* summary;
+    const char* categories;
+    bool implemented;
+};
+static const InspectionModule inspectionModules[] = {
+    {"Processes & Privileges","Process inventory, parent PIDs and executable paths","@process",true},
+    {"Memory Integrity","Memory-region analysis has not been implemented","",false},
+    {"Injection Indicators","Injection detection has not been implemented","",false},
+    {"Hooks & Interception","Hook verification has not been implemented","",false},
+    {"Kernel & Drivers","Installed drivers and service inventory","Drivers;Services",true},
+    {"Persistence & Boot","Startup registry entries and service inventory","Startup;Services",true},
+    {"Network & Firewall","TCP/UDP endpoint inventory; firewall rules not analyzed","Network;Network UDP;Network IPv6",true},
+    {"Hardware & USB","Registered USB storage device inventory","USB",true},
+    {"Execution Forensics","Prefetch and event-log analysis has not been implemented","",false},
+    {"Files & Signatures","User-selected files: SHA-256 and Authenticode","@files",true},
+    {"FiveM Integrity","Reference-manifest verification has not been implemented","",false},
+    {"Evidence Correlation","Cross-source correlation has not been implemented","",false}
+};
+static int inspectedModule = -1;
+static bool openInspectorRequested = false;
+static char moduleSearch[192] = "";
+static bool moduleMatches(const char* categories,const std::string& category) {
+    std::string keys(categories ? categories : "");
+    size_t from=0;
+    while(from<keys.size()) {
+        size_t to=keys.find(';',from);
+        if(to==std::string::npos)to=keys.size();
+        if(category==keys.substr(from,to-from))return true;
+        from=to+1;
+    }
+    return false;
+}
+static bool moduleSearchMatches(const std::string& text) {
+    if(!moduleSearch[0])return true;
+    std::string hay=text, needle=moduleSearch;
+    std::transform(hay.begin(),hay.end(),hay.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    std::transform(needle.begin(),needle.end(),needle.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    return hay.find(needle)!=std::string::npos;
+}
 static void modulesList() {
-    struct Module {const char* name;const char* detail;bool available;};
-    static const Module items[]={
-        {"Processes & Privileges","Process inventory, parent IDs and accessible paths",true},
-        {"Memory Integrity","Memory analysis is not implemented",false},
-        {"Injection Indicators","Advanced injection checks are not implemented",false},
-        {"Hooks & Interception","Hook verification is not implemented",false},
-        {"Kernel & Drivers","Service and driver inventory",true},
-        {"Persistence & Boot","Run / RunOnce entries and services",true},
-        {"Network & Firewall","TCP/UDP IPv4 endpoints; firewall analysis not implemented",true},
-        {"Hardware & USB","USB storage registry inventory; connection timeline not implemented",true},
-        {"Execution Forensics","Prefetch, Amcache and event analysis unavailable",false},
-        {"Files & Signatures","Manual SHA-256 and offline Authenticode checks",true},
-        {"FiveM Integrity","Reference-manifest verification unavailable",false},
-        {"Evidence Correlation","Cross-source correlation unavailable",false}
-    };
-    for(const auto& m:items) {
-        ImGui::PushID(m.name);
-        ImGui::BeginChild("module",ImVec2(0,86),ImGuiChildFlags_Borders);
-        ImGui::Text("%s",m.name);
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x>150?ImGui::GetWindowWidth()-125:0);
-        ImGui::TextColored(m.available?ImVec4(.45f,.78f,.59f,1):ImVec4(.69f,.70f,.75f,1),
-                           "%s",m.available?"AVAILABLE":"PLANNED");
-        ImGui::TextDisabled("%s",m.detail);
-        if(ImGui::SmallButton("Show Details"))ImGui::OpenPopup("Module coverage details");
-        if(ImGui::BeginPopup("Module coverage details")) {
-            ImGui::TextColored(orange(),"%s",m.name);
-            ImGui::Separator();
-            ImGui::TextWrapped("%s",m.detail);
-            ImGui::TextDisabled("Status: %s",m.available?"Available":"Not implemented");
-            ImGui::TextWrapped("Coverage status describes implemented inventory, not a guarantee of threat detection.");
-            ImGui::EndPopup();
+    const float full=ImGui::GetContentRegionAvail().x;
+    const float gap=12.f;
+    const float tileWidth=(full>780.f)?(full-gap)*.5f:full;
+    for(int i=0;i<IM_ARRAYSIZE(inspectionModules);++i) {
+        const auto& m=inspectionModules[i];
+        ImGui::PushID(i);
+        if(full>780.f && i%2)ImGui::SameLine(0,gap);
+        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,108),ImGuiChildFlags_Borders);
+        ImGui::TextColored(m.implemented?orange():ImVec4(.70f,.72f,.76f,1),"%s",m.title);
+        ImGui::SameLine();
+        ImGui::TextDisabled("  %s",m.implemented?"AVAILABLE":"PLANNED");
+        ImGui::Separator();
+        ImGui::TextDisabled("%s",m.summary);
+        if(ImGui::Button("Inspect Evidence",ImVec2(150,29))) {
+            inspectedModule=i;
+            moduleSearch[0]=0;
+            openInspectorRequested = true;
         }
         ImGui::EndChild();
         ImGui::PopID();
+    }
+    if(openInspectorRequested) { ImGui::OpenPopup("Evidence inspector"); openInspectorRequested=false; }
+    ImGui::SetNextWindowSize(ImVec2(960,650),ImGuiCond_Appearing);
+    if(ImGui::BeginPopupModal("Evidence inspector",nullptr,ImGuiWindowFlags_NoSavedSettings)) {
+        if(inspectedModule>=0 && inspectedModule<IM_ARRAYSIZE(inspectionModules)) {
+            const auto& m=inspectionModules[inspectedModule];
+            ImGui::TextColored(orange(),"%s",m.title);
+            ImGui::SameLine();
+            ImGui::TextDisabled("  /  %s",m.implemented?"LIVE EVIDENCE":"NOT IMPLEMENTED");
+            ImGui::Separator();
+            ImGui::TextWrapped("%s",m.summary);
+            if(!m.implemented) {
+                ImGui::Spacing();
+                ImGui::TextWrapped("This module does not collect evidence yet. No detection claims are made.");
+            } else {
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputTextWithHint("##moduleSearch","Search collected evidence...",moduleSearch,sizeof(moduleSearch));
+                ImGui::Separator();
+                if(std::string(m.categories)=="@process") {
+                    std::vector<Process> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=processes;}
+                    ImGui::TextDisabled("%zu processes collected",snapshot.size());
+                    if(ImGui::BeginTable("processEvidence",5,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+                        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))) {
+                        ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
+                        ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,75);
+                        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,2);
+                        ImGui::TableSetupColumn("Assessment",ImGuiTableColumnFlags_WidthStretch,2);
+                        ImGui::TableHeadersRow();
+                        for(const auto& p:snapshot) {
+                            std::string name=utf8(p.name), path=utf8(p.path);
+                            if(!moduleSearchMatches(name+" "+path+" "+p.assessment))continue;
+                            ImGui::TableNextRow();
+                            if(p.suspicious && highlightSuspicious)
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(125,32,37,160));
+                            ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
+                            ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)p.parent);
+                            ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(name.c_str());
+                            ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(path.c_str());
+                            ImGui::TableSetColumnIndex(4);ImGui::TextWrapped("%s",p.assessment.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                } else if(std::string(m.categories)=="@files") {
+                    std::vector<FileResult> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=files;}
+                    ImGui::TextDisabled("%zu files verified",snapshot.size());
+                    ImGui::BeginChild("fileEvidence",ImVec2(0,-45),ImGuiChildFlags_Borders);
+                    {
+                        for(const auto& f:snapshot) {
+                            std::string path=utf8(f.path);
+                            if(!moduleSearchMatches(path))continue;
+                            ImGui::TextWrapped("%s",path.c_str());
+                            ImGui::Separator();
+                        }
+                    }
+                    ImGui::EndChild();
+                } else {
+                    std::vector<Record> snapshot;
+                    {std::lock_guard<std::mutex> lock(dataMutex);snapshot=records;}
+                    size_t count=0;
+                    for(const auto& r:snapshot)if(moduleMatches(m.categories,r.category))++count;
+                    ImGui::TextDisabled("%zu records collected",count);
+                    if(ImGui::BeginTable("recordEvidence",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+                        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-45))) {
+                        ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthFixed,125);
+                        ImGui::TableSetupColumn("Entry",ImGuiTableColumnFlags_WidthStretch,1);
+                        ImGui::TableSetupColumn("Evidence",ImGuiTableColumnFlags_WidthStretch,3);
+                        ImGui::TableHeadersRow();
+                        for(const auto& r:snapshot) {
+                            if(!moduleMatches(m.categories,r.category) ||
+                               !moduleSearchMatches(r.category+" "+r.name+" "+r.detail))continue;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+                            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
+                            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+            }
+        }
+        ImGui::Separator();
+        if(ImGui::Button("Close",ImVec2(130,34)))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 }
 
@@ -1438,7 +1552,9 @@ static void renderUI() {
         ImGui::EndChild();
         ImGui::Spacing();
         sectionTitle("MODULE COVERAGE","12 inspection categories preserved");
+        ImGui::BeginChild("moduleBrowser",ImVec2(0,0),ImGuiChildFlags_None);
         modulesList();
+        ImGui::EndChild();
     } else if(page==2) {
         sectionTitle(done?"SCAN COMPLETED":"INSPECTION RESULTS",
                      "Process inventory with explainable path-based review indicators.");
