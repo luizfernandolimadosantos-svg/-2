@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <windowsx.h>
 #include <ctime>
 #include <cmath>
 #include <iterator>
@@ -179,9 +180,24 @@ static std::atomic<bool> scanCancelled{false};
 static std::atomic<int> completedStages{0};
 static std::atomic<int> totalStages{6};
 static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
+static std::atomic<size_t> peFilesInspected{0};
 static std::wstring executablePath();
 static int accentIndex=0, themeIndex=0, densityIndex=1;
 static float interfaceScale=1.0f;
+static int windowPreset=2;
+static const char* windowPresetNames[]={"1024 x 720","1280 x 800","1440 x 900",
+    "1600 x 900","1920 x 1080"};
+static void applyWindowPreset(){
+    static const int dims[][2]={{1024,720},{1280,800},{1440,900},{1600,900},{1920,1080}};
+    int index=std::clamp(windowPreset,0,4);
+    RECT work{};SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
+    int availableW=work.right-work.left,availableH=work.bottom-work.top;
+    int w=(std::min)(dims[index][0],availableW);
+    int h=(std::min)(dims[index][1],availableH);
+    if(hwnd&&w>0&&h>0)SetWindowPos(hwnd,nullptr,
+        work.left+(availableW-w)/2,work.top+(availableH-h)/2,
+        w,h,SWP_NOZORDER|SWP_NOACTIVATE);
+}
 static bool highlightSuspicious=true, showSecurityWarnings=true;
 static ImVec4 customAccent(.98f,.43f,.15f,1.f);
 static bool settingsNotice=false;
@@ -209,6 +225,7 @@ static void saveSettings() {
         if(!out) {settingsNotice=false;return;}
         out<<"accent="<<accentIndex<<"\n"<<"theme="<<themeIndex<<"\n"
            <<"density="<<densityIndex<<"\n"<<"scale="<<interfaceScale<<"\n"
+           <<"window="<<windowPreset<<"\n"
            <<"highlight="<<highlightSuspicious<<"\n"
            <<"warnings="<<showSecurityWarnings<<"\n"
            <<"custom_r="<<customAccent.x<<"\n"
@@ -229,6 +246,7 @@ static void loadSettings() {
             else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="scale")interfaceScale=std::clamp(std::stof(v),.8f,1.4f);
+            else if(key=="window")windowPreset=std::clamp(std::stoi(v),0,4);
             else if(key=="highlight")highlightSuspicious=(v=="1");
             else if(key=="warnings")showSecurityWarnings=(v=="1");
             else if(key=="custom_r")customAccent.x=std::clamp(std::stof(v),0.f,1.f);
@@ -946,6 +964,7 @@ static std::vector<Record> inspectPeStructure(const std::vector<Process>& items)
             FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);
         if(file==INVALID_HANDLE_VALUE)continue;
         ++examined;
+        peFilesInspected=examined;
         LARGE_INTEGER length{};
         if(!GetFileSizeEx(file,&length) || length.QuadPart<512 || length.QuadPart>1024LL*1024*1024) {
             CloseHandle(file);continue;
@@ -1183,6 +1202,7 @@ static void scanWorker() {
 }
 static void startScan() {
     if(scanning)return;
+    peFilesInspected=0;
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
     std::thread(scanWorker).detach();
 }
@@ -1358,6 +1378,14 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     // invisible drag item cannot intercept minimize/close.
     // Let ImGui receive mouse events first. Old native hitboxes intercepted
     // controls in the header, causing unresponsive buttons and accidental drags.
+    if(msg==WM_NCHITTEST){
+        // The custom chrome has no native title bar. Allow dragging from
+        // the empty top strip, but keep the logo, navigation and controls clickable.
+        POINT pt{GET_X_LPARAM(l),GET_Y_LPARAM(l)};
+        ScreenToClient(h,&pt);
+        RECT rc{};GetClientRect(h,&rc);
+        if(pt.y>=0&&pt.y<14&&pt.x>=0&&pt.x<rc.right-120)return HTCAPTION;
+    }
     if(ImGui_ImplWin32_WndProcHandler(h,msg,w,l)) return true;
     switch(msg) {
     case WM_SIZE:
@@ -1505,6 +1533,7 @@ static std::mutex memoryGuard;
 static std::vector<MemoryFinding> memoryFindings;
 static std::string memoryStatus="Choose a PID and click Inspect memory.";
 static std::atomic<bool> memoryBusy{false};
+static bool memoryShowAll=false;
 static int memoryPid=0;
 static size_t memoryRegionsChecked=0;
 static std::string memoryProtectName(DWORD p){
@@ -1520,20 +1549,29 @@ static std::string memoryProtectName(DWORD p){
 }
 static void runMemoryInspection(DWORD pid){
     if(memoryBusy.exchange(true))return;
-    std::thread([pid](){
+    const bool showAll=memoryShowAll;
+    std::thread([pid,showAll](){
         std::vector<MemoryFinding> findings;
         size_t checked=0;
         std::string status;
         HANDLE proc=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,pid);
+        if(!proc)proc=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
         if(!proc){
-            status="Cannot inspect PID: access denied, process exited, or protected process.";
+            DWORD err=GetLastError();
+            status="OpenProcess failed (Windows error "+std::to_string(err)+
+                "). Protected/system processes may deny access. Try a normal user process.";
         }else{
             SYSTEM_INFO sys{};GetNativeSystemInfo(&sys);
             uintptr_t addr=(uintptr_t)sys.lpMinimumApplicationAddress;
             const uintptr_t maximum=(uintptr_t)sys.lpMaximumApplicationAddress;
             while(addr<maximum&&checked<250000){
                 MEMORY_BASIC_INFORMATION mbi{};
-                if(!VirtualQueryEx(proc,(LPCVOID)addr,&mbi,sizeof(mbi)))break;
+                if(!VirtualQueryEx(proc,(LPCVOID)addr,&mbi,sizeof(mbi))){
+                    DWORD err=GetLastError();
+                    if(checked==0)status="VirtualQueryEx failed (Windows error "+
+                        std::to_string(err)+"). Process may be protected or inaccessible.";
+                    break;
+                }
                 ++checked;
                 const DWORD p=mbi.Protect&0xff;
                 const bool executable=p==PAGE_EXECUTE||p==PAGE_EXECUTE_READ||
@@ -1541,7 +1579,8 @@ static void runMemoryInspection(DWORD pid){
                 const bool writable=p==PAGE_EXECUTE_READWRITE||p==PAGE_EXECUTE_WRITECOPY;
                 const bool privateExec=mbi.Type==MEM_PRIVATE&&executable;
                 const bool mappedExec=mbi.Type==MEM_MAPPED&&executable;
-                if(mbi.State==MEM_COMMIT&&executable&&(writable||privateExec||mappedExec)){
+                if(mbi.State==MEM_COMMIT&&(showAll||
+                    (executable&&(writable||privateExec||mappedExec)))){
                     MemoryFinding f{};
                     f.address=(uintptr_t)mbi.BaseAddress;
                     f.size=mbi.RegionSize;
@@ -1569,7 +1608,8 @@ static void runMemoryInspection(DWORD pid){
                 addr=next;
             }
             CloseHandle(proc);
-            status="Inspection completed. Findings are heuristics, not confirmed injections.";
+            if(checked>0)status="Inspection completed. Entries describe memory permissions, not confirmed malware.";
+            else if(status.empty())status="No readable regions. Process may be protected or exited.";
         }
         {std::lock_guard<std::mutex> lock(memoryGuard);
             memoryFindings=std::move(findings);
@@ -1582,14 +1622,33 @@ static void drawMemoryInvestigation(const char* mode){
     const ImVec4 accent(.64f,.78f,1,1);
     const ImVec4 muted(.53f,.61f,.71f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.060f,.081f,.117f,1));
-    ImGui::BeginChild("##memoryControls",ImVec2(0,161),ImGuiChildFlags_None);
+    ImGui::BeginChild("##memoryControls",ImVec2(0,204),ImGuiChildFlags_None);
     ImGui::TextColored(accent,"TARGET PROCESS");
     ImGui::TextColored(muted,"Read-only address-space inspection. Some protected processes deny access.");
     ImGui::Dummy(ImVec2(0,9));
-    ImGui::SetNextItemWidth(190);
-    ImGui::InputInt("PID  /  PROCESS IDENTIFIER",&memoryPid,1,100);
+    ImGui::SetNextItemWidth(130);
+    ImGui::InputInt("PID##targetPid",&memoryPid,1,100);
+    ImGui::SameLine(0,12);
+    ImGui::SetNextItemWidth(300);
+    if(ImGui::BeginCombo("##processPicker","Choose running process...")){
+        std::vector<Process> snapshot;
+        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=processes;}
+        for(const auto& proc:snapshot){
+            std::string name=utf8(proc.name)+"  [PID "+std::to_string(proc.pid)+"]";
+            if(ImGui::Selectable(name.c_str(),memoryPid==(int)proc.pid))
+                memoryPid=(int)proc.pid;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine(0,12);
+    if(ImGui::Button("REFRESH PROCESSES##memory")){
+        auto refreshed=enumerateProcesses();
+        std::lock_guard<std::mutex> lock(dataMutex);
+        processes=std::move(refreshed);
+        processCount=processes.size();
+    }
+    ImGui::Checkbox("Show all committed regions",&memoryShowAll);
     if(memoryPid<0)memoryPid=0;
-    ImGui::SameLine(0,20);
     ImGui::BeginDisabled(memoryPid<=0||memoryBusy.load());
     if(ImGui::Button("RUN MEMORY INSPECTION",ImVec2(240,37)))
         runMemoryInspection((DWORD)memoryPid);
@@ -1646,10 +1705,11 @@ static void modulesList() {
         ImGui::PushID(i);
         if(i%columns)ImGui::SameLine(0,gap);
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.077f,.102f,1));
-        ImGui::BeginChild("##tool",ImVec2(width,156),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##tool",ImVec2(width,166),ImGuiChildFlags_Borders);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+12);
         const ImVec2 start=ImGui::GetWindowPos();
         ImGui::GetWindowDrawList()->AddRectFilled(
-            ImVec2(start.x+1,start.y+1),ImVec2(start.x+4,start.y+155),
+            ImVec2(start.x+1,start.y+1),ImVec2(start.x+4,start.y+165),
             m.implemented?IM_COL32(75,152,229,255):IM_COL32(117,124,137,255));
         ImGui::TextColored(ImVec4(.56f,.66f,.81f,1),"MODULE %02d",i+1);
         ImGui::SameLine();
@@ -2510,27 +2570,27 @@ static Report analyze(const std::wstring& path){
         if(c>=32&&c<=126){
             if(current.size()<300)current.push_back((char)c);
         }else{
-            if(current.size()>=7&&r.strings.size()<10000)r.strings.push_back(current);
+            if(current.size()>=5&&r.strings.size()<18000)r.strings.push_back(current);
             current.clear();
         }
     }
-    if(current.size()>=7&&r.strings.size()<10000)r.strings.push_back(current);
+    if(current.size()>=5&&r.strings.size()<18000)r.strings.push_back(current);
     // Extract readable UTF-16LE strings as well as ASCII. Many Windows
     // executables store paths, commands and configuration text in UTF-16LE.
     // Require at least 7 characters and cap the output to avoid UI overload.
-    for(size_t parity=0;parity<2&&r.strings.size()<10000;++parity){
+    for(size_t parity=0;parity<2&&r.strings.size()<18000;++parity){
         std::string wideRun;
         for(size_t pos=parity;pos+1<b.size();pos+=2){
             const unsigned char lo=b[pos],hi=b[pos+1];
             if(hi==0&&lo>=32&&lo<=126){
                 if(wideRun.size()<300)wideRun.push_back((char)lo);
             }else{
-                if(wideRun.size()>=7&&r.strings.size()<10000)
+                if(wideRun.size()>=5&&r.strings.size()<18000)
                     r.strings.push_back("[UTF-16LE] "+wideRun);
                 wideRun.clear();
             }
         }
-        if(wideRun.size()>=7&&r.strings.size()<10000)
+        if(wideRun.size()>=5&&r.strings.size()<18000)
             r.strings.push_back("[UTF-16LE] "+wideRun);
     }
     if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
@@ -2712,6 +2772,16 @@ static void renderUI() {
     ImGui::EndGroup();
     ImGui::SameLine(0,30);
     ImGui::TextColored(accentInk,"ENDPOINT ANALYSIS");
+    if(scanning){
+        const ImVec2 wp=ImGui::GetWindowPos();
+        const ImVec2 ws=ImGui::GetWindowSize();
+        const float t=static_cast<float>(ImGui::GetTime());
+        const float span=(std::max)(1.f,ws.x-135.f);
+        const float x=wp.x+std::fmod(t*100.f,span);
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(x,wp.y+ws.y-3),ImVec2(x+135,wp.y+ws.y),
+            IM_COL32(105,165,250,210),2.f);
+    }
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
     if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
@@ -2724,17 +2794,19 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.030f,.042f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,11));
     ImGui::BeginChild("##atlasNav",ImVec2(0,64),ImGuiChildFlags_None);
-    const char* nav[]={"01  DASHBOARD","02  THREAT ANALYSIS","03  EVENT RECORDS",
-                       "04  BINARY LAB","05  PREFERENCES"};
-    const int navPages[]={0,2,3,6,4};
-    for(int i=0;i<5;i++){
+    const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
+                       "BINARY LAB","NETWORK","PERSISTENCE","PREFERENCES"};
+    const int navPages[]={0,2,3,6,7,8,4};
+    const float navWidth=(std::max)(94.f,
+        (ImGui::GetContentRegionAvail().x-6*7.f)/7.f);
+    for(int i=0;i<7;i++){
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
             ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.22f,.34f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,accentInk);
         }
-        if(ImGui::Button(nav[i],ImVec2(i==1?188.f:i==2?175.f:155.f,41)))page=navPages[i];
+        if(ImGui::Button(nav[i],ImVec2(navWidth,41)))page=navPages[i];
         if(active){
             ImVec2 lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
             ImGui::GetWindowDrawList()->AddRectFilled(
@@ -2742,7 +2814,7 @@ static void renderUI() {
             ImGui::PopStyleColor(2);
         }
         ImGui::PopID();
-        if(i!=4)ImGui::SameLine(0,11);
+        if(i!=6)ImGui::SameLine(0,7);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -2752,7 +2824,8 @@ static void renderUI() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,26));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
-        page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":"PREFERENCES";
+        page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
+        page==7?"NETWORK CONNECTIONS":page==8?"PERSISTENCE AUDIT":"PREFERENCES";
     ImGui::TextColored(accentInk,"SYNC / %s",section);
     ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
@@ -2789,7 +2862,7 @@ static void renderUI() {
         if(side){
             ImGui::SameLine(0,12);
             ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.082f,.11f,1));
-            ImGui::BeginChild("##liveCounters",ImVec2(rightWidth,205),ImGuiChildFlags_Borders);
+            ImGui::BeginChild("##liveCounters",ImVec2(rightWidth,233),ImGuiChildFlags_Borders);
             ImGui::TextColored(accent,"LIVE TELEMETRY");
             ImGui::Separator();
             ImGui::TextColored(quiet,"PROCESSES");ImGui::SameLine(145);ImGui::Text("%zu",processCount.load());
@@ -2994,6 +3067,58 @@ static void renderUI() {
                     if(ImGui::Button("Close"))ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
+    } else if(page==7||page==8) {
+        const bool networkView=page==7;
+        sectionTitle(networkView?"Network Evidence":"Persistence Evidence",
+            networkView?"TCP/UDP endpoints collected by the scan":
+            "Startup, service and registry records collected by the scan");
+        static char evidenceSearch[256]{};
+        ImGui::SetNextItemWidth(420);
+        ImGui::InputTextWithHint("##specialEvidenceSearch","Search evidence, names or paths...",
+            evidenceSearch,sizeof(evidenceSearch));
+        ImGui::SameLine();
+        if(ImGui::Button("RUN FULL SCAN##evidence")&&!scanning)startScan();
+        std::vector<Record> snapshot;
+        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=records;}
+        size_t shown=0;
+        if(ImGui::BeginTable("##specialEvidence",3,
+            ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))){
+            ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthFixed,165);
+            ImGui::TableSetupColumn("Item",ImGuiTableColumnFlags_WidthStretch,1);
+            ImGui::TableSetupColumn("Evidence / details",ImGuiTableColumnFlags_WidthStretch,3);
+            ImGui::TableHeadersRow();
+            for(const auto& r:snapshot){
+                std::string category=r.category;
+                std::transform(category.begin(),category.end(),category.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                bool relevant=networkView?
+                    category.find("network")!=std::string::npos||
+                    category.find("tcp")!=std::string::npos||
+                    category.find("udp")!=std::string::npos:
+                    category.find("startup")!=std::string::npos||
+                    category.find("service")!=std::string::npos||
+                    category.find("registry")!=std::string::npos||
+                    category.find("persistence")!=std::string::npos||
+                    category.find("ifeo")!=std::string::npos||
+                    category.find("logon")!=std::string::npos;
+                if(!relevant)continue;
+                std::string text=r.category+" "+r.name+" "+r.detail;
+                std::transform(text.begin(),text.end(),text.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                std::string query=evidenceSearch;
+                std::transform(query.begin(),query.end(),query.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                if(!query.empty()&&text.find(query)==std::string::npos)continue;
+                ++shown;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+                ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
+                ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+            }
+            ImGui::EndTable();
+        }
+        if(!shown)ImGui::TextDisabled("No matching evidence. Run a scan or adjust the search.");
     } else if(page==6) {
         binaryInspector::draw();
     } else if(page==4) {
@@ -3019,6 +3144,12 @@ static void renderUI() {
         if(ImGui::SliderFloat("##scale",&interfaceScale,.8f,1.4f,"%.2fx"))
             ImGui::GetIO().FontGlobalScale=interfaceScale;
         ImGui::Spacing();
+        ImGui::Text("Window size (maximum 1920 x 1080)");
+        ImGui::SetNextItemWidth(320);
+        if(ImGui::Combo("##windowPreset",&windowPreset,windowPresetNames,
+            IM_ARRAYSIZE(windowPresetNames)))applyWindowPreset();
+        ImGui::TextDisabled("Size is limited to the available desktop work area.");
+        ImGui::Spacing();
         ImGui::Text("Table Density");
         ImGui::SetNextItemWidth(320);
         if(ImGui::Combo("##density",&densityIndex,densityNames,IM_ARRAYSIZE(densityNames)))
@@ -3033,6 +3164,7 @@ static void renderUI() {
         ImGui::SameLine();
         if(ImGui::Button("Restore Defaults",ImVec2(170,42))) {
             accentIndex=0;themeIndex=0;densityIndex=1;interfaceScale=1.f;
+            windowPreset=2;applyWindowPreset();
             highlightSuspicious=true;showSecurityWarnings=true;
             customAccent=ImVec4(.98f,.43f,.15f,1.f);
             ImGui::GetIO().FontGlobalScale=1.f;
@@ -3068,12 +3200,13 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                   L"SyncPCChecker",nullptr};
     RegisterClassExW(&wc);
     hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
-                       WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU,100,100,1200,780,nullptr,nullptr,inst,nullptr);
+                       WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1200,780,nullptr,nullptr,inst,nullptr);
     if(!hwnd || !initD3D(hwnd))return 1;
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
     IMGUI_CHECKVERSION();ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     loadSettings();
+    applyWindowPreset();
     applyTheme();
     ImGui::GetIO().FontGlobalScale=interfaceScale;
     // Use Windows' modern UI font when available; fallback to the built-in font.
