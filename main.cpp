@@ -3583,6 +3583,10 @@ static void enumerateAmcacheTree(HKEY parent,const std::wstring& branch,
         RegCloseKey(child);
     }
 }
+// Explicit per-run coverage, independent of filtering and the visible evidence table.
+static std::atomic<int> forensicSourceStatus{0}; // 0 pending, 1 completed, 2 failed
+static std::atomic<unsigned> forensicSourceChecks{0};
+static std::atomic<unsigned> forensicCorrelationNotices{0};
 static std::vector<Record> inspectForensicSourceHeaders(){
     std::vector<Record> out;
     wchar_t win[MAX_PATH]{};
@@ -3841,6 +3845,8 @@ static void scanWorker() {
         auto auditPlatform=inspectAuditAndPlatformEvidence();
         auto extraPolicies=inspectExtraSecurityPolicies();
         auto forensicHeaders=inspectForensicSourceHeaders();
+        forensicSourceChecks.store(static_cast<unsigned>(forensicHeaders.size()));
+        forensicSourceStatus.store(1);
         auto yaraFindings=inspectYaraLocalFiles(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         markInspectionStage(5);
@@ -3890,6 +3896,7 @@ static void scanWorker() {
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
         auto correlations=correlateForensicEvidence(services);
+        forensicCorrelationNotices.store(static_cast<unsigned>(correlations.size()));
         services.insert(services.end(),correlations.begin(),correlations.end());
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
@@ -3905,6 +3912,7 @@ static void scanWorker() {
         done=true;
     } catch(...) {
         scanFailed=true;
+        if(forensicSourceStatus.load()==0)forensicSourceStatus=2;
     }
     scanning=false;
 }
@@ -3924,6 +3932,9 @@ static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
     peFilesInspected=0;
+    forensicSourceStatus=0;
+    forensicSourceChecks=0;
+    forensicCorrelationNotices=0;
     {
         std::lock_guard<std::mutex> lock(dataMutex);
         if(done && !scanFailed && !scanCancelled){
@@ -6470,23 +6481,28 @@ static void renderUI() {
                     "Startup entries","Network and device inventory",
                     "Security and forensic artifacts","Result publication"};
                 for(int i=0;i<6;++i)
-                    ImGui::Text("%s: %.2f s",names[i],stageElapsedMs[i].load()/1000.0);
+                    {
+                    const auto ms=stageElapsedMs[i].load();
+                    if(ms<10)ImGui::Text("%s: %llu ms",names[i],ms);
+                    else ImGui::Text("%s: %.2f s",names[i],ms/1000.0);
+                }
                 ImGui::TextDisabled("Elapsed time is measured for completed worker stages.");
             }
         }
-        if(done){
-            std::lock_guard<std::mutex> lock(dataMutex);
-            size_t correlated=0,sourceChecks=0;
-            for(const auto& r:records){
-                if(r.category=="Evidence Correlation")++correlated;
-                if(r.category=="Prefetch Headers" || r.category=="Amcache Header" ||
-                   r.category=="ShimCache Source")++sourceChecks;
-            }
+        if(done || scanFailed){
             ImGui::TextColored(accent,"FORENSIC SOURCE COVERAGE");
-            ImGui::Text("Source status checks: %zu  |  Correlation notices: %zu",
-                        sourceChecks,correlated);
-            ImGui::TextDisabled("Read-only checks. Prefetch MAM and Windows-specific records may be unsupported.");
-            ImGui::TextDisabled("Access denied or missing evidence is not proof of tampering.");
+            const int coverageState=forensicSourceStatus.load();
+            if(coverageState==1){
+                ImGui::Text("Source status checks: %u  |  Correlation notices: %u",
+                    forensicSourceChecks.load(),forensicCorrelationNotices.load());
+                if(forensicSourceChecks.load()==0)
+                    ImGui::TextDisabled("No source-status records returned; inspect scanner diagnostics.");
+            }else if(coverageState==2){
+                ImGui::TextDisabled("Forensic collection failed before source checks completed.");
+            }else{
+                ImGui::TextDisabled("Forensic source checks were not completed in this run.");
+            }
+            ImGui::TextDisabled("Unavailable sources are not evidence of tampering.");
             ImGui::Dummy(ImVec2(0,8));
         }
         ImGui::TextColored(accent,"INVESTIGATION MODULES");
