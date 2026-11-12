@@ -2236,20 +2236,20 @@ static ImVec4 orange(){return ImVec4(.88f,.88f,.88f,1.f);}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=8.f;
-    st.ChildRounding=9.f;
+    st.WindowRounding=10.f;
+    st.ChildRounding=12.f;
     st.FrameRounding=cornerStyle==0?3.f:cornerStyle==1?7.f:11.f;
-    st.PopupRounding=10.f;
+    st.PopupRounding=12.f;
     st.ScrollbarRounding=3.f;
-    st.TabRounding=7.f;
+    st.TabRounding=9.f;
     st.GrabRounding=3.f;
     st.WindowBorderSize=0.f;
     st.ChildBorderSize=1.f;
     st.FrameBorderSize=1.f;
-    st.WindowPadding=ImVec2(21,19);
+    st.WindowPadding=ImVec2(20,17);
     st.FramePadding=ImVec2(11,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(10,densityIndex==0?7.f:densityIndex==2?12.f:9.f);
-    st.ItemInnerSpacing=ImVec2(8,6);
+    st.ItemInnerSpacing=ImVec2(9,7);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
     c[ImGuiCol_WindowBg]=ImVec4(.027f,.027f,.027f,1);
@@ -2284,6 +2284,15 @@ static void applyTheme() {
     c[ImGuiCol_ScrollbarBg]=ImVec4(.04f,.04f,.04f,1);
     c[ImGuiCol_ScrollbarGrab]=ImVec4(.30f,.30f,.30f,1);
     c[ImGuiCol_NavHighlight]=ImVec4(.80f,.80f,.80f,1);
+    c[ImGuiCol_TitleBg]=ImVec4(.035f,.035f,.035f,1.f);
+    c[ImGuiCol_TitleBgActive]=ImVec4(.055f,.055f,.055f,1.f);
+    c[ImGuiCol_MenuBarBg]=ImVec4(.055f,.055f,.055f,1.f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.088f,.088f,.088f,1.f);
+    c[ImGuiCol_PlotLines]=ImVec4(.74f,.74f,.74f,1.f);
+    c[ImGuiCol_PlotHistogram]=ImVec4(.82f,.82f,.82f,1.f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(.40f,.40f,.40f,.40f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(.65f,.65f,.65f,.65f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(.88f,.88f,.88f,.90f);
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
@@ -4050,7 +4059,11 @@ static void renderUI() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.030f,0.030f,0.030f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
-    ImGui::BeginChild("##atlasNav",ImVec2(0,157),ImGuiChildFlags_None,
+    const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
+    const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
+    const int navRows=(9+navColumns-1)/navColumns;
+    const float navRowHeight=54.f;
+    ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     // Persistent UI-only transition state; scan and evidence data are unaffected.
     static int lastNavPage=-1;
@@ -4077,8 +4090,8 @@ static void renderUI() {
     const float navGap=10.f;
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
-    const float navWidth=(std::max)(110.f,
-        (ImGui::GetContentRegionAvail().x-2*navGap)/3.f);
+    const float navWidth=(std::max)(85.f,
+        (ImGui::GetContentRegionAvail().x-(navColumns-1)*navGap)/navColumns);
     for(int i=0;i<9;i++){
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
@@ -4132,7 +4145,7 @@ static void renderUI() {
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
         ImGui::PopID();
-        if(i%3!=2)ImGui::SameLine(0,navGap);
+        if(i%navColumns!=navColumns-1 && i!=8)ImGui::SameLine(0,navGap);
     }
     ImGui::PopStyleVar(2);
     ImGui::EndChild();
@@ -4170,7 +4183,7 @@ static void renderUI() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX()+titleOffset);
     ImGui::TextColored(ImVec4(accentInk.x,accentInk.y,accentInk.z,titleAlpha),
                        "SYNC / %s",section);
-    ImGui::SameLine(0,24);
+    if(ImGui::GetContentRegionAvail().x>195.f)ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 9 to switch pages.");
@@ -4311,7 +4324,7 @@ static void renderUI() {
         const float rightWidth=side?270.f:0.f;
         const float heroWidth=side?full-rightWidth-12.f:full;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.073f,0.073f,0.073f,1));
-        ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,205),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,233),ImGuiChildFlags_Borders);
         ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
         ImGui::SetWindowFontScale(1.5f);
@@ -4320,12 +4333,14 @@ static void renderUI() {
         ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
-            ImGui::TextColored(accent,"INSPECTION RUNNING");
+            ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else{
-            if(accentButton("START FULL INSPECTION",ImVec2(220,42)))startScan();
-            ImGui::SameLine(0,8);
-            if(ImGui::Button("VIEW RESULTS",ImVec2(130,42)))page=2;
+            if(accentButton("START FULL INSPECTION",
+                ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
+            if(ImGui::GetContentRegionAvail().x>145.f)ImGui::SameLine(0,8);
+            if(ImGui::Button("VIEW RESULTS",
+                ImVec2((std::min)(130.f,ImGui::GetContentRegionAvail().x),42)))page=2;
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -4344,8 +4359,10 @@ static void renderUI() {
             ImGui::EndChild();
             ImGui::PopStyleColor();
         }else{
-            ImGui::TextColored(quiet,"PROCESSES: %zu   RECORDS: %zu   FILES: %zu",
-                processCount.load(),recordCount.load(),fileCount.load());
+            ImGui::TextColored(quiet,"PROCESSES: %zu    RECORDS: %zu",
+                processCount.load(),recordCount.load());
+            ImGui::TextColored(quiet,"FILES VERIFIED: %zu    DEFENDER EVENTS: %d",
+                fileCount.load(),defenderAlerts.load());
         }
         ImGui::Dummy(ImVec2(0,16));
         if(defenderAlerts.load()>0){
