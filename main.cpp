@@ -1622,7 +1622,7 @@ static void runMemoryInspection(DWORD pid){
         memoryBusy=false;
     }).detach();
 }
-static void drawMemoryInvestigation(const char* mode){
+static void drawMemoryInvestigation(const char* mode,bool embedded=false){
     const ImVec4 accent(.64f,.78f,1,1);
     const ImVec4 muted(.53f,.61f,.71f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.060f,.081f,.117f,1));
@@ -1677,7 +1677,7 @@ static void drawMemoryInvestigation(const char* mode){
     ImGui::Dummy(ImVec2(0,8));
     if(ImGui::BeginTable("memoryResults",4,ImGuiTableFlags_Borders|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
-        ImGuiTableFlags_ScrollY,ImVec2(0,-40))){
+        ImGuiTableFlags_ScrollY,ImVec2(0,embedded?250.f:-40.f))){
         ImGui::TableSetupColumn("Address",ImGuiTableColumnFlags_WidthFixed,150);
         ImGui::TableSetupColumn("Size",ImGuiTableColumnFlags_WidthFixed,100);
         ImGui::TableSetupColumn("Protection",ImGuiTableColumnFlags_WidthFixed,155);
@@ -2920,16 +2920,55 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.033f,.039f,.054f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,83),ImGuiChildFlags_None);
+    // Quiet brand animation: a restrained breathing frame around the original
+    // logo and a short traveling highlight under the wordmark. Draw-only,
+    // non-interactive, and independent of scan findings.
+    const float brandTime=static_cast<float>(ImGui::GetTime());
     if(syncLogoTexture){
         ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(44,44));
+        const ImVec2 lo=ImGui::GetItemRectMin();
+        const ImVec2 hi=ImGui::GetItemRectMax();
+        ImDrawList* brandDraw=ImGui::GetWindowDrawList();
+        const float breathe=.5f+.5f*std::sin(brandTime*1.35f);
+        const int borderAlpha=static_cast<int>(36.f+51.f*breathe);
+        brandDraw->AddRect(ImVec2(lo.x-5.f,lo.y-5.f),
+                           ImVec2(hi.x+5.f,hi.y+5.f),
+                           IM_COL32(111,161,228,borderAlpha),5.f,0,1.f);
+        // Two tiny moving corner accents, rather than a distracting radar glow.
+        const float edge=8.f+24.f*(.5f+.5f*std::sin(brandTime*.65f));
+        brandDraw->AddLine(ImVec2(lo.x-5.f,lo.y+edge),
+                           ImVec2(lo.x-5.f,lo.y+edge+7.f),
+                           IM_COL32(146,193,248,115),1.5f);
+        brandDraw->AddLine(ImVec2(hi.x+5.f,hi.y-edge),
+                           ImVec2(hi.x+5.f,hi.y-edge-7.f),
+                           IM_COL32(146,193,248,115),1.5f);
         ImGui::SameLine(0,15);
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.24f);
     ImGui::TextColored(titleInk,"SYNC PC CHECKER");
+    const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
+    const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
     ImGui::TextColored(subtleInk,"DEVELOPED BY MUDIN");
     ImGui::EndGroup();
+    {
+        ImDrawList* brandDraw=ImGui::GetWindowDrawList();
+        const float x1=wordmarkLeft.x;
+        const float x2=wordmarkRight.x;
+        const float y=wordmarkRight.y+3.f;
+        const float width=x2-x1;
+        brandDraw->AddLine(ImVec2(x1,y),ImVec2(x2,y),
+                           IM_COL32(73,105,148,55),1.f);
+        // Soft, slow light travel across the thin rule; text never flashes.
+        const float phase=std::fmod(brandTime*24.f,width+40.f)-20.f;
+        const float start=(std::max)(x1,x1+phase);
+        const float end=(std::min)(x2,x1+phase+31.f);
+        if(end>start){
+            brandDraw->AddLine(ImVec2(start,y),ImVec2(end,y),
+                               IM_COL32(129,184,249,155),1.5f);
+        }
+    }
     ImGui::SameLine(0,30);
     ImGui::TextColored(accentInk,"ENDPOINT ANALYSIS");
     // Scan activity is displayed only when a real scan is running.
@@ -2967,12 +3006,12 @@ static void renderUI() {
     if(pageChanged)navTransitionStart=uiNow;
     lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
-                       "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","PREFERENCES"};
-    const int navPages[]={0,2,3,6,7,8,9,4};
+                       "BINARY LAB","NETWORK","DRIVER AUDIT","FILE INTELLIGENCE","MEMORY FORENSICS","PREFERENCES"};
+    const int navPages[]={0,2,3,6,7,8,9,10,4};
     const float navGap=10.f;
     const float navWidth=(std::max)(110.f,
-        (ImGui::GetContentRegionAvail().x-3*navGap)/4.f);
-    for(int i=0;i<8;i++){
+        (ImGui::GetContentRegionAvail().x-2*navGap)/3.f);
+    for(int i=0;i<9;i++){
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
@@ -2998,7 +3037,7 @@ static void renderUI() {
             ImGui::PopStyleVar();
         }
         ImGui::PopID();
-        if(i!=3 && i!=7)ImGui::SameLine(0,navGap);
+        if(i%3!=2)ImGui::SameLine(0,navGap);
     }
     // Animated selection marker glides to the newly selected tab.
     if(!markInitialized){
@@ -3039,7 +3078,7 @@ static void renderUI() {
     const char* section=page==0?"OPERATIONS":page==2?"THREAT INVESTIGATION":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
         page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
-        page==9?"FILE INTELLIGENCE":"PREFERENCES";
+        page==9?"FILE INTELLIGENCE":page==10?"MEMORY FORENSICS":"PREFERENCES";
     // A short title entrance signals navigation without obscuring the tables.
     const float elapsed=uiNow-navTransitionStart;
     const float entrance=(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.30f);
@@ -3337,6 +3376,64 @@ static void renderUI() {
             ImGui::EndTable();
         }
         if(!shown)ImGui::TextDisabled("No matching evidence. Run a scan or adjust the search.");
+    } else if(page==10) {
+        sectionTitle("Advanced Memory Forensics",
+            "Read-only process address-space and module inspection");
+        ImGui::TextDisabled(
+            "Live process memory map | Executable private regions | Loaded module inventory");
+        ImGui::TextWrapped(
+            "This workstation view does not capture physical RAM or parse a Volatility dump. "
+            "It inspects accessible virtual-memory regions using Windows APIs.");
+        ImGui::Dummy(ImVec2(0,12));
+        drawMemoryInvestigation("@injection",true);
+        ImGui::Dummy(ImVec2(0,12));
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(.64f,.78f,1,1),"LOADED MODULE CROSS-CHECK");
+        ImGui::TextDisabled(
+            "Compare the module inventory with memory-region observations. "
+            "Missing entries alone do not prove manual mapping.");
+        static std::vector<std::pair<std::string,std::string>> forensicModules;
+        static DWORD forensicModulePid=0;
+        static std::string forensicModuleStatus="Choose a PID above, then enumerate its accessible modules.";
+        if(ImGui::Button("ENUMERATE LOADED MODULES",ImVec2(270,35))){
+            forensicModules.clear();
+            forensicModulePid=(DWORD)(std::max)(0,memoryPid);
+            if(forensicModulePid==0)forensicModuleStatus="Select a valid process PID.";
+            else{
+                HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,forensicModulePid);
+                if(snap==INVALID_HANDLE_VALUE){
+                    forensicModuleStatus="Module snapshot failed (Windows error "+
+                        std::to_string(GetLastError())+").";
+                }else{
+                    MODULEENTRY32W entry{};entry.dwSize=sizeof(entry);
+                    if(Module32FirstW(snap,&entry)){
+                        do{
+                            forensicModules.emplace_back(
+                                utf8(entry.szModule),utf8(entry.szExePath));
+                        }while(forensicModules.size()<4096&&Module32NextW(snap,&entry));
+                    }
+                    CloseHandle(snap);
+                    forensicModuleStatus=std::to_string(forensicModules.size())+
+                        " modules enumerated for PID "+std::to_string(forensicModulePid)+".";
+                }
+            }
+        }
+        ImGui::TextWrapped("%s",forensicModuleStatus.c_str());
+        if(ImGui::BeginTable("##forensicModules",2,
+            ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,210))){
+            ImGui::TableSetupColumn("Module",ImGuiTableColumnFlags_WidthStretch,1);
+            ImGui::TableSetupColumn("Image path",ImGuiTableColumnFlags_WidthStretch,3);
+            ImGui::TableHeadersRow();
+            for(const auto& module:forensicModules){
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(module.first.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextWrapped("%s",module.second.c_str());
+            }
+            ImGui::EndTable();
+        }
     } else if(page==9) {
         sectionTitle("File Intelligence","Files analyzed or verified by the scanner");
         ImGui::TextDisabled("SHA-256 and signature results are shown only when available.");
