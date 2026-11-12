@@ -1705,12 +1705,11 @@ static void modulesList() {
         ImGui::PushID(i);
         if(i%columns)ImGui::SameLine(0,gap);
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.077f,.102f,1));
-        ImGui::BeginChild("##tool",ImVec2(width,166),ImGuiChildFlags_Borders);
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+12);
-        const ImVec2 start=ImGui::GetWindowPos();
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            ImVec2(start.x+1,start.y+1),ImVec2(start.x+4,start.y+165),
-            m.implemented?IM_COL32(75,152,229,255):IM_COL32(117,124,137,255));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
+        ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
+        // Inner padding keeps text away from card edges; no decorative stripe
+        // overlaid on the module label.
+        ImGui::SetCursorPos(ImVec2(16.f,14.f));
         ImGui::TextColored(ImVec4(.56f,.66f,.81f,1),"MODULE %02d",i+1);
         ImGui::SameLine();
         ImGui::TextColored(m.implemented?ImVec4(.45f,.82f,.68f,1):
@@ -1727,6 +1726,7 @@ static void modulesList() {
             openInspectorRequested=true;
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
         ImGui::PopStyleColor();
         ImGui::PopID();
     }
@@ -2793,28 +2793,29 @@ static void renderUI() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.025f,.030f,.042f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,11));
-    ImGui::BeginChild("##atlasNav",ImVec2(0,64),ImGuiChildFlags_None);
+    ImGui::BeginChild("##atlasNav",ImVec2(0,114),ImGuiChildFlags_None);
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
                        "BINARY LAB","NETWORK","PERSISTENCE","PREFERENCES"};
     const int navPages[]={0,2,3,6,7,8,4};
-    const float navWidth=(std::max)(94.f,
-        (ImGui::GetContentRegionAvail().x-6*7.f)/7.f);
+    const float navGap=10.f;
+    const float navWidth=(std::max)(110.f,
+        (ImGui::GetContentRegionAvail().x-3*navGap)/4.f);
     for(int i=0;i<7;i++){
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.22f,.34f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,accentInk);
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.27f,.41f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.92f,.95f,1.f,1));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
+            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.61f,.89f,1));
         }
-        if(ImGui::Button(nav[i],ImVec2(navWidth,41)))page=navPages[i];
+        if(ImGui::Button(nav[i],ImVec2(navWidth,39)))page=navPages[i];
         if(active){
-            ImVec2 lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(lo.x,hi.y-3),hi,IM_COL32(121,168,255,255));
-            ImGui::PopStyleColor(2);
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar();
         }
         ImGui::PopID();
-        if(i!=6)ImGui::SameLine(0,7);
+        if(i!=3 && i!=6)ImGui::SameLine(0,navGap);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
