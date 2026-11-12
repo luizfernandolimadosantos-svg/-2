@@ -1052,6 +1052,147 @@ static std::vector<Record> evaluateTaskRules(const TaskEvidence& e){
     return findings;
 }
 
+
+// Coverage catalog. Listing a rule does NOT mean its detector is implemented.
+static void drawDetectionCoverageCatalog(){
+    static const char* labels[]={
+    "Processes running from temporary directories",
+    "Unsigned running processes",
+    "Revoked process signatures",
+    "Process image path mismatch",
+    "Windows process name impersonation",
+    "Unusual executable launch directories",
+    "Unexpected parent-child process relationships",
+    "Suspicious process arguments",
+    "Recently modified running executables",
+    "Process image missing from disk",
+    "Private executable memory regions",
+    "Writable and executable memory pages",
+    "Executable regions not backed by modules",
+    "Modules loaded from unusual directories",
+    "Unsigned loaded DLLs",
+    "Mapped versus enumerated module mismatch",
+    "PE headers in private memory",
+    "In-memory versus on-disk executable differences",
+    "Thread starts outside known modules",
+    "Process image replacement indicators",
+    "DLLs loaded from user-writable directories",
+    "DLL names resembling system libraries",
+    "DLL signature validation",
+    "DLL trusted hash comparison",
+    "Writable and executable DLL sections",
+    "Inconsistent DLL PE structures",
+    "Unusual DLL import patterns",
+    "High-entropy DLL sections",
+    "Modules loaded from network shares",
+    "Unexpected DLL-to-process associations",
+    "Run and RunOnce persistence",
+    "Suspicious scheduled tasks",
+    "Permanent WMI event subscriptions",
+    "Active Setup persistence",
+    "SilentProcessExit monitoring",
+    "Image File Execution Options changes",
+    "Services launched from temporary paths",
+    "Startup folder changes",
+    "Unusual shell extension registrations",
+    "Unexpected logon authentication providers",
+    "Unsigned kernel drivers",
+    "Revoked driver certificates",
+    "Known vulnerable driver matches",
+    "Drivers in unusual directories",
+    "Driver service versus file mismatch",
+    "Code integrity configuration changes",
+    "Secure Boot state",
+    "HVCI and memory integrity state",
+    "Windows driver-blocking events",
+    "Kernel structure forensic inconsistencies",
+    "Modified system DLL code pages",
+    "Critical Windows function hash mismatches",
+    "Function redirection indicators",
+    "Unexpected security module changes",
+    "AMSI integrity evidence",
+    "ETW integrity evidence",
+    "Event provider configuration changes",
+    "Unexpected interception libraries",
+    "Suspicious debugging configuration",
+    "Signed disk code versus mapped code",
+    "Unknown process network connections",
+    "Unsigned process network connections",
+    "Persistent unusual destinations",
+    "Unexpected listening ports",
+    "Unexpected DNS server changes",
+    "Unrecognized proxy configuration",
+    "Unexpected proxy PAC scripts",
+    "Suspicious hosts file changes",
+    "Recently modified firewall rules",
+    "Known threat indicator connections",
+    "Invalid executable PE structure",
+    "Overlapping or inconsistent PE sections",
+    "Invalid executable signature",
+    "Revoked executable certificate",
+    "File extension versus actual format",
+    "Relevant alternate data streams",
+    "Recently created unusual executables",
+    "Trusted malicious hash matches",
+    "Inconsistent PE metadata",
+    "Multi-signal packed executable indicators",
+    "Microsoft Defender detection events",
+    "Code integrity block events",
+    "New service installation events",
+    "Task creation or modification events",
+    "Unusual authentication failures",
+    "Security event log clearing",
+    "Audit configuration changes",
+    "Recorded script execution events",
+    "Recent critical file modifications",
+    "Process-file-service-network timeline",
+    "Suspicious DLL to process correlation",
+    "Task to unsigned executable correlation",
+    "New service to vulnerable driver correlation",
+    "Temporary executable to network correlation",
+    "Registry modification to execution correlation",
+    "Process inventory versus historical events",
+    "Multi-source module enumeration comparison",
+    "Authorized offline memory image analysis",
+    "Multiple indicators for same executable",
+    "Explainable evidence confidence rules"
+    };
+    static char filter[128]{};
+    ImGui::InputTextWithHint("##ruleFilter","Search detection rules...",filter,sizeof(filter));
+    ImGui::SameLine();
+    ImGui::TextDisabled("100 proposed rules / coverage audit");
+    ImGui::TextWrapped(
+        "Coverage describes available code, not detection of a threat. "
+        "NOT IMPLEMENTED rules do not execute or produce findings.");
+    if(ImGui::BeginTable("##coverage",3,
+        ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY,
+        ImVec2(0,340))){
+        ImGui::TableSetupColumn("ID",ImGuiTableColumnFlags_WidthFixed,50.f);
+        ImGui::TableSetupColumn("Detection rule");
+        ImGui::TableSetupColumn("Coverage",ImGuiTableColumnFlags_WidthFixed,130.f);
+        ImGui::TableHeadersRow();
+        for(int i=0;i<100;++i){
+            const int id=i+1;
+            const std::string search=asciiLower(filter);
+            const std::string label=asciiLower(labels[i]);
+            if(!search.empty()&&label.find(search)==std::string::npos&&
+               std::to_string(id).find(search)==std::string::npos)continue;
+            const bool implemented=(id==32||id==34||id==35||id==66||id==67||id==100);
+            const bool partial=(id==2||id==8||id==11||id==12||id==14||id==15||id==21||id==23||id==25||id==31||id==37||id==41||id==44||id==61||id==64||id==71||id==72||id==73||id==75||id==77||id==79||id==81||id==98);
+            const char* status=implemented?"IMPLEMENTED":
+                partial?"PARTIAL":"NOT IMPLEMENTED";
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();ImGui::Text("%03d",id);
+            ImGui::TableNextColumn();ImGui::TextUnformatted(labels[i]);
+            ImGui::TableNextColumn();
+            ImGui::TextColored(implemented?ImVec4(.45f,.85f,.60f,1.f):
+                partial?ImVec4(.97f,.77f,.41f,1.f):
+                ImVec4(.58f,.64f,.72f,1.f),"%s",status);
+        }
+        ImGui::EndTable();
+    }
+}
+
 // Extended read-only endpoint inventory. Results are evidence, not verdicts.
 static std::vector<Record> inspectExtendedEndpoint(){
     std::vector<Record> result;
@@ -1527,9 +1668,22 @@ static void scanWorker() {
     }
     scanning=false;
 }
+// Visual presentation pacing only; actual scan completion is never delayed.
+static double inspectionProgressStart=0.0;
+static constexpr double inspectionPresentationSeconds=35.0;
+static int inspectionDisplayPercent(){
+    const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionProgressStart);
+    const int paced=std::clamp(static_cast<int>(
+        elapsed*100.0/inspectionPresentationSeconds),0,100);
+    if(done)return paced; // Scan may already be finished; results remain accessible.
+    const int total=(std::max)(1,totalStages.load());
+    const int measured=std::clamp(completedStages.load()*100/total,0,99);
+    return (std::min)(paced,measured);
+}
 static void startScan() {
     if(scanning)return;
     peFilesInspected=0;
+    inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
     std::thread(scanWorker).detach();
 }
@@ -3538,15 +3692,15 @@ static void renderUI() {
     }
     // Shared across every page: measured completed stages, never timer-based.
     if(scanning || done){
-        const int finished=completedStages.load();
-        const int total=(std::max)(1,totalStages.load());
-        const int percent=done ? 100 : std::clamp(finished*100/total,0,99);
+        const int percent=inspectionDisplayPercent();
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.31f,.59f,.96f,1.f));
         const std::string overlay=std::to_string(percent)+"%";
         ImGui::ProgressBar(percent/100.f,ImVec2(-1,20.f),overlay.c_str());
         ImGui::PopStyleColor();
         ImGui::TextDisabled("%s",
-            done?"INSPECTION COMPLETE":"FULL INSPECTION IN PROGRESS");
+            done ? (percent==100 ? "INSPECTION COMPLETE" :
+                "SCAN COMPLETE - RESULTS READY (DISPLAY ANIMATION)") :
+                "FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
     float available=ImGui::GetContentRegionAvail().x;
@@ -3568,8 +3722,7 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING");
-            const int total=(std::max)(1,totalStages.load());
-            const int percent=std::clamp(completedStages.load()*100/total,0,99);
+            const int percent=inspectionDisplayPercent();
             const std::string progressLabel=std::to_string(percent)+"%";
             ImGui::ProgressBar(percent/100.f,ImVec2(-1,18),
                                progressLabel.c_str());
@@ -3963,6 +4116,11 @@ static void renderUI() {
     } else if(page==4) {
         sectionTitle("Workspace Preferences","Adjust appearance and investigation options");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
+        if(ImGui::CollapsingHeader("DETECTION RULES / COVERAGE (100)",
+            ImGuiTreeNodeFlags_DefaultOpen)){
+            drawDetectionCoverageCatalog();
+            ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        }
         ImGui::TextColored(orange(),"LANGUAGE");
         ImGui::Separator();
         ImGui::Text("Display language: English");
