@@ -249,11 +249,21 @@ static const char* cornerStyleNames[]={"Square","Soft","Rounded"};
 static const char* scrollbarWidthNames[]={"Thin","Standard","Wide"};
 static ImVec4 customAccent(.98f,.43f,.15f,1.f);
 static bool settingsNotice=false;
-static const char* accentNames[]={"Monochrome","Monochrome","Monochrome","Monochrome","Monochrome","Monochrome"};
-static const char* themeNames[]={"Carbon Ember","Dark Graphite","Midnight"};
+static const char* accentNames[]={"Orange","Red","Blue","Purple","Green","Custom"};
+static const char* themeNames[]={"Obsidian","Graphite","Charcoal"};
 static const char* densityNames[]={"Compact","Comfortable","Spacious"};
+// This preference changes ONLY the percentage label in the scan progress
+// bar. All other UI elements stay strictly black, white and gray.
 static ImVec4 accentColor() {
-    return ImVec4(.88f,.88f,.88f,1.f);
+    switch(accentIndex){
+        case 0:return ImVec4(.98f,.48f,.20f,1.f); // Orange
+        case 1:return ImVec4(.96f,.28f,.31f,1.f); // Red
+        case 2:return ImVec4(.39f,.67f,1.f,1.f);  // Blue
+        case 3:return ImVec4(.72f,.49f,.98f,1.f); // Purple
+        case 4:return ImVec4(.38f,.85f,.56f,1.f); // Green
+        case 5:return ImVec4(customAccent.x,customAccent.y,customAccent.z,1.f);
+        default:return ImVec4(1.f,1.f,1.f,1.f);
+    }
 }
 static fs::path settingsPath() {
     wchar_t appdata[32768]{};
@@ -1960,7 +1970,7 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     return DefWindowProcW(h,msg,w,l);
 }
 
-static ImVec4 orange(){return accentColor();}
+static ImVec4 orange(){return ImVec4(.88f,.88f,.88f,1.f);}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
@@ -3576,71 +3586,36 @@ static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
 }
 // Subtle ambient motes distributed across the full application viewport.
 // Foreground draw calls do not consume input or modify scan data.
+// Quiet monochrome rain: deterministic vertical streaks instead of glowing
+// particles. Drawn behind widgets so text and controls remain legible.
 static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     if(size.x<300.f || size.y<200.f)return;
     const float t=static_cast<float>(ImGui::GetTime());
-    // Large, softly layered blue ambient glows stay behind interactive content.
-    ImDrawList* backdrop=ImGui::GetBackgroundDrawList();
-    backdrop->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
-    const ImVec2 glowCenters[3]={
-        ImVec2(origin.x+size.x*(.17f+.035f*std::sin(t*.19f)),
-               origin.y+size.y*(.30f+.045f*std::cos(t*.14f))),
-        ImVec2(origin.x+size.x*(.81f+.045f*std::cos(t*.16f)),
-               origin.y+size.y*(.63f+.05f*std::sin(t*.12f))),
-        ImVec2(origin.x+size.x*(.51f+.055f*std::sin(t*.11f)),
-               origin.y+size.y*(.87f+.025f*std::cos(t*.17f)))
-    };
-    for(int g=0;g<3;++g){
-        const float radius=(g==2?165.f:210.f)*(size.x/1100.f+.35f);
-        const float breathe=.88f+.12f*std::sin(t*.58f+g*1.9f);
-        for(int ring=15;ring>=1;--ring){
-            const float f=static_cast<float>(ring)/15.f;
-            const int alpha=static_cast<int>((g==2?5.f:8.f)*breathe*(1.0f-f*.62f));
-            backdrop->AddCircleFilled(glowCenters[g],radius*f,
-                IM_COL32(g==1?67:50,g==1?115:128,238,alpha),48);
-        }
-    }
-    backdrop->PopClipRect();
     ImDrawList* draw=ImGui::GetForegroundDrawList();
-    draw->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
-    // Deterministic locations: no per-frame random flicker.
-    for(int i=0;i<33;++i){
+    draw->PushClipRect(origin,
+        ImVec2(origin.x+size.x,origin.y+size.y),true);
+    // Low-opacity rain stays subtle even when drawn over opaque panels.
+    // Several speeds and lengths add depth without per-frame randomness.
+    // Positions are stable across frames and wrap smoothly at the bottom.
+    for(int i=0;i<115;++i){
         const float seed=static_cast<float>(i+1);
-        const float nx=std::fmod(seed*0.61803398875f,1.f);
-        const float ny=std::fmod(seed*0.38196601125f,1.f);
-        const float x=origin.x+18.f+nx*(size.x-36.f)
-            +8.f*std::sin(t*(.22f+.013f*(i%5))+seed);
-        const float y=origin.y+18.f+ny*(size.y-36.f)
-            +13.f*std::cos(t*(.16f+.017f*(i%7))+seed*1.7f);
-        const float pulse=.5f+.5f*std::sin(t*(.75f+.08f*(i%4))+seed*2.1f);
-        const int alpha=static_cast<int>(34.f+85.f*pulse);
-        const float radius=(i%7==0)?2.3f:1.45f;
-        draw->AddCircleFilled(ImVec2(x,y),radius*4.8f,
-            IM_COL32(92,155,255,static_cast<int>(5.f+13.f*pulse)),20);
-        draw->AddCircleFilled(ImVec2(x,y),radius*2.5f,
-            IM_COL32(115,181,255,static_cast<int>(10.f+23.f*pulse)),16);
-        draw->AddCircleFilled(ImVec2(x,y),radius,
-            IM_COL32(207,207,207,alpha),12);
-        if(i%9==0){
-            const int glow=static_cast<int>(20.f+42.f*pulse);
-            draw->AddLine(ImVec2(x-5.f,y),ImVec2(x+5.f,y),
-                          IM_COL32(173,173,173,glow),1.f);
-            draw->AddLine(ImVec2(x,y-5.f),ImVec2(x,y+5.f),
-                          IM_COL32(173,173,173,glow),1.f);
-        }
+        const float xFrac=std::fmod(seed*.61803398875f,1.f);
+        const float offset=std::fmod(seed*.41421356237f,1.f);
+        const float speed=85.f+static_cast<float>(i%9)*21.f;
+        const float length=13.f+static_cast<float>(i%7)*6.f;
+        const float travel=size.y+length+40.f;
+        const float y=origin.y-length-20.f+
+            std::fmod(offset*travel+t*speed,travel);
+        const float x=origin.x+9.f+xFrac*(size.x-18.f);
+        const int shade=130+(i%4)*20;
+        const int alpha=15+(i%5)*5;
+        draw->AddLine(ImVec2(x,y-length),ImVec2(x,y),
+            IM_COL32(shade,shade,shade,alpha),i%11==0?1.3f:.75f);
+        // Small bright leading tip, no circular halo.
+        if(i%6==0)
+            draw->AddLine(ImVec2(x,y-3.f),ImVec2(x,y),
+                IM_COL32(223,223,223,35),1.f);
     }
-    // Traveling accents on the outer perimeter, not across text or tables.
-    const float perimeter=2.f*(size.x+size.y);
-    const float d=std::fmod(t*42.f,perimeter);
-    ImVec2 dot(origin.x+5.f,origin.y+5.f);
-    if(d<size.x)dot.x+=d;
-    else if(d<size.x+size.y){dot.x+=size.x-10.f;dot.y+=d-size.x;}
-    else if(d<2.f*size.x+size.y){
-        dot.x+=size.x-10.f-(d-size.x-size.y);dot.y+=size.y-10.f;
-    }else dot.y+=size.y-10.f-(d-2.f*size.x-size.y);
-    draw->AddCircleFilled(dot,11.f,IM_COL32(138,138,138,16),24);
-    draw->AddCircleFilled(dot,5.f,IM_COL32(177,177,177,39),16);
-    draw->AddCircleFilled(dot,2.6f,IM_COL32(214,214,214,175),12);
     draw->PopClipRect();
 }
 
@@ -3673,7 +3648,7 @@ static void drawAtlasProgress(bool compact=false){
             const float x=p.x+sweep+i*4.f;
             dl->AddRectFilled(ImVec2(x,p.y+3.f),
                 ImVec2(x+4.f,q.y-3.f),
-                IM_COL32(209,232,255,(i<5?i+1:10-i)*5));
+                IM_COL32(227,227,227,(i<5?i+1:10-i)*5));
         }
         dl->PopClipRect();
         const float edgeX=p.x+fillW;
@@ -3685,9 +3660,10 @@ static void drawAtlasProgress(bool compact=false){
     char label[16]{};
     snprintf(label,sizeof(label),"%d%%",pct);
     const ImVec2 textSize=ImGui::CalcTextSize(label);
+    const ImVec4 percentColor=accentColor();
     dl->AddText(ImVec2(p.x+(width-textSize.x)*.5f,
                        p.y+(height-textSize.y)*.5f),
-                IM_COL32(250,250,250,255),label);
+                ImGui::ColorConvertFloat4ToU32(percentColor),label);
     ImGui::Dummy(ImVec2(width,height));
     if(!compact){
         ImGui::Dummy(ImVec2(0,5.f));
@@ -4483,12 +4459,13 @@ static void renderUI() {
         ImGui::TextColored(orange(),"APPEARANCE");
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text("Accent Color");
+        ImGui::Text("Scan Percentage Color");
+        ImGui::TextDisabled("Changes only the 0-100%% number; the interface stays monochrome.");
         ImGui::SetNextItemWidth(320);
-        if(ImGui::Combo("##accent",&accentIndex,accentNames,IM_ARRAYSIZE(accentNames)))applyTheme();
+        ImGui::Combo("##accent",&accentIndex,accentNames,IM_ARRAYSIZE(accentNames));
         if(accentIndex==5) {
-            if(ImGui::ColorEdit3("Custom accent",(float*)&customAccent,ImGuiColorEditFlags_NoInputs))
-                applyTheme();
+            ImGui::ColorEdit3("Custom percentage color",(float*)&customAccent,
+                              ImGuiColorEditFlags_NoInputs);
         }
         ImGui::Spacing();
         ImGui::Text("Theme");
