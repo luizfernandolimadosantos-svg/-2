@@ -1133,144 +1133,7 @@ static std::vector<Record> evaluateTaskRules(const TaskEvidence& e){
 
 
 // Coverage catalog. Listing a rule does NOT mean its detector is implemented.
-static void drawDetectionCoverageCatalog(){
-    static const char* labels[]={
-    "Processes running from temporary directories",
-    "Unsigned running processes",
-    "Revoked process signatures",
-    "Process image path mismatch",
-    "Windows process name impersonation",
-    "Unusual executable launch directories",
-    "Unexpected parent-child process relationships",
-    "Suspicious process arguments",
-    "Recently modified running executables",
-    "Process image missing from disk",
-    "Private executable memory regions",
-    "Writable and executable memory pages",
-    "Executable regions not backed by modules",
-    "Modules loaded from unusual directories",
-    "Unsigned loaded DLLs",
-    "Mapped versus enumerated module mismatch",
-    "PE headers in private memory",
-    "In-memory versus on-disk executable differences",
-    "Thread starts outside known modules",
-    "Process image replacement indicators",
-    "DLLs loaded from user-writable directories",
-    "DLL names resembling system libraries",
-    "DLL signature validation",
-    "DLL trusted hash comparison",
-    "Writable and executable DLL sections",
-    "Inconsistent DLL PE structures",
-    "Unusual DLL import patterns",
-    "High-entropy DLL sections",
-    "Modules loaded from network shares",
-    "Unexpected DLL-to-process associations",
-    "Run and RunOnce persistence",
-    "Suspicious scheduled tasks",
-    "Permanent WMI event subscriptions",
-    "Active Setup persistence",
-    "SilentProcessExit monitoring",
-    "Image File Execution Options changes",
-    "Services launched from temporary paths",
-    "Startup folder changes",
-    "Unusual shell extension registrations",
-    "Unexpected logon authentication providers",
-    "Unsigned kernel drivers",
-    "Revoked driver certificates",
-    "Known vulnerable driver matches",
-    "Drivers in unusual directories",
-    "Driver service versus file mismatch",
-    "Code integrity configuration changes",
-    "Secure Boot state",
-    "HVCI and memory integrity state",
-    "Windows driver-blocking events",
-    "Kernel structure forensic inconsistencies",
-    "Modified system DLL code pages",
-    "Critical Windows function hash mismatches",
-    "Function redirection indicators",
-    "Unexpected security module changes",
-    "AMSI integrity evidence",
-    "ETW integrity evidence",
-    "Event provider configuration changes",
-    "Unexpected interception libraries",
-    "Suspicious debugging configuration",
-    "Signed disk code versus mapped code",
-    "Unknown process network connections",
-    "Unsigned process network connections",
-    "Persistent unusual destinations",
-    "Unexpected listening ports",
-    "Unexpected DNS server changes",
-    "Unrecognized proxy configuration",
-    "Unexpected proxy PAC scripts",
-    "Suspicious hosts file changes",
-    "Recently modified firewall rules",
-    "Known threat indicator connections",
-    "Invalid executable PE structure",
-    "Overlapping or inconsistent PE sections",
-    "Invalid executable signature",
-    "Revoked executable certificate",
-    "File extension versus actual format",
-    "Relevant alternate data streams",
-    "Recently created unusual executables",
-    "Trusted malicious hash matches",
-    "Inconsistent PE metadata",
-    "Multi-signal packed executable indicators",
-    "Microsoft Defender detection events",
-    "Code integrity block events",
-    "New service installation events",
-    "Task creation or modification events",
-    "Unusual authentication failures",
-    "Security event log clearing",
-    "Audit configuration changes",
-    "Recorded script execution events",
-    "Recent critical file modifications",
-    "Process-file-service-network timeline",
-    "Suspicious DLL to process correlation",
-    "Task to unsigned executable correlation",
-    "New service to vulnerable driver correlation",
-    "Temporary executable to network correlation",
-    "Registry modification to execution correlation",
-    "Process inventory versus historical events",
-    "Multi-source module enumeration comparison",
-    "Authorized offline memory image analysis",
-    "Multiple indicators for same executable",
-    "Explainable evidence confidence rules"
-    };
-    static char filter[128]{};
-    ImGui::InputTextWithHint("##ruleFilter","Search detection rules...",filter,sizeof(filter));
-    ImGui::SameLine();
-    ImGui::TextDisabled("100 proposed rules / coverage audit");
-    ImGui::TextWrapped(
-        "Coverage describes available code, not detection of a threat. "
-        "NOT IMPLEMENTED rules do not execute or produce findings.");
-    if(ImGui::BeginTable("##coverage",3,
-        ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY,
-        ImVec2(0,340))){
-        ImGui::TableSetupColumn("ID",ImGuiTableColumnFlags_WidthFixed,50.f);
-        ImGui::TableSetupColumn("Detection rule");
-        ImGui::TableSetupColumn("Coverage",ImGuiTableColumnFlags_WidthFixed,130.f);
-        ImGui::TableHeadersRow();
-        for(int i=0;i<100;++i){
-            const int id=i+1;
-            const std::string search=asciiLower(filter);
-            const std::string label=asciiLower(labels[i]);
-            if(!search.empty()&&label.find(search)==std::string::npos&&
-               std::to_string(id).find(search)==std::string::npos)continue;
-            const bool implemented=(id==32||id==34||id==35||id==66||id==67||id==100);
-            const bool partial=(id==2||id==8||id==11||id==12||id==14||id==15||id==21||id==23||id==25||id==31||id==37||id==41||id==44||id==61||id==64||id==71||id==72||id==73||id==75||id==77||id==79||id==81||id==98);
-            const char* status=implemented?"IMPLEMENTED":
-                partial?"PARTIAL":"NOT IMPLEMENTED";
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();ImGui::Text("%03d",id);
-            ImGui::TableNextColumn();ImGui::TextUnformatted(labels[i]);
-            ImGui::TableNextColumn();
-            ImGui::TextColored(implemented?ImVec4(0.747f,0.747f,0.747f,1.f):
-                partial?ImVec4(0.787f,0.787f,0.787f,1.f):
-                ImVec4(0.633f,0.633f,0.633f,1.f),"%s",status);
-        }
-        ImGui::EndTable();
-    }
-}
+
 
 // Extended read-only endpoint inventory. Results are evidence, not verdicts.
 static std::vector<Record> inspectExtendedEndpoint(){
@@ -3052,6 +2915,224 @@ static std::vector<Record> inspectBypassEvidenceIntegrity(){
     return out;
 }
 
+
+// Additional read-only evidence-source and integrity checks.
+// Absence or restricted access is not classified as malicious activity.
+static std::vector<Record> inspectExtendedBypassEvidence(const std::vector<Process>& processes){
+    std::vector<Record> out;
+    auto add=[&](const char* name,const std::string& detail){
+        out.push_back({"Bypass Detection",name,detail});
+    };
+    auto fileStatus=[&](const char* label,const fs::path& path){
+        std::error_code ec;
+        bool exists=fs::exists(path,ec);
+        if(ec)add(label,"UNAVAILABLE | File metadata access failed.");
+        else if(exists)add(label,"INFO | Evidence source exists. Presence alone does not establish useful historical coverage.");
+        else add(label,"UNAVAILABLE | Evidence source not present at its standard path; Windows configuration may differ.");
+    };
+    wchar_t win[MAX_PATH]{};
+    UINT count=GetWindowsDirectoryW(win,MAX_PATH);
+    if(count>0 && count<MAX_PATH){
+        fs::path root(win);
+        fileStatus("Amcache evidence source",root/L"appcompat"/L"Programs"/L"Amcache.hve");
+        fileStatus("SRUM evidence source",root/L"System32"/L"sru"/L"SRUDB.dat");
+        fileStatus("Prefetch evidence directory",root/L"Prefetch");
+        fileStatus("Windows Event Log directory",root/L"System32"/L"winevt"/L"Logs");
+    }
+    wchar_t local[MAX_PATH]{}, roaming[MAX_PATH]{};
+    DWORD localLen=GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH);
+    DWORD roamingLen=GetEnvironmentVariableW(L"APPDATA",roaming,MAX_PATH);
+    if(roamingLen>0 && roamingLen<MAX_PATH){
+        fs::path r(roaming);
+        fileStatus("Automatic Destinations",r/L"Microsoft"/L"Windows"/L"Recent"/L"AutomaticDestinations");
+        fileStatus("Custom Destinations",r/L"Microsoft"/L"Windows"/L"Recent"/L"CustomDestinations");
+        fileStatus("Recent items",r/L"Microsoft"/L"Windows"/L"Recent");
+    }
+    if(localLen>0 && localLen<MAX_PATH)
+        fileStatus("Explorer history",fs::path(local)/L"Microsoft"/L"Windows"/L"Explorer");
+
+    // Read a small bounded set of Event Log records using the Windows Event Log API.
+    // The query is backward and read-only, and does not clear or export logs.
+    struct EventQuery {const wchar_t* channel; const wchar_t* xpath; const char* label;};
+    const EventQuery queries[]={
+        {L"Security",L"*[System[(EventID=1102)]]","Security log clearing (1102)"},
+        {L"System",L"*[System[(EventID=104)]]","System log clearing (104)"},
+        {L"Security",L"*[System[(EventID=4719)]]","Audit policy changes (4719)"},
+        {L"System",L"*[System[(EventID=7036)]]","Service state transitions (7036)"}
+    };
+    for(const auto& q:queries){
+        if(cancelRequested)break;
+        EVT_HANDLE query=EvtQuery(nullptr,q.channel,q.xpath,
+            EvtQueryChannelPath|EvtQueryReverseDirection);
+        if(!query){
+            add(q.label,"UNAVAILABLE | Event channel inaccessible, disabled, or query unsupported.");
+            continue;
+        }
+        DWORD returned=0;
+        EVT_HANDLE events[8]{};
+        unsigned found=0;
+        if(EvtNext(query,8,events,0,0,&returned)){
+            found=returned;
+            for(DWORD i=0;i<returned;++i)if(events[i])EvtClose(events[i]);
+        }else if(GetLastError()!=ERROR_NO_MORE_ITEMS){
+            add(q.label,"UNAVAILABLE | Event query failed or requires additional permissions.");
+            EvtClose(query);
+            continue;
+        }
+        EvtClose(query);
+        if(found>0){
+            add(q.label,std::string("NEEDS REVIEW | Found at least ")+std::to_string(found)+
+                " matching recent records (bounded query). Verify timestamps, context and authorized maintenance.");
+        }else{
+            add(q.label,"INFO | No matching records returned in this query; this does not prove the event never occurred.");
+        }
+    }
+
+    // UserAssist registry source availability (no sensitive per-user activity exported).
+    HKEY key=nullptr;
+    LONG rc=RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist",
+        0,KEY_READ,&key);
+    if(rc==ERROR_SUCCESS){
+        add("UserAssist evidence source","INFO | Current-user UserAssist registry source is readable.");
+        RegCloseKey(key);
+    }else add("UserAssist evidence source",
+        "UNAVAILABLE | Current-user UserAssist source not readable.");
+
+    // ShimCache storage varies by Windows version; check only availability.
+    rc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCompatCache",
+        0,KEY_READ,&key);
+    if(rc==ERROR_SUCCESS){
+        add("ShimCache evidence source","INFO | AppCompatCache registry key is readable; no execution claim.");
+        RegCloseKey(key);
+    }else add("ShimCache evidence source",
+        "UNAVAILABLE | AppCompatCache registry key not readable.");
+
+    // Bounded, per-process timestamp sanity checks. No file contents read.
+    unsigned inspected=0, anomalies=0;
+    FILETIME nowFt{}; GetSystemTimeAsFileTime(&nowFt);
+    ULARGE_INTEGER now{};now.LowPart=nowFt.dwLowDateTime;now.HighPart=nowFt.dwHighDateTime;
+    for(const auto& proc:processes){
+        if(cancelRequested || inspected>=80)break;
+        if(proc.path.empty())continue;
+        WIN32_FILE_ATTRIBUTE_DATA attrs{};
+        if(!GetFileAttributesExW(proc.path.c_str(),GetFileExInfoStandard,&attrs))continue;
+        ++inspected;
+        ULARGE_INTEGER created{},modified{};
+        created.LowPart=attrs.ftCreationTime.dwLowDateTime;
+        created.HighPart=attrs.ftCreationTime.dwHighDateTime;
+        modified.LowPart=attrs.ftLastWriteTime.dwLowDateTime;
+        modified.HighPart=attrs.ftLastWriteTime.dwHighDateTime;
+        constexpr ULONGLONG DAY=864000000000ULL;
+        if(created.QuadPart>now.QuadPart+DAY || modified.QuadPart>now.QuadPart+DAY)
+            ++anomalies;
+    }
+    if(anomalies)
+        add("Executable timestamp sanity",
+            "NEEDS REVIEW | "+std::to_string(anomalies)+
+            " accessible process image(s) have future-dated timestamps. Clock changes and filesystem behavior can explain this.");
+    else add("Executable timestamp sanity",
+        "INFO | Checked "+std::to_string(inspected)+
+        " accessible process images; no future-dated timestamps found. This is not a full timestamp-forensics assessment.");
+    add("Cross-source evidence confidence",
+        "INFO | Findings are observations, not proof of bypass or cheating. Correlate timestamps and independent sources manually.");
+    return out;
+}
+
+
+// Additional bounded, read-only process and registry integrity diagnostics.
+// These are triage indicators, never standalone evidence of cheating.
+static std::vector<Record> inspectAdditionalCheatIndicators(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    auto emit=[&](const char* title,const std::string& detail){
+        findings.push_back({"Advanced Integrity",title,detail});
+    };
+    auto lower=[](std::wstring v){
+        std::transform(v.begin(),v.end(),v.begin(),[](wchar_t c){return (wchar_t)towlower(c);});
+        return v;
+    };
+    // Suspicious executable location is contextual; never label as confirmed cheat.
+    unsigned checked=0,unusual=0,invalidPe=0,signatureProblems=0;
+    for(const auto& proc:processes){
+        if(cancelRequested || checked>=100)break;
+        if(proc.path.empty())continue;
+        ++checked;
+        std::wstring path=lower(proc.path);
+        bool userWritable=(path.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos ||
+            path.find(L"\\downloads\\")!=std::wstring::npos ||
+            path.find(L"\\recycle.bin\\")!=std::wstring::npos);
+        if(userWritable){
+            ++unusual;
+            if(unusual<=12)emit("Unusual process image location",
+                "NEEDS REVIEW | Running executable in a temporary, downloads or recycle location. Legitimate installers may use these paths.");
+        }
+        // Check file signature, not just extension. Read at most two bytes.
+        HANDLE file=CreateFileW(proc.path.c_str(),GENERIC_READ,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+            nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(file!=INVALID_HANDLE_VALUE){
+            BYTE header[2]{};
+            DWORD bytes=0;
+            if(ReadFile(file,header,2,&bytes,nullptr) && bytes==2 &&
+                !(header[0]=='M' && header[1]=='Z')){
+                ++invalidPe;
+                if(invalidPe<=8)emit("Executable format mismatch",
+                    "NEEDS REVIEW | Running image path does not begin with the standard MZ executable header. Validate access and file changes.");
+            }
+            CloseHandle(file);
+        }
+        if(checked<=30){
+            std::string sig=signatureStatus(proc.path);
+            if(sig=="Invalid digest" || sig=="Untrusted certificate"){
+                ++signatureProblems;
+                if(signatureProblems<=8)emit("Executable signature integrity",
+                    "NEEDS REVIEW | A running image has an invalid digest or untrusted certificate (offline verification).");
+            }
+        }
+    }
+    emit("Process integrity coverage",
+        "INFO | Checked "+std::to_string(checked)+
+        " accessible process paths; "+std::to_string(unusual)+
+        " unusual locations, "+std::to_string(invalidPe)+
+        " format mismatches, "+std::to_string(signatureProblems)+
+        " signature issues. This is a bounded sample.");
+
+    // AppInit DLLs can affect application startup; registry setting alone is not proof.
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+        0,KEY_QUERY_VALUE|KEY_WOW64_64KEY,&key)==ERROR_SUCCESS){
+        DWORD enabled=0,type=0,size=sizeof(enabled);
+        if(RegQueryValueExW(key,L"LoadAppInit_DLLs",nullptr,&type,
+            reinterpret_cast<LPBYTE>(&enabled),&size)==ERROR_SUCCESS &&
+            type==REG_DWORD && enabled!=0){
+            emit("AppInit DLL loading",
+                "NEEDS REVIEW | Legacy AppInit DLL loading is enabled. Check approved software and OS policy.");
+        }
+        wchar_t dlls[2048]{};
+        size=sizeof(dlls);type=0;
+        if(RegQueryValueExW(key,L"AppInit_DLLs",nullptr,&type,
+            reinterpret_cast<LPBYTE>(dlls),&size)==ERROR_SUCCESS &&
+            (type==REG_SZ || type==REG_EXPAND_SZ) && dlls[0]!=0){
+            emit("AppInit DLL configuration",
+                "NEEDS REVIEW | AppInit_DLLs value is populated. Verify whether entries are authorized.");
+        }
+        RegCloseKey(key);
+    }else emit("AppInit DLL configuration",
+        "UNAVAILABLE | Registry configuration cannot be queried.");
+
+    // Windows Error Reporting LocalDumps can be a legitimate debugging configuration.
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps",
+        0,KEY_READ,&key)==ERROR_SUCCESS){
+        emit("LocalDumps configuration",
+            "INFO | Windows Error Reporting LocalDumps is configured; verify it matches administrative policy.");
+        RegCloseKey(key);
+    }
+    return findings;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -3131,6 +3212,8 @@ static void scanWorker() {
         auto temporaryExecutables=inspectTemporaryExecutables(p);
         auto timeline=collectWindowsTimeline();
         auto bypassIntegrity=inspectBypassEvidenceIntegrity();
+        auto bypassExtended=inspectExtendedBypassEvidence(p);
+        auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -3142,6 +3225,8 @@ static void scanWorker() {
         services.insert(services.end(),defender.begin(),defender.end());
         services.insert(services.end(),security.begin(),security.end());
         services.insert(services.end(),bypassIntegrity.begin(),bypassIntegrity.end());
+        services.insert(services.end(),bypassExtended.begin(),bypassExtended.end());
+        services.insert(services.end(),advancedIntegrity.begin(),advancedIntegrity.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -3191,19 +3276,19 @@ static void scanWorker() {
 }
 // Visual presentation pacing only; actual scan completion is never delayed.
 static double inspectionProgressStart=0.0;
-static constexpr double inspectionPresentationSeconds=35.0;
+static constexpr double inspectionPresentationSeconds=270.0; // 4 min 30 sec presentation target
 static int inspectionDisplayPercent(){
     const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionProgressStart);
     const int paced=std::clamp(static_cast<int>(
         elapsed*100.0/inspectionPresentationSeconds),0,100);
-    if(done)return paced; // Scan may already be finished; results remain accessible.
+    if(done)return paced; // Unlock only after both actual completion and presentation reach 100%.
     const int total=(std::max)(1,totalStages.load());
     const int measured=std::clamp(completedStages.load()*100/total,0,99);
-    return (std::min)(paced,measured);
+    return (std::min)(99,(std::min)(paced,measured));
 }
 static void startScan() {
-    if(scanning || (done && inspectionProgressStart>0.0 &&
-        inspectionDisplayPercent()<100))return;
+    if(scanning || (inspectionProgressStart>0.0 &&
+        inspectionDisplayPercent()<100 && done))return;
     peFilesInspected=0;
     inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
@@ -5345,12 +5430,11 @@ static void renderUI() {
     }
     ImGui::SameLine(0,30);
     ImGui::TextColored(accentInk,"ENDPOINT ANALYSIS");
-    // Scan activity is displayed only when a real scan is running.
-    if(scanning){
+    // Presentation progress remains visible while completed results await unlocking.
+    if(inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 && (scanning || done)){
         const ImVec2 wp=ImGui::GetWindowPos();
         const ImVec2 ws=ImGui::GetWindowSize();
-        const float fraction=(std::max)(0.f,(std::min)(1.f,
-            completedStages.load()/(float)(std::max)(1,totalStages.load())));
+        const float fraction=inspectionDisplayPercent()/100.f;
         ImGui::GetWindowDrawList()->AddRectFilled(
             ImVec2(wp.x,wp.y+ws.y-2.f),
             ImVec2(wp.x+ws.x*fraction,wp.y+ws.y),
@@ -5509,7 +5593,7 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,29.f));
     }
     // Only Dashboard shows progress; remove the bar once it reaches 100%.
-    // All other pages retain the locked/unlocking overlay until completion.
+    // Investigation pages show the lock from launch until scan completion and 100%.
     if(page==0 && (scanning || done) && inspectionDisplayPercent()<100){
         drawAtlasProgress(false);
         ImGui::TextDisabled("%s",
@@ -5521,9 +5605,8 @@ static void renderUI() {
     // All non-dashboard pages are locked until the scan AND its presentation
     // reach 100%. This is a visual privacy curtain, not a fake scan result.
     const bool waitingForPresentation=
-        inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 &&
-        (scanning || done);
-    // Preferences (page 4) remains available during inspection.
+        !done || inspectionProgressStart<=0.0 || inspectionDisplayPercent()<100;
+    // Dashboard and Preferences remain accessible; investigation pages unlock at 100%.
     // Once progress reaches 100%, animate the shackle opening before
     // revealing scan-derived content. Reset on each new inspection.
     static bool wasWaitingForUnlock=false;
@@ -5603,7 +5686,11 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,9.f));
         const char* detail=unlocking?
             "Access granted. Opening inspection results...":
-            "Results unlock when the scan reaches 100%.";
+            inspectionProgressStart<=0.0 ?
+                "Run a full inspection to unlock this section." :
+                scanFailed ? "Inspection failed. Start a new scan to unlock." :
+                scanCancelled ? "Inspection cancelled. Start a new scan to unlock." :
+                "Results unlock after inspection completes at 100%.";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(detail).x)*.5f);
         ImGui::TextColored(ImVec4(0.716f,0.716f,0.716f,1.f),"%s",detail);
@@ -5615,7 +5702,7 @@ static void renderUI() {
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.327f,0.327f,0.327f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.430f,0.430f,0.430f,1.f));
         if(waitingForPresentation){
-            if(ImGui::Button("RETURN TO SCAN",ImVec2(buttonWidth,45.f)))
+            if(ImGui::Button("GO TO DASHBOARD",ImVec2(buttonWidth,45.f)))
                 page=0;
         }else{
             ImGui::BeginDisabled();
@@ -5643,6 +5730,9 @@ static void renderUI() {
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
+        }else if(done && inspectionDisplayPercent()<100){
+            ImGui::TextColored(accent,"EVIDENCE COLLECTED - PREPARING RESULTS");
+            ImGui::TextDisabled("Results unlock at 100%%. Please wait.");
         }else{
             if(accentButton("START FULL INSPECTION",
                 ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
@@ -6217,11 +6307,11 @@ static void renderUI() {
     } else if(page==4) {
         sectionTitle("Workspace Preferences","Adjust appearance and investigation options");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
-        if(ImGui::CollapsingHeader("DETECTION RULES / COVERAGE (100)",
-            ImGuiTreeNodeFlags_DefaultOpen)){
-            drawDetectionCoverageCatalog();
-            ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
-        }
+        ImGui::TextDisabled("PERSONALIZATION  /  LOCAL SETTINGS");
+        ImGui::TextWrapped("Customize the scanner appearance and investigation workflow.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
         ImGui::TextColored(orange(),"LANGUAGE");
         ImGui::Separator();
         ImGui::Text("Display language: English");
