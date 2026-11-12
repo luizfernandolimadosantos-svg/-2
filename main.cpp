@@ -12,6 +12,8 @@
 #include <iphlpapi.h>
 #include <ws2tcpip.h>
 #include <tcpmib.h>
+#include <winevt.h>
+#pragma comment(lib,"wevtapi.lib")
 #include <cstring>
 #include <winreg.h>
 #include <cctype>
@@ -142,6 +144,8 @@ static bool loadSyncLogo() {
 static std::vector<Process> processes;
 static std::vector<FileResult> files;
 static std::vector<Record> records;
+static std::atomic<int> defenderAlerts{0};
+static std::atomic<bool> defenderNotificationPending{false};
 static std::atomic<bool> cancelRequested{false};
 static std::mutex dataMutex;
 static std::atomic<bool> scanning{false};
@@ -673,6 +677,75 @@ static std::vector<Record> enumerateTcp6() {
     return out;
 }
 
+
+// Microsoft Defender operational event log: detection IDs 1116/1117/1118/1119.
+// These are historical Defender reports, not a new malware verdict.
+static std::vector<Record> enumerateDefenderDetections() {
+    std::vector<Record> found;
+    const wchar_t* channel=L"Microsoft-Windows-Windows Defender/Operational";
+    const wchar_t* query=L"*[System[(EventID=1116 or EventID=1117 or EventID=1118 or EventID=1119) and TimeCreated[timediff(@SystemTime) <= 604800000]]]";
+    EVT_HANDLE results=EvtQuery(nullptr,channel,query,EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!results) {
+        found.push_back({"Defender Status","Event log not accessible",
+            "Microsoft Defender operational log could not be queried. This is not a clean result."});
+        return found;
+    }
+    for(int page=0;page<4 && !cancelRequested;++page) {
+        EVT_HANDLE events[32]{};
+        DWORD count=0;
+        if(!EvtNext(results,32,events,1500,0,&count))break;
+        for(DWORD i=0;i<count;++i) {
+            DWORD required=0,used=0;
+            EvtRender(nullptr,events[i],EvtRenderEventXml,0,nullptr,&required,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER && required>0 && required<1024*1024) {
+                std::vector<wchar_t> xml(required/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,events[i],EvtRenderEventXml,
+                    (DWORD)(xml.size()*sizeof(wchar_t)),xml.data(),&required,&used)) {
+                    std::wstring data(xml.data());
+                    auto getTag=[&](const std::wstring& key)->std::wstring {
+                        size_t start=data.find(key);
+                        if(start==std::wstring::npos)return L"";
+                        start+=key.size();
+                        size_t end=data.find(L'<',start);
+                        return end==std::wstring::npos?L"":data.substr(start,std::min<size_t>(end-start,400));
+                    };
+                    std::wstring id=getTag(L"<EventID>");
+                    std::wstring timestamp;
+                    size_t at=data.find(L"SystemTime='");
+                    wchar_t quote=L'\'';
+                    if(at==std::wstring::npos){at=data.find(L"SystemTime=\"");quote=L'"';}
+                    if(at!=std::wstring::npos) {
+                        at+=12;auto end=data.find(quote,at);
+                        if(end!=std::wstring::npos)timestamp=data.substr(at,end-at);
+                    }
+                    std::wstring threat;
+                    for(const wchar_t* key:{L"Threat Name",L"ThreatName",L"Name"}) {
+                        std::wstring needle=L"Name='"+std::wstring(key)+L"'";
+                        size_t n=data.find(needle);
+                        if(n==std::wstring::npos)continue;
+                        size_t gt=data.find(L'>',n);
+                        size_t end=gt==std::wstring::npos?gt:data.find(L'<',gt+1);
+                        if(gt!=std::wstring::npos && end!=std::wstring::npos) {
+                            threat=data.substr(gt+1,std::min<size_t>(end-gt-1,250));break;
+                        }
+                    }
+                    std::string kind=(id==L"1116")?"Threat detected":
+                        (id==L"1117")?"Remediation action":
+                        (id==L"1118")?"Remediation failed":"Remediation status";
+                    std::string detail="Defender event "+utf8(id)+" | "+utf8(timestamp);
+                    if(!threat.empty())detail+=" | "+utf8(threat);
+                    detail+=" | Historical Windows Defender report. Inspect Windows Security for current status.";
+                    found.push_back({"Defender Detection",kind,detail});
+                    if(id==L"1116" || id==L"1118")++defenderAlerts;
+                }
+            }
+            EvtClose(events[i]);
+        }
+        if(count<32)break;
+    }
+    EvtClose(results);
+    return found;
+}
 static void scanWorker() {
     try {
         stage=1;
@@ -697,6 +770,7 @@ static void scanWorker() {
         auto udp=enumerateUdp();
         auto tcp6=enumerateTcp6();
         auto usb=enumerateUsbStorage();
+        auto defender=enumerateDefenderDetections();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=4;
         stage=5;
@@ -705,6 +779,8 @@ static void scanWorker() {
         services.insert(services.end(),udp.begin(),udp.end());
         services.insert(services.end(),tcp6.begin(),tcp6.end());
         services.insert(services.end(),usb.begin(),usb.end());
+        services.insert(services.end(),defender.begin(),defender.end());
+        if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
             processes=std::move(p);
@@ -720,7 +796,7 @@ static void scanWorker() {
 }
 static void startScan() {
     if(scanning)return;
-    cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;completedStages=0;stage=0;scanning=true;
+    cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
     std::thread(scanWorker).detach();
 }
 static std::string csvQuote(const std::string& s) {
@@ -1457,6 +1533,23 @@ static void recordsTable() {
     }
 }
 static void renderUI() {
+    if(defenderNotificationPending.exchange(false))
+        ImGui::OpenPopup("Windows Defender detection alert");
+    if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.f,.34f,.35f,1.f),"WINDOWS DEFENDER SECURITY EVENT");
+        ImGui::Separator();
+        ImGui::TextWrapped("%d recent Defender detection or failed-remediation events were found.",
+            defenderAlerts.load());
+        ImGui::TextWrapped("These are historical event records, not proof of an active infection.");
+        ImGui::TextWrapped("Open Windows Security > Virus & threat protection > Protection history for current status.");
+        if(ImGui::Button("View scan results",ImVec2(180,36))) {
+            page=2;ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Dismiss",ImVec2(110,36)))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     ImGuiViewport* vp=ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
