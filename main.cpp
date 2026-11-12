@@ -7,6 +7,11 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <bcrypt.h>
+#include <winsvc.h>
+#include <iphlpapi.h>
+#include <ws2tcpip.h>
+#include <winreg.h>
+#include <cctype>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -29,9 +34,13 @@
 #pragma comment(lib,"wintrust.lib")
 #pragma comment(lib,"crypt32.lib")
 #pragma comment(lib,"bcrypt.lib")
+#pragma comment(lib,"advapi32.lib")
+#pragma comment(lib,"iphlpapi.lib")
+#pragma comment(lib,"ws2_32.lib")
 
 namespace fs=std::filesystem;
 struct Process { DWORD pid; DWORD parent; std::wstring name,path; };
+struct Record { std::string category,name,detail; };
 struct FileResult { std::wstring path; std::string hash,signature; };
 static HWND hwnd=nullptr;
 static ID3D11Device* device=nullptr;
@@ -40,6 +49,8 @@ static IDXGISwapChain* swapchain=nullptr;
 static ID3D11RenderTargetView* target=nullptr;
 static std::vector<Process> processes;
 static std::vector<FileResult> files;
+static std::vector<Record> records;
+static std::atomic<bool> cancelRequested{false};
 static std::mutex dataMutex;
 static std::atomic<bool> scanning{false};
 static std::atomic<bool> done{false};
@@ -163,22 +174,132 @@ static FileResult inspectFile(const std::wstring& path) {
     r.signature=signatureStatus(path);
     return r;
 }
-static void scanWorker() {
-    stage=1;
-    auto p=enumerateProcesses();
-    stage=2;
-    // This prototype deliberately does not read process memory or collect private user files.
-    {
-        std::lock_guard<std::mutex> lock(dataMutex);
-        processes=std::move(p);
+
+static bool isAdministrator() {
+    BOOL admin=FALSE;
+    SID_IDENTIFIER_AUTHORITY nt=SECURITY_NT_AUTHORITY;
+    PSID sid=nullptr;
+    if(AllocateAndInitializeSid(&nt,2,SECURITY_BUILTIN_DOMAIN_RID,
+       DOMAIN_ALIAS_RID_ADMINS,0,0,0,0,0,0,&sid)) {
+        CheckTokenMembership(nullptr,sid,&admin);
+        FreeSid(sid);
     }
-    stage=3;
-    done=true;
+    return admin!=FALSE;
+}
+static std::vector<Record> enumerateServices() {
+    std::vector<Record> out;
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm){out.push_back({"Services","Unavailable","Access denied or SCM unavailable"});return out;}
+    DWORD needed=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_WIN32|SERVICE_DRIVER,
+      SERVICE_STATE_ALL,nullptr,0,&needed,&count,&resume,nullptr);
+    if(GetLastError()==ERROR_MORE_DATA && needed>0 && needed<32*1024*1024) {
+        std::vector<BYTE> buffer(needed+4096);
+        resume=0;
+        if(EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_WIN32|SERVICE_DRIVER,
+           SERVICE_STATE_ALL,buffer.data(),(DWORD)buffer.size(),&needed,&count,&resume,nullptr)) {
+            auto entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+            for(DWORD i=0;i<count;i++){
+                if(cancelRequested)break;
+                bool driver=(entries[i].ServiceStatusProcess.dwServiceType &
+                    (SERVICE_KERNEL_DRIVER|SERVICE_FILE_SYSTEM_DRIVER))!=0;
+                std::string state=entries[i].ServiceStatusProcess.dwCurrentState==SERVICE_RUNNING?"Running":"Not running";
+                out.push_back({driver?"Drivers":"Services",utf8(entries[i].lpServiceName),
+                               utf8(entries[i].lpDisplayName)+" | "+state});
+            }
+        } else out.push_back({"Services","Partial","Enumeration failed"});
+    } else out.push_back({"Services","Unavailable","Could not size service enumeration"});
+    CloseServiceHandle(scm);
+    return out;
+}
+static std::vector<Record> enumerateStartup() {
+    std::vector<Record> out;
+    const wchar_t* keys[]={
+       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+       L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+    };
+    HKEY roots[]={HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE};
+    for(HKEY root:roots)for(auto key:keys) {
+        if(cancelRequested)return out;
+        HKEY h=nullptr;
+        if(RegOpenKeyExW(root,key,0,KEY_READ,&h)!=ERROR_SUCCESS)continue;
+        for(DWORD i=0;i<4096;i++){
+            wchar_t name[512]{};
+            DWORD nameLen=512;
+            BYTE data[8192]{};
+            DWORD dataLen=sizeof(data),type=0;
+            LONG rc=RegEnumValueW(h,i,name,&nameLen,nullptr,&type,data,&dataLen);
+            if(rc==ERROR_NO_MORE_ITEMS)break;
+            if(rc!=ERROR_SUCCESS)continue;
+            std::wstring value;
+            if((type==REG_SZ||type==REG_EXPAND_SZ) && dataLen>=sizeof(wchar_t)){
+                auto ptr=reinterpret_cast<const wchar_t*>(data);
+                size_t chars=dataLen/sizeof(wchar_t);
+                value.assign(ptr,ptr+wcsnlen_s(ptr,chars));
+            } else value=L"(non-string value)";
+            out.push_back({"Startup",utf8(name),utf8(value)});
+        }
+        RegCloseKey(h);
+    }
+    return out;
+}
+static std::vector<Record> enumerateTcp() {
+    std::vector<Record> out;
+    DWORD bytes=0;
+    DWORD rc=GetExtendedTcpTable(nullptr,&bytes,FALSE,AF_INET,TCP_TABLE_OWNER_PID_ALL,0);
+    if(rc!=ERROR_INSUFFICIENT_BUFFER || bytes>32*1024*1024)return out;
+    std::vector<BYTE> buffer(bytes);
+    rc=GetExtendedTcpTable(buffer.data(),&bytes,FALSE,AF_INET,TCP_TABLE_OWNER_PID_ALL,0);
+    if(rc!=NO_ERROR){out.push_back({"Network","Unavailable","TCP table could not be read"});return out;}
+    auto table=reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buffer.data());
+    for(DWORD i=0;i<table->dwNumEntries;i++){
+        if(cancelRequested)break;
+        const auto& e=table->table[i];
+        IN_ADDR local{},remote{};
+        local.S_un.S_addr=e.dwLocalAddr;remote.S_un.S_addr=e.dwRemoteAddr;
+        char a[INET_ADDRSTRLEN]{},b[INET_ADDRSTRLEN]{};
+        InetNtopA(AF_INET,&local,a,sizeof(a));
+        InetNtopA(AF_INET,&remote,b,sizeof(b));
+        auto port=[](DWORD p){return (unsigned)ntohs((u_short)p);};
+        std::ostringstream detail;
+        detail<<a<<":"<<port(e.dwLocalPort)<<" -> "<<b<<":"<<port(e.dwRemotePort)
+              <<" | state "<<e.dwState;
+        out.push_back({"Network","PID "+std::to_string(e.dwOwningPid),detail.str()});
+    }
+    return out;
+}
+
+static void scanWorker() {
+    try {
+        stage=1;
+        auto p=enumerateProcesses();
+        if(cancelRequested){scanning=false;return;}
+        stage=2;
+        auto services=enumerateServices();
+        if(cancelRequested){scanning=false;return;}
+        stage=3;
+        auto startup=enumerateStartup();
+        if(cancelRequested){scanning=false;return;}
+        stage=4;
+        auto network=enumerateTcp();
+        if(cancelRequested){scanning=false;return;}
+        stage=5;
+        services.insert(services.end(),startup.begin(),startup.end());
+        services.insert(services.end(),network.begin(),network.end());
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            processes=std::move(p);
+            records=std::move(services);
+        }
+        done=true;
+    } catch(...) {
+        // Partial results are not reported as a successful completed scan.
+    }
     scanning=false;
 }
 static void startScan() {
-    if(scanning) return;
-    done=false;stage=0;scanning=true;
+    if(scanning)return;
+    cancelRequested=false;done=false;stage=0;scanning=true;
     std::thread(scanWorker).detach();
 }
 static std::string csvQuote(const std::string& s) {
@@ -194,6 +315,8 @@ static void exportCsv() {
     for(const auto& p:processes)
         out<<"Process,"<<p.pid<<","<<p.parent<<","<<csvQuote(utf8(p.name))<<","
            <<csvQuote(utf8(p.path))<<",,\n";
+    for(const auto& r:records)
+        out<<csvQuote(r.category)<<",,,"<<csvQuote(r.name)<<","<<csvQuote(r.detail)<<",,\\n";
     for(const auto& f:files)
         out<<"File,,,"<<csvQuote(utf8(fs::path(f.path).filename().wstring()))<<","
            <<csvQuote(utf8(f.path))<<","<<csvQuote(f.hash)<<","<<csvQuote(f.signature)<<"\n";
@@ -291,7 +414,7 @@ static void renderUI() {
     ImGui::Begin("Macaquito Scanner",nullptr,ImGuiWindowFlags_NoDecoration|
                  ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextColored(ImVec4(1,.52f,.23f,1),"MACAQUITO SCANNER");
-    ImGui::SameLine();ImGui::TextDisabled("V47  |  Developer: Mudin");
+    ImGui::SameLine();ImGui::TextDisabled("V48  |  Developer: Mudin  |  %s",isAdministrator()?"Administrator":"Standard User");
     ImGui::Separator();
     const char* tabs[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
     for(int i=0;i<6;i++) {
@@ -310,15 +433,17 @@ static void renderUI() {
         ImGui::Spacing();
         ImGui::Text("Process inventory: %zu",processes.size());
         ImGui::Text("Files checked: %zu",files.size());
-        textDim("This build includes real process inventory and manual file integrity checks.");
+        ImGui::Text("System records: %zu",records.size());
+        textDim("Real: processes, services, drivers, startup entries, TCP connections, manual file integrity.");
         textDim("Other forensic modules remain planned; no fabricated detections.");
     } else if(page==1) {
         ImGui::Text("Inspection Status: %s",scanning?"Running":done?"Completed":"Ready");
         if(scanning) {
-            const char* labels[]={"Starting","Enumerating processes","Recording results","Completed"};
-            int i=(std::min)(stage.load(),3);
+            const char* labels[]={"Starting","Processes","Services and drivers","Startup entries","TCP connections","Completed"};
+            int i=(std::min)(stage.load(),5);
             ImGui::Text("Current stage: %s",labels[i]);
-            ImGui::ProgressBar(i/3.f,ImVec2(-1,18));
+            ImGui::ProgressBar(i/5.f,ImVec2(-1,18));
+            if(ImGui::Button("Cancel Scan"))cancelRequested=true;
         }
         if(!scanning && ImGui::Button("Start Full Scan",ImVec2(220,40)))
             ImGui::OpenPopup("Confirm Inspection");
@@ -328,10 +453,13 @@ static void renderUI() {
         ImGui::BulletText("SHA-256 file hashing (manual file selection)");
         ImGui::BulletText("Authenticode verification (offline)");
         ImGui::BulletText("CSV report export");
+        ImGui::BulletText("Service and driver inventory");
+        ImGui::BulletText("Run / RunOnce startup entries");
+        ImGui::BulletText("TCP IPv4 connection inventory");
         ImGui::Separator();
         ImGui::TextUnformatted("Planned / not collected in this build");
-        ImGui::BulletText("Memory, injection indicators, hooks, drivers");
-        ImGui::BulletText("Persistence, network, USB, execution forensics");
+        ImGui::BulletText("Memory, injection indicators and hooks");
+        ImGui::BulletText("Advanced persistence, network, USB and execution forensics");
         ImGui::BulletText("FiveM reference integrity and evidence correlation");
     } else if(page==2) {
         ImGui::TextUnformatted(done?"Scan Completed":"Inspection Results");
@@ -389,12 +517,30 @@ static void renderUI() {
                 }
                 ImGui::EndTabItem();
             }
+            if(ImGui::BeginTabItem("System Inventory")) {
+                if(ImGui::BeginTable("records",3,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,330))) {
+                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,100);
+                    ImGui::TableSetupColumn("Name");
+                    ImGui::TableSetupColumn("Details");
+                    ImGui::TableHeadersRow();
+                    std::lock_guard<std::mutex> lock(dataMutex);
+                    for(const auto& r:records) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+                        ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
+                        ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+            }
             if(ImGui::BeginTabItem("USB Review")) {
                 textDim("Not implemented in this build.");ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Modules")) {
-                textDim("Process inventory and file verification: available.");
-                textDim("Other forensic modules: planned, not collected.");
+                textDim("Processes, services, drivers, startup, TCP and manual file verification: available.");
+                textDim("Memory, hooks, USB, execution history, FiveM reference and correlation: not implemented.");
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -413,7 +559,8 @@ static void renderUI() {
         ImGui::Text("Application: Macaquito Scanner");
         ImGui::Text("Developer: Mudin");
         ImGui::Text("Publisher (display): Mudin");
-        ImGui::Text("Version: V47");
+        ImGui::Text("Version: V48");
+        ImGui::Text("Privilege: %s",isAdministrator()?"Administrator":"Standard User");
         ImGui::Text("Executable: %s",utf8(executablePath()).c_str());
         if(ImGui::Button("Verify This Executable",ImVec2(240,38))) {
             try {
@@ -441,9 +588,9 @@ static void renderUI() {
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,nullptr,nullptr,nullptr,nullptr,
-                  L"MacaquitoScannerV47",nullptr};
+                  L"MacaquitoScannerV48",nullptr};
     RegisterClassExW(&wc);
-    hwnd=CreateWindowW(wc.lpszClassName,L"Macaquito Scanner V47 - Mudin",
+    hwnd=CreateWindowW(wc.lpszClassName,L"Macaquito Scanner V48 - Mudin",
                        WS_OVERLAPPEDWINDOW,100,100,1200,780,nullptr,nullptr,inst,nullptr);
     if(!hwnd || !initD3D(hwnd))return 1;
     ShowWindow(hwnd,SW_SHOWDEFAULT);UpdateWindow(hwnd);
