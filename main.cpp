@@ -536,16 +536,37 @@ static void renderUI() {
     ImGui::TextDisabled("Developer: Mudin");
     ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
     const char* names[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
-    for(int i=0;i<6;i++) {
-        ImGui::PushID(i);
-        if(page==i) {
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.35f,.20f,.14f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1,.57f,.30f,1));
-        }
-        if(ImGui::Button(names[i],ImVec2(-1,43)))page=i;
-        if(page==i)ImGui::PopStyleColor(2);
-        ImGui::PopID();
+    
+for (int i = 0; i < 6; i++) {
+    ImGui::PushID(i);
+
+    const bool selected = (page == i);
+
+    if (selected) {
+        ImGui::PushStyleColor(
+            ImGuiCol_Button,
+            ImVec4(.35f, .20f, .14f, 1.f)
+        );
+
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            ImVec4(1.f, .57f, .30f, 1.f)
+        );
     }
+
+    const bool clicked =
+        ImGui::Button(names[i], ImVec2(-1, 43));
+
+    if (selected) {
+        ImGui::PopStyleColor(2);
+    }
+
+    if (clicked) {
+        page = i;
+    }
+
+    ImGui::PopID();
+}
     ImGui::Dummy(ImVec2(0,22));
     ImGui::Separator();
     ImGui::TextDisabled("SYSTEM ACCESS");
