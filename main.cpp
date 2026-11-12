@@ -15,6 +15,9 @@
 #include <winevt.h>
 #pragma comment(lib,"wevtapi.lib")
 #include <cstring>
+#include <array>
+#include <chrono>
+#include <system_error>
 #include <cstdint>
 #include <winreg.h>
 #include <cctype>
@@ -159,7 +162,7 @@ static bool confirmScan=false;
 static std::atomic<bool> scanFailed{false};
 static std::atomic<bool> scanCancelled{false};
 static std::atomic<int> completedStages{0};
-static std::atomic<int> totalStages{4};
+static std::atomic<int> totalStages{6};
 static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
 static std::wstring executablePath();
 static int accentIndex=0, themeIndex=0, densityIndex=1;
@@ -747,6 +750,173 @@ static std::vector<Record> enumerateDefenderDetections() {
     EvtClose(results);
     return found;
 }
+
+// -----------------------------------------------------------------------------
+// Windows security posture: registry-backed, read-only checks.
+// A configuration difference is a review indicator, not a malware verdict.
+// -----------------------------------------------------------------------------
+static std::wstring readRegistryString(HKEY root,const wchar_t* key,const wchar_t* value) {
+    HKEY handle=nullptr;
+    if(RegOpenKeyExW(root,key,0,KEY_READ,&handle)!=ERROR_SUCCESS)return {};
+    DWORD type=0,bytes=0;
+    LONG rc=RegQueryValueExW(handle,value,nullptr,&type,nullptr,&bytes);
+    if(rc!=ERROR_SUCCESS || (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+       bytes<sizeof(wchar_t) || bytes>65536) {
+        RegCloseKey(handle);return {};
+    }
+    std::vector<wchar_t> data(bytes/sizeof(wchar_t)+2,L'\0');
+    rc=RegQueryValueExW(handle,value,nullptr,&type,
+        reinterpret_cast<BYTE*>(data.data()),&bytes);
+    RegCloseKey(handle);
+    return rc==ERROR_SUCCESS?std::wstring(data.data()):std::wstring{};
+}
+static bool readRegistryDword(HKEY root,const wchar_t* key,
+                              const wchar_t* value,DWORD& output) {
+    HKEY handle=nullptr;
+    if(RegOpenKeyExW(root,key,0,KEY_READ,&handle)!=ERROR_SUCCESS)return false;
+    DWORD type=0,bytes=sizeof(output);
+    LONG rc=RegQueryValueExW(handle,value,nullptr,&type,
+        reinterpret_cast<BYTE*>(&output),&bytes);
+    RegCloseKey(handle);
+    return rc==ERROR_SUCCESS && type==REG_DWORD && bytes==sizeof(output);
+}
+static std::vector<Record> inspectWindowsSecurityConfiguration() {
+    std::vector<Record> out;
+    auto check=[&](const wchar_t* key,const wchar_t* name,
+                   const char* title,DWORD suspiciousValue,const char* reason) {
+        DWORD value=0;
+        if(readRegistryDword(HKEY_LOCAL_MACHINE,key,name,value)) {
+            std::string detail="Value: "+std::to_string(value);
+            if(value==suspiciousValue)detail+=" | REVIEW: "+std::string(reason);
+            else detail+=" | Configuration observed; no adverse conclusion from this value";
+            out.push_back({"Security Configuration",title,detail});
+        }
+    };
+    check(L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+          L"DisableAntiSpyware","Defender disable policy",1,
+          "Defender disable policy is set; confirm effective protection state");
+    check(L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+          L"DisableRealtimeMonitoring","Defender real-time monitoring policy",1,
+          "Real-time monitoring disable policy is set");
+    check(L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+          L"DisableBehaviorMonitoring","Defender behavior monitoring policy",1,
+          "Behavior monitoring disable policy is set");
+    check(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+          L"EnableLUA","User Account Control",0,
+          "User Account Control is disabled");
+    check(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+          L"ConsentPromptBehaviorAdmin","Administrator consent policy",0,
+          "Administrator elevation may occur without prompting");
+    check(L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+          L"RunAsPPL","LSA protection configuration",0,
+          "LSA protection value is disabled; confirm actual system protection");
+    check(L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+          L"EnableSmartScreen","SmartScreen policy",0,
+          "SmartScreen disable policy is set");
+    return out;
+}
+
+// Image File Execution Options debugger entries can redirect process launches.
+// We enumerate entries without executing or modifying any debugger command.
+static std::vector<Record> inspectImageExecutionOptions() {
+    std::vector<Record> out;
+    HKEY root=nullptr;
+    const wchar_t* base=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,base,0,KEY_READ,&root)!=ERROR_SUCCESS)
+        return out;
+    for(DWORD index=0;index<4096 && !cancelRequested;++index) {
+        wchar_t name[512]{};
+        DWORD length=511;
+        LONG rc=RegEnumKeyExW(root,index,name,&length,nullptr,nullptr,nullptr,nullptr);
+        if(rc==ERROR_NO_MORE_ITEMS)break;
+        if(rc!=ERROR_SUCCESS)continue;
+        std::wstring key=std::wstring(base)+L"\\"+name;
+        auto debugger=readRegistryString(HKEY_LOCAL_MACHINE,key.c_str(),L"Debugger");
+        if(!debugger.empty()) {
+            out.push_back({"Execution Redirect",
+                utf8(name),
+                "REVIEW: IFEO Debugger entry redirects executable launch to: "+
+                utf8(debugger)+" | Verify administrative intent"});
+        }
+        DWORD globalFlag=0;
+        if(readRegistryDword(HKEY_LOCAL_MACHINE,key.c_str(),L"GlobalFlag",globalFlag)
+           && globalFlag!=0) {
+            out.push_back({"Execution Configuration",utf8(name),
+                "Image File Execution Options GlobalFlag: "+std::to_string(globalFlag)});
+        }
+    }
+    RegCloseKey(root);
+    return out;
+}
+
+// Winlogon startup values and AppInit_DLLs are useful persistence evidence.
+// Do not assume a non-default value is automatically malicious.
+static std::vector<Record> inspectLogonConfiguration() {
+    std::vector<Record> out;
+    const wchar_t* winlogon=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+    for(const wchar_t* field:{L"Shell",L"Userinit",L"Taskman"}) {
+        auto value=readRegistryString(HKEY_LOCAL_MACHINE,winlogon,field);
+        if(value.empty())continue;
+        std::string detail=utf8(value);
+        if(std::wstring(field)==L"Shell" &&
+           _wcsicmp(value.c_str(),L"explorer.exe")!=0)
+            detail+=" | REVIEW: Non-default Winlogon shell";
+        if(std::wstring(field)==L"Taskman")
+            detail+=" | REVIEW: Winlogon Taskman value is configured";
+        out.push_back({"Logon Configuration",utf8(field),detail});
+    }
+    const wchar_t* appinit=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows";
+    auto dlls=readRegistryString(HKEY_LOCAL_MACHINE,appinit,L"AppInit_DLLs");
+    DWORD enabled=0;
+    if(!dlls.empty()) {
+        std::string detail=utf8(dlls);
+        if(readRegistryDword(HKEY_LOCAL_MACHINE,appinit,L"LoadAppInit_DLLs",enabled)
+           && enabled!=0)
+            detail+=" | REVIEW: AppInit DLL loading is enabled";
+        out.push_back({"Logon Configuration","AppInit_DLLs",detail});
+    }
+    return out;
+}
+
+// Windows hosts file inspection: collects non-comment mappings and highlights
+// redirects for well-known update/security domains. Never changes the file.
+static std::vector<Record> inspectHostsFile() {
+    std::vector<Record> out;
+    wchar_t systemDir[MAX_PATH]{};
+    UINT n=GetSystemDirectoryW(systemDir,MAX_PATH);
+    if(!n || n>=MAX_PATH)return out;
+    fs::path hosts=fs::path(systemDir)/L"drivers"/L"etc"/L"hosts";
+    std::ifstream input(hosts);
+    if(!input)return out;
+    std::string line;
+    size_t count=0;
+    while(count<2048 && std::getline(input,line) && !cancelRequested) {
+        ++count;
+        auto pos=line.find('#');
+        if(pos!=std::string::npos)line.resize(pos);
+        auto start=line.find_first_not_of(" \t\r\n");
+        if(start==std::string::npos)continue;
+        line=line.substr(start);
+        std::istringstream stream(line);
+        std::string ip,host;
+        stream>>ip;
+        while(stream>>host) {
+            if(host.empty())continue;
+            std::string lowered=host;
+            std::transform(lowered.begin(),lowered.end(),lowered.begin(),
+                           [](unsigned char c){return char(std::tolower(c));});
+            bool sensitive=lowered.find("microsoft.com")!=std::string::npos ||
+                           lowered.find("windowsupdate.com")!=std::string::npos ||
+                           lowered.find("defender.microsoft.com")!=std::string::npos;
+            out.push_back({"Hosts File",host,
+                ip+(sensitive?" | REVIEW: Security/update-related hostname is overridden":
+                              " | Local hostname override; verify purpose")});
+            if(out.size()>=512)return out;
+        }
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -775,12 +945,24 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=4;
         stage=5;
+        auto security=inspectWindowsSecurityConfiguration();
+        auto ifeo=inspectImageExecutionOptions();
+        auto logon=inspectLogonConfiguration();
+        auto hosts=inspectHostsFile();
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        completedStages=5;
+        stage=5;
         services.insert(services.end(),startup.begin(),startup.end());
         services.insert(services.end(),network.begin(),network.end());
         services.insert(services.end(),udp.begin(),udp.end());
         services.insert(services.end(),tcp6.begin(),tcp6.end());
         services.insert(services.end(),usb.begin(),usb.end());
         services.insert(services.end(),defender.begin(),defender.end());
+        services.insert(services.end(),security.begin(),security.end());
+        services.insert(services.end(),ifeo.begin(),ifeo.end());
+        services.insert(services.end(),logon.begin(),logon.end());
+        services.insert(services.end(),hosts.begin(),hosts.end());
+        completedStages=6;
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
@@ -987,11 +1169,11 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=0; st.ChildRounding=12; st.FrameRounding=7;
+    st.WindowRounding=8; st.ChildRounding=9; st.FrameRounding=6;
     st.PopupRounding=9; st.ScrollbarRounding=9;
     st.WindowPadding=ImVec2(18,18);st.FramePadding=ImVec2(11,densityIndex==0?5.f:densityIndex==2?12.f:8.f);
     st.ItemSpacing=ImVec2(11,densityIndex==0?5.f:densityIndex==2?15.f:10.f);st.ItemInnerSpacing=ImVec2(9,6);
-    st.ScrollbarSize=11;
+    st.ScrollbarSize=9; st.WindowBorderSize=0; st.ChildBorderSize=1;
     auto& c=st.Colors;
     c[ImGuiCol_WindowBg]=themeIndex==2?ImVec4(.028f,.031f,.075f,1):themeIndex==1?ImVec4(.080f,.083f,.092f,1):ImVec4(.047f,.052f,.066f,1);
     c[ImGuiCol_ChildBg]=themeIndex==2?ImVec4(.048f,.056f,.108f,1):themeIndex==1?ImVec4(.11f,.12f,.13f,1):ImVec4(.080f,.088f,.109f,1);
@@ -1094,7 +1276,7 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(full>780.f && i%2)ImGui::SameLine(0,gap);
-        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,126),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,150),ImGuiChildFlags_Borders);
         ImGui::TextColored(m.implemented?orange():ImVec4(.70f,.72f,.76f,1),"%s",m.title);
         ImGui::SameLine();
         ImGui::TextDisabled("  %s",m.implemented?"AVAILABLE":"PLANNED");
@@ -1239,6 +1421,8 @@ static std::vector<ModuleReview> inspectProcessModules(DWORD pid) {
     CloseHandle(snap);
     return out;
 }
+static std::vector<ModuleReview> inspectImportedDlls(const std::wstring& path);
+static std::vector<ModuleReview> selectedImports;
 static void selectProcessDetails(const Process& p) {
     selectedProcess=p;
     selectedModules=inspectProcessModules(p.pid);
@@ -1323,7 +1507,6 @@ static std::vector<ModuleReview> inspectImportedDlls(const std::wstring& path) {
     }
     return result;
 }
-static std::vector<ModuleReview> selectedImports;
 static void drawProcessDetails() {
     if(!detailsOpen)return;
     ImGui::SetNextWindowSize(ImVec2(1020,680),ImGuiCond_FirstUseEver);
