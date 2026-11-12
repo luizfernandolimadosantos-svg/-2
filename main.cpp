@@ -148,6 +148,12 @@ static bool loadSyncLogo() {
 
 static std::vector<Process> processes;
 static std::vector<FileResult> files;
+struct TimelineEvent {
+    std::string timestamp, source, eventId, description, detail;
+    bool alert=false;
+};
+static std::vector<TimelineEvent> timelineEvents;
+static std::atomic<size_t> timelineCount{0};
 static std::vector<Record> records;
 static std::atomic<int> defenderAlerts{0};
 static std::atomic<bool> defenderNotificationPending{false};
@@ -990,6 +996,118 @@ static void tintEvidenceRow(const Record& r) {
     else if(isSuspectRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(129,92,17,175));
 }
 
+
+// Read-only Windows Event Log timeline. Only actual events are displayed.
+static std::wstring xmlAttribute(const std::wstring& xml,
+                                 const std::wstring& key) {
+    for(wchar_t quote : {L'\'', L'"'}) {
+        const std::wstring needle=key+L"="+quote;
+        const size_t p=xml.find(needle);
+        if(p==std::wstring::npos)continue;
+        const size_t first=p+needle.size();
+        const size_t last=xml.find(quote,first);
+        if(last!=std::wstring::npos)
+            return xml.substr(first,(std::min)(last-first,size_t(300)));
+    }
+    return L"";
+}
+static std::wstring xmlElement(const std::wstring& xml,
+                               const std::wstring& name) {
+    const std::wstring opening=L"<"+name+L">";
+    const size_t p=xml.find(opening);
+    if(p==std::wstring::npos)return L"";
+    const size_t first=p+opening.size();
+    const size_t last=xml.find(L'<',first);
+    return last==std::wstring::npos?L"":
+        xml.substr(first,(std::min)(last-first,size_t(256)));
+}
+static std::string timelineSummary(const std::string& channel,
+                                   const std::string& id) {
+    if(channel=="System") {
+        if(id=="7045")return "A Windows service was installed";
+        if(id=="7040")return "Service startup configuration changed";
+        if(id=="7036")return "A Windows service changed state";
+        if(id=="7000" || id=="7001")return "Service startup failure";
+    }
+    if(channel=="Task Scheduler") {
+        if(id=="106")return "Scheduled task registered";
+        if(id=="140")return "Scheduled task updated";
+        if(id=="141")return "Scheduled task deleted";
+        if(id=="200")return "Scheduled task action started";
+        if(id=="201")return "Scheduled task action completed";
+    }
+    if(channel=="Microsoft Defender") {
+        if(id=="1116")return "Microsoft Defender reported a threat detection";
+        if(id=="1117")return "Microsoft Defender recorded remediation";
+        if(id=="1118" || id=="1119")
+            return "Microsoft Defender reported a remediation issue";
+    }
+    return "Windows event recorded";
+}
+static std::vector<TimelineEvent> collectWindowsTimeline() {
+    std::vector<TimelineEvent> output;
+    struct Channel { const wchar_t* path; const char* label; const wchar_t* query; };
+    const Channel channels[]={
+        {L"System","System",
+         L"*[System[(EventID=7045 or EventID=7040 or EventID=7036 or EventID=7000 or EventID=7001) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
+        {L"Microsoft-Windows-TaskScheduler/Operational","Task Scheduler",
+         L"*[System[(EventID=106 or EventID=140 or EventID=141 or EventID=200 or EventID=201) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
+        {L"Microsoft-Windows-Windows Defender/Operational","Microsoft Defender",
+         L"*[System[(EventID=1116 or EventID=1117 or EventID=1118 or EventID=1119) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"}
+    };
+    for(const auto& channel:channels) {
+        if(cancelRequested)break;
+        EVT_HANDLE query=EvtQuery(nullptr,channel.path,channel.query,
+                                 EvtQueryChannelPath|EvtQueryReverseDirection);
+        if(!query) {
+            output.push_back({"",channel.label,"N/A",
+                "Event channel could not be read",
+                "Access denied, disabled channel, or no event log available. "
+                "This is not evidence that the system is clean.",false});
+            continue;
+        }
+        size_t processed=0;
+        while(processed<120 && !cancelRequested) {
+            EVT_HANDLE batch[16]{};
+            DWORD count=0;
+            if(!EvtNext(query,16,batch,1000,0,&count))break;
+            for(DWORD i=0;i<count;++i) {
+                if(processed>=120 || cancelRequested) {
+                    EvtClose(batch[i]);
+                    continue;
+                }
+                ++processed;
+                DWORD needed=0,used=0;
+                EvtRender(nullptr,batch[i],EvtRenderEventXml,0,nullptr,&needed,&used);
+                if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+                   needed>=sizeof(wchar_t) && needed<=1024*1024) {
+                    std::vector<wchar_t> xml(needed/sizeof(wchar_t)+1,L'\0');
+                    if(EvtRender(nullptr,batch[i],EvtRenderEventXml,
+                        (DWORD)(xml.size()*sizeof(wchar_t)),xml.data(),
+                        &needed,&used)) {
+                        const std::wstring data(xml.data());
+                        const std::string id=utf8(xmlElement(data,L"EventID"));
+                        const std::string when=utf8(xmlAttribute(data,L"SystemTime"));
+                        const std::string provider=utf8(xmlAttribute(data,L"Name"));
+                        const bool alert=std::string(channel.label)=="Microsoft Defender" &&
+                            (id=="1116" || id=="1118" || id=="1119");
+                        std::string detail="Provider: "+provider+
+                            " | Event ID: "+id+" | Source: "+channel.label;
+                        output.push_back({when,channel.label,id,
+                            timelineSummary(channel.label,id),detail,alert});
+                    }
+                }
+                EvtClose(batch[i]);
+            }
+        }
+        EvtClose(query);
+    }
+    std::stable_sort(output.begin(),output.end(),
+        [](const TimelineEvent& a,const TimelineEvent& b){
+            return a.timestamp>b.timestamp;
+        });
+    return output;
+}
 static void scanWorker() {
     try {
         stage=1;
@@ -1023,6 +1141,7 @@ static void scanWorker() {
         auto logon=inspectLogonConfiguration();
         auto hosts=inspectHostsFile();
         auto peFindings=inspectPeStructure(p);
+        auto timeline=collectWindowsTimeline();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -1043,6 +1162,8 @@ static void scanWorker() {
             std::lock_guard<std::mutex> lock(dataMutex);
             processes=std::move(p);
             records=std::move(services);
+            timelineEvents=std::move(timeline);
+            timelineCount=timelineEvents.size();
             processCount=processes.size();
             recordCount=records.size();
         }
@@ -2129,12 +2250,94 @@ static void renderUI() {
             ImGui::EndTabBar();
         }
     } else if(page==3) {
-        sectionTitle("EXECUTION TIMELINE","Chronological correlation of Windows evidence");
-        ImGui::BeginChild("timeline",ImVec2(0,210),ImGuiChildFlags_Borders);
-        ImGui::TextDisabled("PLANNED");
-        ImGui::TextWrapped("Prefetch, Amcache, event log and USB timeline collection are not implemented.");
-        ImGui::TextWrapped("The scanner will not generate synthetic events or timestamps.");
-        ImGui::EndChild();
+        sectionTitle("EXECUTION TIMELINE",
+            "Real Windows events from the past 7 days, ordered newest first");
+        if(!done && !scanning) {
+            ImGui::TextDisabled("Run Start Full Scan on the Dashboard to collect events.");
+        }
+        if(scanning)ImGui::TextDisabled("Scan in progress. Previous timeline remains visible.");
+        ImGui::Text("Timeline records: %zu",timelineCount.load());
+        ImGui::SameLine();
+        if(ImGui::Button("Start Full Scan",ImVec2(165,32))) {
+            if(!scanning)startScan();
+        }
+        ImGui::Spacing();
+        static char timelineSearch[180]{};
+        static bool onlyTimelineAlerts=false;
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.68f);
+        ImGui::InputTextWithHint("##timelineSearch",
+            "Filter by event ID, provider or description...",
+            timelineSearch,sizeof(timelineSearch));
+        ImGui::SameLine();
+        ImGui::Checkbox("Alerts only",&onlyTimelineAlerts);
+        ImGui::Spacing();
+        std::vector<TimelineEvent> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            snapshot=timelineEvents;
+        }
+        if(snapshot.empty() && done) {
+            ImGui::TextDisabled("No matching events collected. Check event log permissions and enabled channels.");
+        }
+        static int selectedTimeline=-1;
+        bool openTimelineDetails=false;
+        if(ImGui::BeginTable("##timelineTable",5,
+            ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
+            ImVec2(0,ImGui::GetContentRegionAvail().y))) {
+            ImGui::TableSetupColumn("UTC timestamp",ImGuiTableColumnFlags_WidthFixed,195);
+            ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthFixed,160);
+            ImGui::TableSetupColumn("Event ID",ImGuiTableColumnFlags_WidthFixed,80);
+            ImGui::TableSetupColumn("Event",ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,95);
+            ImGui::TableHeadersRow();
+            for(size_t i=0;i<snapshot.size();++i) {
+                const auto& ev=snapshot[i];
+                if(onlyTimelineAlerts && !ev.alert)continue;
+                const std::string hay=ev.timestamp+" "+ev.source+" "+ev.eventId+
+                    " "+ev.description+" "+ev.detail;
+                if(timelineSearch[0] && hay.find(timelineSearch)==std::string::npos)
+                    continue;
+                ImGui::PushID((int)i);
+                ImGui::TableNextRow();
+                if(ev.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    IM_COL32(135,86,19,150));
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(ev.timestamp.empty()?"N/A":ev.timestamp.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(ev.source.c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(ev.eventId.c_str());
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextUnformatted(ev.description.c_str());
+                ImGui::TableSetColumnIndex(4);
+                if(ImGui::SmallButton("Show Details")) {
+                    selectedTimeline=(int)i;
+                    openTimelineDetails=true;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if(openTimelineDetails)ImGui::OpenPopup("Timeline Event Details");
+        if(ImGui::BeginPopupModal("Timeline Event Details",nullptr,
+                    ImGuiWindowFlags_AlwaysAutoResize)) {
+                    if(selectedTimeline>=0 &&
+                       (size_t)selectedTimeline<snapshot.size()) {
+                        const auto& e=snapshot[(size_t)selectedTimeline];
+                        ImGui::Text("Timestamp (UTC): %s",e.timestamp.c_str());
+                        ImGui::Text("Source: %s",e.source.c_str());
+                        ImGui::Text("Event ID: %s",e.eventId.c_str());
+                        ImGui::Separator();
+                        ImGui::TextWrapped("%s",e.description.c_str());
+                        ImGui::TextWrapped("%s",e.detail.c_str());
+                        if(e.alert)ImGui::TextColored(
+                            ImVec4(1.f,.75f,.28f,1.f),
+                            "REVIEW: Security event requires investigation.");
+                    }
+                    if(ImGui::Button("Close"))ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
+                }
     } else if(page==4) {
         sectionTitle("APPEARANCE & SETTINGS","Customize the scanner interface. Changes apply immediately.");
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
