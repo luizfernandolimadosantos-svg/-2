@@ -596,7 +596,7 @@ static std::vector<Record> enumerateUdp() {
         char ip[INET_ADDRSTRLEN]{};
         InetNtopA(AF_INET,&addr,ip,sizeof(ip));
         std::ostringstream detail;
-        detail<<ip<<":"<<(unsigned)ntohs((u_short)e.dwLocalPort);
+        detail<<ip<<":"<<(unsigned)ntohs(static_cast<u_short>(e.dwLocalPort));
         out.push_back({"Network UDP","PID "+std::to_string(e.dwOwningPid),detail.str()});
     }
     return out;
@@ -622,8 +622,8 @@ static std::vector<Record> enumerateTcp6() {
         InetNtopA(AF_INET6, &localAddress, local, sizeof(local));
         InetNtopA(AF_INET6, &remoteAddress, remote, sizeof(remote));
         std::ostringstream detail;
-        detail<<"["<<local<<"]:"<<ntohs((u_short)e.dwLocalPort)
-              <<" -> ["<<remote<<"]:"<<ntohs((u_short)e.dwRemotePort)
+        detail<<"["<<local<<"]:"<<ntohs(static_cast<u_short>(e.dwLocalPort))
+              <<" -> ["<<remote<<"]:"<<ntohs(static_cast<u_short>(e.dwRemotePort))
               <<" | state "<<e.dwState;
         out.push_back({"Network IPv6","PID "+std::to_string(e.dwOwningPid),detail.str()});
     }
@@ -1542,7 +1542,7 @@ static void renderUI() {
         ImGui::Text("Application       Sync PC Checker");
         ImGui::Text("Developer         Mudin");
         ImGui::Text("Privileges        %s",isAdministrator()?"Administrator":"Standard User");
-        ImGui::TextWrapped("Executable: %s",utf8(executablePath()).c_str());
+        ImGui::TextDisabled("Executable location is available in file inspection details.");
         ImGui::Separator();
         if(accentButton("Verify This Executable",ImVec2(240,43))) {
             try {
