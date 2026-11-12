@@ -1356,28 +1356,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND,UINT,WPARAM,LP
 static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     // Native titlebar controls: process before ImGui, so an overlapping
     // invisible drag item cannot intercept minimize/close.
-    if(msg==WM_LBUTTONDOWN) {
-        RECT client{};
-        GetClientRect(h,&client);
-        const int x=(short)LOWORD(l),y=(short)HIWORD(l);
-        // Only blank rail space drags; never swallow close/minimize.
-        if(y>=17 && y<80 && x>=300 && x<client.right-140) {
-            ReleaseCapture();
-            SendMessageW(h,WM_NCLBUTTONDOWN,HTCAPTION,0);
-            return 0;
-        }
-    }
-    if(msg==WM_LBUTTONUP) {
-        RECT client{};
-        GetClientRect(h,&client);
-        const int x=(short)LOWORD(l),y=(short)HIWORD(l);
-        const int right=client.right;
-        if(y>=17 && y<80 && x>=right-133 && x<right-17) {
-            if(x<right-75)ShowWindow(h,SW_MINIMIZE);
-            else PostMessageW(h,WM_CLOSE,0,0);
-            return 0;
-        }
-    }
+    // Let ImGui receive mouse events first. Old native hitboxes intercepted
+    // controls in the header, causing unresponsive buttons and accidental drags.
     if(ImGui_ImplWin32_WndProcHandler(h,msg,w,l)) return true;
     switch(msg) {
     case WM_SIZE:
@@ -1412,11 +1392,11 @@ static void applyTheme() {
     c[ImGuiCol_Separator]=ImVec4(.17f,.24f,.27f,1);
     c[ImGuiCol_Text]=ImVec4(.91f,.97f,.96f,1);
     c[ImGuiCol_TextDisabled]=ImVec4(.57f,.70f,.72f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.11f,.16f,.18f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.13f,.17f,.23f,1);
     c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.23f,.25f,1);
     c[ImGuiCol_FrameBgActive]=ImVec4(.21f,.28f,.30f,1);
-    c[ImGuiCol_Button]=ImVec4(.14f,.21f,.23f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.20f,.30f,.32f,1);
+    c[ImGuiCol_Button]=ImVec4(.16f,.23f,.33f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.23f,.34f,.47f,1);
     c[ImGuiCol_ButtonActive]=ImVec4(.24f,.34f,.35f,1);
     c[ImGuiCol_Header]=ImVec4(.14f,.22f,.24f,1);
     c[ImGuiCol_HeaderHovered]=ImVec4(.20f,.30f,.32f,1);
@@ -1891,7 +1871,7 @@ static void drawServiceReviews() {
     ImGui::Dummy(ImVec2(0,6));
     ImGui::TextUnformatted("SEARCH  /");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth((std::max)(240.f,ImGui::GetContentRegionAvail().x-235.f));
+    ImGui::SetNextItemWidth((std::max)(100.f,ImGui::GetContentRegionAvail().x-245.f));
     ImGui::InputTextWithHint("##serviceSearch","Search service name, display name, state, assessment...",serviceSearch,sizeof(serviceSearch));
     ImGui::SameLine();
     if(ImGui::SmallButton("Clear##serviceSearch"))serviceSearch[0]='\\0';
@@ -2220,7 +2200,7 @@ static Report analyze(const std::wstring& path){
             auto rvaToOff=[&](uint32_t rva)->size_t{
                 for(const auto& sec:r.sections)
                     if(rva>=sec.rva&&uint64_t(rva)-sec.rva<sec.size&&
-                       uint64_t(sec.raw)+(rva-sec.rva)<b.size())
+                       uint64_t(sec.raw)+(uint64_t(rva)-sec.rva)<b.size())
                         return size_t(sec.raw)+(rva-sec.rva);
                 return size_t(-1);
             };
@@ -2279,6 +2259,24 @@ static Report analyze(const std::wstring& path){
         }
     }
     if(current.size()>=7&&r.strings.size()<10000)r.strings.push_back(current);
+    // Extract readable UTF-16LE strings as well as ASCII. Many Windows
+    // executables store paths, commands and configuration text in UTF-16LE.
+    // Require at least 7 characters and cap the output to avoid UI overload.
+    for(size_t parity=0;parity<2&&r.strings.size()<10000;++parity){
+        std::string wideRun;
+        for(size_t pos=parity;pos+1<b.size();pos+=2){
+            const unsigned char lo=b[pos],hi=b[pos+1];
+            if(hi==0&&lo>=32&&lo<=126){
+                if(wideRun.size()<300)wideRun.push_back((char)lo);
+            }else{
+                if(wideRun.size()>=7&&r.strings.size()<10000)
+                    r.strings.push_back("[UTF-16LE] "+wideRun);
+                wideRun.clear();
+            }
+        }
+        if(wideRun.size()>=7&&r.strings.size()<10000)
+            r.strings.push_back("[UTF-16LE] "+wideRun);
+    }
     if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
     r.notes.push_back("Static inspection only. Decompiled source code cannot be recovered reliably from compiled binaries.");
     r.status="Local analysis completed.";
@@ -2426,62 +2424,71 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // Studio layout: neutral tool palette, narrow icon rail, wide content.
+    // New product layout: top system masthead, compact left navigation,
+    // independently scrolling investigation workspace.
     if(page==1||page==5)page=0;
-    const float railWidth=214.f;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.087f,.104f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,20));
-    ImGui::BeginChild("##studioRail",ImVec2(railWidth,0),ImGuiChildFlags_None);
-    if(syncLogoTexture)ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(48,48));
-    ImGui::Dummy(ImVec2(0,12));
-    ImGui::SetWindowFontScale(1.28f);
-    ImGui::TextUnformatted("SYNC PC");
-    ImGui::TextUnformatted("CHECKER");
-    ImGui::SetWindowFontScale(1.f);
-    ImGui::TextDisabled("MUDIN  /  SECURITY");
-    ImGui::Dummy(ImVec2(0,32));
-    ImGui::TextDisabled("WORKSPACE");
-    ImGui::Dummy(ImVec2(0,10));
-    const char* names[]={"01   Command","02   Investigate","03   Event Log",
-        "04   Binary Lab","05   Preferences"};
-    const int pages[]={0,2,3,6,4};
-    for(int i=0;i<5;i++){
-        ImGui::PushID(500+i);
-        const bool active=page==pages[i];
-        if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.19f,.24f,.28f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.93f,.96f,.96f,1));
-        }
-        const bool clicked=ImGui::Button(names[i],ImVec2(-1,52));
-        if(active)ImGui::PopStyleColor(2);
-        if(clicked)page=pages[i];
-        ImGui::PopID();
-        ImGui::Dummy(ImVec2(0,7));
+    const ImVec4 ink(.93f,.95f,.98f,1.f);
+    const ImVec4 quiet(.57f,.64f,.73f,1.f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.078f,.112f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(24,12));
+    ImGui::BeginChild("##productMasthead",ImVec2(0,76),ImGuiChildFlags_None);
+    if(syncLogoTexture){
+        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(42,42));
+        ImGui::SameLine(0,16);
     }
+    ImGui::BeginGroup();
+    ImGui::TextColored(ink,"SYNC PC CHECKER");
+    ImGui::TextColored(quiet,"DEVELOPED BY MUDIN");
+    ImGui::EndGroup();
+    ImGui::SameLine(0,26);
+    ImGui::TextColored(done?ImVec4(.43f,.83f,.69f,1):quiet,"%s",stateText());
+    // Place window controls relative to the available content width.
+    float controlX=ImGui::GetWindowContentRegionMax().x-108.f;
+    if(ImGui::GetCursorPosX()<controlX)ImGui::SameLine(0,0);
+    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),controlX));
+    if(ImGui::Button("_min##windowMin",ImVec2(44,34)))ShowWindow(hwnd,SW_MINIMIZE);
+    ImGui::SameLine(0,8);
+    if(ImGui::Button("X##windowClose",ImVec2(44,34)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.083f,.100f,.135f,1));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(14,24));
+    ImGui::BeginChild("##productRail",ImVec2(178,0),ImGuiChildFlags_None);
+    ImGui::TextColored(quiet,"NAVIGATION");
     ImGui::Dummy(ImVec2(0,18));
+    const char* names[]={"OVERVIEW","THREAT CENTER","ACTIVITY","BINARY LAB","SETTINGS"};
+    const int targets[]={0,2,3,6,4};
+    for(int i=0;i<5;++i){
+        ImGui::PushID(2000+i);
+        const bool active=page==targets[i];
+        if(active){
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.18f,.27f,.41f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text,ink);
+        }
+        if(ImGui::Button(names[i],ImVec2(-1,48)))page=targets[i];
+        if(active)ImGui::PopStyleColor(2);
+        ImGui::PopID();
+        ImGui::Dummy(ImVec2(0,10));
+    }
+    ImGui::Dummy(ImVec2(0,20));
     ImGui::Separator();
-    ImGui::TextDisabled("ENGINE");
-    ImGui::TextColored(done?ImVec4(.42f,.78f,.64f,1):orange(),"%s",stateText());
+    ImGui::TextColored(quiet,"LOCAL INSPECTION");
+    ImGui::TextWrapped("Read-only evidence collection");
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
     ImGui::SameLine(0,0);
     ImGui::BeginGroup();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,20));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.10f,.115f,.135f,1));
-    ImGui::BeginChild("##studioMain",ImVec2(0,0),ImGuiChildFlags_None);
-    ImGui::TextDisabled("SYNC PC CHECKER   /   ENDPOINT ANALYSIS");
-    ImGui::SameLine(0,18);
-    ImGui::TextColored(scanning?orange():done?ImVec4(.46f,.84f,.69f,1):
-        ImVec4(.7f,.76f,.8f,1),"%s",stateText());
-    const float topRight=ImGui::GetWindowContentRegionMax().x;
-    ImGui::SameLine();
-    ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),topRight-114.f));
-    if(ImGui::Button("_##min",ImVec2(43,32)))ShowWindow(hwnd,SW_MINIMIZE);
-    ImGui::SameLine(0,8);
-    if(ImGui::Button("X##close",ImVec2(43,32)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,25));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.102f,.119f,.157f,1));
+    ImGui::BeginChild("##productWorkspace",ImVec2(0,0),ImGuiChildFlags_None);
+    ImGui::TextColored(quiet,"WORKSPACE  /  %s",
+        page==0?"OVERVIEW":page==2?"THREAT CENTER":page==3?"ACTIVITY":
+        page==6?"BINARY LAB":"SETTINGS");
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0,12));
+    ImGui::Dummy(ImVec2(0,14));
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
