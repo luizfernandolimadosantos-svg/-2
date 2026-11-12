@@ -1432,7 +1432,6 @@ static void scanWorker() {
         services.insert(services.end(),logon.begin(),logon.end());
         services.insert(services.end(),hosts.begin(),hosts.end());
         services.insert(services.end(),peFindings.begin(),peFindings.end());
-        completedStages=6;
         if(defenderAlerts.load()>0)defenderNotificationPending=true;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
@@ -1443,6 +1442,7 @@ static void scanWorker() {
             processCount=processes.size();
             recordCount=records.size();
         }
+        completedStages=6;
         done=true;
     } catch(...) {
         scanFailed=true;
@@ -3142,6 +3142,28 @@ static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
 static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     if(size.x<300.f || size.y<200.f)return;
     const float t=static_cast<float>(ImGui::GetTime());
+    // Large, softly layered blue ambient glows stay behind interactive content.
+    ImDrawList* backdrop=ImGui::GetBackgroundDrawList();
+    backdrop->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
+    const ImVec2 glowCenters[3]={
+        ImVec2(origin.x+size.x*(.17f+.035f*std::sin(t*.19f)),
+               origin.y+size.y*(.30f+.045f*std::cos(t*.14f))),
+        ImVec2(origin.x+size.x*(.81f+.045f*std::cos(t*.16f)),
+               origin.y+size.y*(.63f+.05f*std::sin(t*.12f))),
+        ImVec2(origin.x+size.x*(.51f+.055f*std::sin(t*.11f)),
+               origin.y+size.y*(.87f+.025f*std::cos(t*.17f)))
+    };
+    for(int g=0;g<3;++g){
+        const float radius=(g==2?165.f:210.f)*(size.x/1100.f+.35f);
+        const float breathe=.88f+.12f*std::sin(t*.58f+g*1.9f);
+        for(int ring=15;ring>=1;--ring){
+            const float f=static_cast<float>(ring)/15.f;
+            const int alpha=static_cast<int>((g==2?5.f:8.f)*breathe*(1.0f-f*.62f));
+            backdrop->AddCircleFilled(glowCenters[g],radius*f,
+                IM_COL32(g==1?67:50,g==1?115:128,238,alpha),48);
+        }
+    }
+    backdrop->PopClipRect();
     ImDrawList* draw=ImGui::GetForegroundDrawList();
     draw->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
     // Deterministic locations: no per-frame random flicker.
@@ -3154,12 +3176,16 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
         const float y=origin.y+18.f+ny*(size.y-36.f)
             +13.f*std::cos(t*(.16f+.017f*(i%7))+seed*1.7f);
         const float pulse=.5f+.5f*std::sin(t*(.75f+.08f*(i%4))+seed*2.1f);
-        const int alpha=static_cast<int>(13.f+36.f*pulse);
-        const float radius=(i%7==0)?1.7f:1.0f;
+        const int alpha=static_cast<int>(34.f+85.f*pulse);
+        const float radius=(i%7==0)?2.3f:1.45f;
+        draw->AddCircleFilled(ImVec2(x,y),radius*4.8f,
+            IM_COL32(92,155,255,static_cast<int>(5.f+13.f*pulse)),20);
+        draw->AddCircleFilled(ImVec2(x,y),radius*2.5f,
+            IM_COL32(115,181,255,static_cast<int>(10.f+23.f*pulse)),16);
         draw->AddCircleFilled(ImVec2(x,y),radius,
-            IM_COL32(155,197,252,alpha),8);
+            IM_COL32(170,213,255,alpha),12);
         if(i%9==0){
-            const int glow=static_cast<int>(8.f+15.f*pulse);
+            const int glow=static_cast<int>(20.f+42.f*pulse);
             draw->AddLine(ImVec2(x-5.f,y),ImVec2(x+5.f,y),
                           IM_COL32(129,179,246,glow),1.f);
             draw->AddLine(ImVec2(x,y-5.f),ImVec2(x,y+5.f),
@@ -3175,7 +3201,9 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     else if(d<2.f*size.x+size.y){
         dot.x+=size.x-10.f-(d-size.x-size.y);dot.y+=size.y-10.f;
     }else dot.y+=size.y-10.f-(d-2.f*size.x-size.y);
-    draw->AddCircleFilled(dot,2.2f,IM_COL32(145,196,255,100),12);
+    draw->AddCircleFilled(dot,11.f,IM_COL32(75,145,255,16),24);
+    draw->AddCircleFilled(dot,5.f,IM_COL32(125,185,255,39),16);
+    draw->AddCircleFilled(dot,2.6f,IM_COL32(180,220,255,175),12);
     draw->PopClipRect();
 }
 
@@ -3421,16 +3449,17 @@ static void renderUI() {
                           IM_COL32(112,164,232,190),1.f);
         ImGui::Dummy(ImVec2(0,29.f));
     }
-    // Live scan progress, sourced only from the scanner's real stage counters.
-    if(scanning){
-        const int done=completedStages.load();
+    // Shared across every page: measured completed stages, never timer-based.
+    if(scanning || done){
+        const int finished=completedStages.load();
         const int total=(std::max)(1,totalStages.load());
-        const float progress=(std::max)(0.f,(std::min)(1.f,done/(float)total));
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.40f,.64f,.94f,1.f));
-        ImGui::ProgressBar(progress,ImVec2(-1,5.f),"");
+        const int percent=done?100:(std::max)(0,(std::min)(99,finished*100/total)));
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.31f,.59f,.96f,1.f));
+        const std::string overlay=std::to_string(percent)+"%";
+        ImGui::ProgressBar(percent/100.f,ImVec2(-1,20.f),overlay.c_str());
         ImGui::PopStyleColor();
-        ImGui::TextDisabled("SCAN IN PROGRESS  |  %d / %d STAGES",
-                            done,total);
+        ImGui::TextDisabled("%s",
+            done?"INSPECTION COMPLETE":"FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
     float available=ImGui::GetContentRegionAvail().x;
@@ -3453,7 +3482,11 @@ static void renderUI() {
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING");
             const int total=(std::max)(1,totalStages.load());
-            ImGui::ProgressBar(completedStages.load()/(float)total,ImVec2(-1,10));
+            const int percent=(std::max)(0,(std::min)(99,
+                completedStages.load()*100/total)));
+            const std::string progressLabel=std::to_string(percent)+"%";
+            ImGui::ProgressBar(percent/100.f,ImVec2(-1,18),
+                               progressLabel.c_str());
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else{
             if(accentButton("START FULL INSPECTION",ImVec2(220,42)))startScan();
@@ -3939,8 +3972,11 @@ static void renderUI() {
     drawEvidenceDetails();
 }
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
-    WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,nullptr,nullptr,nullptr,nullptr,
-                  L"SyncPCChecker",nullptr};
+    HICON appIcon=reinterpret_cast<HICON>(
+        LoadImageW(inst,MAKEINTRESOURCEW(1),IMAGE_ICON,32,32,LR_DEFAULTCOLOR));
+    if(!appIcon)appIcon=LoadIconW(nullptr,IDI_APPLICATION);
+    WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,appIcon,nullptr,nullptr,nullptr,
+                  L"SyncPCChecker",appIcon};
     RegisterClassExW(&wc);
     hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
                        WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1200,780,nullptr,nullptr,inst,nullptr);
