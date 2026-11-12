@@ -3133,6 +3133,124 @@ static std::vector<Record> inspectAdditionalCheatIndicators(const std::vector<Pr
     return findings;
 }
 
+
+// Extended read-only audit and configuration evidence. No security settings
+// are changed and missing records are never treated as proof of evasion.
+static std::vector<Record> inspectAuditAndPlatformEvidence(){
+    std::vector<Record> out;
+    auto add=[&](const char* name,const std::string& detail){
+        out.push_back({"Audit & Platform",name,detail});
+    };
+    struct EventSpec{const wchar_t* channel;int id;const char* label;};
+    const EventSpec specs[]={
+        {L"Security",1100,"Event log service shutdown"},
+        {L"Security",1104,"Security log capacity"},
+        {L"Security",1108,"Event log processing error"},
+        {L"Security",4616,"System clock adjustment"},
+        {L"Security",4688,"Audited process creation"},
+        {L"Security",4697,"Audited service installation"},
+        {L"Security",4698,"Scheduled task creation"},
+        {L"Security",4702,"Scheduled task modification"},
+        {L"System",7040,"Service startup configuration change"},
+        {L"System",7045,"Service installation"},
+        {L"Microsoft-Windows-Windows Defender/Operational",5007,
+            "Defender configuration change"}
+    };
+    for(const auto& spec:specs){
+        if(cancelRequested)break;
+        wchar_t xpath[128]{};
+        swprintf_s(xpath,L"*[System[(EventID=%d)]]",spec.id);
+        EVT_HANDLE q=EvtQuery(nullptr,spec.channel,xpath,
+            EvtQueryChannelPath|EvtQueryReverseDirection);
+        if(!q){
+            add(spec.label,"UNAVAILABLE | Channel or event query inaccessible. Check Windows auditing and permissions.");
+            continue;
+        }
+        unsigned count=0;
+        bool error=false;
+        for(unsigned batch=0;batch<4 && !cancelRequested;++batch){
+            EVT_HANDLE handles[16]{};
+            DWORD returned=0;
+            if(!EvtNext(q,16,handles,0,0,&returned)){
+                if(GetLastError()!=ERROR_NO_MORE_ITEMS)error=true;
+                break;
+            }
+            count+=returned;
+            for(DWORD i=0;i<returned;++i)
+                if(handles[i])EvtClose(handles[i]);
+            if(returned<16)break;
+        }
+        EvtClose(q);
+        if(error)
+            add(spec.label,"UNAVAILABLE | Could not finish event query; partial results must not be interpreted.");
+        else if(count)
+            add(spec.label,"NEEDS REVIEW | At least "+std::to_string(count)+
+                " matching historical events found (maximum 64 examined). Review the event details and timestamps.");
+        else
+            add(spec.label,"INFO | No matching event returned. Audit coverage and log retention may be limited.");
+    }
+    HKEY h=nullptr;
+    DWORD value=0,type=0,size=sizeof(value);
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+        0,KEY_QUERY_VALUE,&h)==ERROR_SUCCESS){
+        if(RegQueryValueExW(h,L"UEFISecureBootEnabled",nullptr,&type,
+            reinterpret_cast<LPBYTE>(&value),&size)==ERROR_SUCCESS &&
+            type==REG_DWORD){
+            add("Secure Boot state",value?
+                "INFO | Windows reports Secure Boot enabled.":
+                "INFO | Windows reports Secure Boot disabled. This can be an intentional platform configuration.");
+        }else add("Secure Boot state","UNAVAILABLE | Secure Boot state not exposed.");
+        RegCloseKey(h);
+    }else add("Secure Boot state",
+        "UNAVAILABLE | Secure Boot state key inaccessible or unsupported.");
+
+    wchar_t systemDir[MAX_PATH]{};
+    UINT n=GetSystemDirectoryW(systemDir,MAX_PATH);
+    if(n>0 && n<MAX_PATH){
+        wchar_t root[MAX_PATH]{};
+        wcsncpy_s(root,systemDir,_TRUNCATE);
+        if(root[0] && root[1]==L':'){
+            wchar_t drive[]=L"C:\\";
+            drive[0]=root[0];
+            wchar_t fsName[64]{};
+            if(GetVolumeInformationW(drive,nullptr,0,nullptr,nullptr,nullptr,
+                                     fsName,64)){
+                std::wstring fsType(fsName);
+                add("System volume filesystem",
+                    fsType==L"NTFS"?
+                    "INFO | System volume uses NTFS; some artifacts still require elevated access.":
+                    "INFO | System volume is not reported as NTFS; NTFS-specific checks may not apply.");
+            }
+        }
+    }
+    // Registry source presence is a coverage check, not a full parser.
+    const struct {HKEY root;const wchar_t* key;const char* name;} keys[]={
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU","RunMRU history"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths","Explorer TypedPaths"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs","RecentDocs history"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU","OpenSavePidlMRU"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU","LastVisitedPidlMRU"},
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options","Image File Execution Options"}
+    };
+    for(const auto& item:keys){
+        if(cancelRequested)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(item.root,item.key,0,KEY_READ,&key)==ERROR_SUCCESS){
+            DWORD subkeys=0,values=0;
+            LONG rc=RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,&subkeys,
+                nullptr,nullptr,&values,nullptr,nullptr,nullptr,nullptr);
+            RegCloseKey(key);
+            if(rc==ERROR_SUCCESS)
+                add(item.name,"INFO | Registry evidence source readable; "+
+                    std::to_string(subkeys)+" subkeys and "+
+                    std::to_string(values)+" values. Contents not parsed.");
+            else add(item.name,"UNAVAILABLE | Could not enumerate registry metadata.");
+        }else add(item.name,"UNAVAILABLE | Registry source missing or inaccessible.");
+    }
+    return out;
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -3214,6 +3332,7 @@ static void scanWorker() {
         auto bypassIntegrity=inspectBypassEvidenceIntegrity();
         auto bypassExtended=inspectExtendedBypassEvidence(p);
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
+        auto auditPlatform=inspectAuditAndPlatformEvidence();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         completedStages=5;
         stage=5;
@@ -3227,6 +3346,7 @@ static void scanWorker() {
         services.insert(services.end(),bypassIntegrity.begin(),bypassIntegrity.end());
         services.insert(services.end(),bypassExtended.begin(),bypassExtended.end());
         services.insert(services.end(),advancedIntegrity.begin(),advancedIntegrity.end());
+        services.insert(services.end(),auditPlatform.begin(),auditPlatform.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -5287,64 +5407,118 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
 
 // Premium progress visualization. Percentage remains tied to the existing
 // 35-second presentation and completed scan stages; no synthetic detections.
-static void drawAtlasProgress(bool compact=false){
-    const int pct=inspectionDisplayPercent();
-    const float fraction=std::clamp(pct/100.f,0.f,1.f);
-    const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    const float height=compact?21.f:28.f;
+// Render-only easing: smooths the fill without changing the verified unlock gate.
+static float smoothInspectionVisual(float target){
+    static float displayed=0.f;
+    static double lastTime=-1.0;
+    static double lastScanStart=-1.0;
+    const double now=ImGui::GetTime();
+    if(inspectionProgressStart!=lastScanStart){
+        displayed=0.f;lastTime=now;lastScanStart=inspectionProgressStart;
+    }
+    if(inspectionProgressStart<=0.0 || (!scanning && !done)){
+        displayed=0.f;lastTime=now;return displayed;
+    }
+    if(lastTime<0.0 || now<lastTime || now-lastTime>3.0)lastTime=now;
+    const float dt=std::clamp(static_cast<float>(now-lastTime),0.f,.1f);
+    lastTime=now;
+    // Never decrease during a scan; ease to the next measured/paced target.
+    target=std::clamp(target,0.f,1.f);
+    if(target<displayed-.15f)displayed=0.f; // new scan reset
+    const float rate=1.f-std::exp(-dt*4.5f);
+    displayed+=(std::max)(0.f,target-displayed)*rate;
+    if(target>=1.f && 1.f-displayed<.0005f)displayed=1.f;
+    return displayed;
+}
+static void drawProfessionalProgressTrack(const char* id,const char* label,
+                                           float fraction,float width,float height,
+                                           bool compact=false){
+    ImGui::PushID(id);
     const ImVec2 p=ImGui::GetCursorScreenPos();
     const ImVec2 q(p.x+width,p.y+height);
     ImDrawList* dl=ImGui::GetWindowDrawList();
-    const float t=reducedMotion?0.f:static_cast<float>(ImGui::GetTime());
-    dl->AddRectFilled(p,q,IM_COL32(25,25,25,255),9.f);
-    dl->AddRect(p,q,IM_COL32(98,98,98,195),9.f,0,1.1f);
-    if(fraction>0.001f){
-        const float fillW=width*fraction;
-        dl->PushClipRect(p,ImVec2(p.x+fillW,q.y),true);
+    fraction=std::clamp(fraction,0.f,1.f);
+    dl->AddRectFilled(p,q,IM_COL32(27,27,27,255),6.f);
+    dl->AddRect(p,q,IM_COL32(82,82,82,190),6.f);
+    if(fraction>0.f){
+        const float w=width*fraction;
+        dl->PushClipRect(p,ImVec2(p.x+w,q.y),true);
         dl->AddRectFilledMultiColor(
             ImVec2(p.x,p.y+2.f),ImVec2(p.x+width,p.y+height-2.f),
-            IM_COL32(94,94,94,255),IM_COL32(145,145,145,255),
-            IM_COL32(94,94,94,255),IM_COL32(145,145,145,255));
-        dl->AddRectFilled(
-            ImVec2(p.x,p.y+2.f),ImVec2(p.x+fillW,p.y+5.f),
-            IM_COL32(212,212,212,65),2.f);
-        // A soft moving highlight is clipped to the filled part only.
-        const float sweep=std::fmod(t*92.f,width+120.f)-60.f;
-        for(int i=0;i<10;++i){
-            const float x=p.x+sweep+i*4.f;
-            dl->AddRectFilled(ImVec2(x,p.y+3.f),
-                ImVec2(x+4.f,q.y-3.f),
-                IM_COL32(227,227,227,(i<5?i+1:10-i)*5));
-        }
+            IM_COL32(105,105,105,255),IM_COL32(232,232,232,255),
+            IM_COL32(105,105,105,255),IM_COL32(232,232,232,255));
         dl->PopClipRect();
-        const float edgeX=p.x+fillW;
-        dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
-            8.f,IM_COL32(169,169,169,36),18);
-        dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
-            3.f,IM_COL32(232,232,232,135),12);
     }
-    char label[16]{};
-    snprintf(label,sizeof(label),"%d%%",pct);
-    const ImVec2 textSize=ImGui::CalcTextSize(label);
-    const ImVec4 percentColor=accentColor();
-    dl->AddText(ImVec2(p.x+(width-textSize.x)*.5f,
-                       p.y+(height-textSize.y)*.5f),
-                ImGui::ColorConvertFloat4ToU32(percentColor),label);
+    if(compact){
+        char pct[16]{};
+        std::snprintf(pct,sizeof(pct),"%.0f%%",fraction*100.f);
+        const ImVec2 sz=ImGui::CalcTextSize(pct);
+        dl->AddText(ImVec2(p.x+width-sz.x-9.f,p.y+(height-sz.y)*.5f),
+                    IM_COL32(250,250,250,255),pct);
+    }
     ImGui::Dummy(ImVec2(width,height));
-    if(!compact){
-        ImGui::Dummy(ImVec2(0,5.f));
-        const char* phase=done?
-            (pct==100?"INSPECTION COMPLETE":"PREPARING RESULTS"):
-            scanning?(cancelRequested?"CANCELLING INSPECTION":
-                      stages[std::clamp(stage.load(),0,5)]):
-            "READY";
-        ImGui::TextColored(ImVec4(0.705f,0.705f,0.705f,1.f),"%s",phase);
-        if(ImGui::IsItemHovered()){
-            ImGui::SetTooltip(
-                "Progress shows completed scan stages and the presentation timer. "
-                "Results unlock only after both are complete.");
-        }
+    ImGui::PopID();
+}
+static void drawAtlasProgress(bool compact=false){
+    const int verified=inspectionDisplayPercent();
+    const float fraction=smoothInspectionVisual(verified/100.f);
+    const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
+    ImGui::TextDisabled("FULL INSPECTION  /  VERIFIED PROGRESS");
+    ImGui::SameLine();
+    ImGui::Text("%.0f%%",fraction*100.f);
+    drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
+                                  compact?14.f:19.f);
+    if(compact)return;
+    ImGui::Spacing();
+    // Stage tracks reflect actual completed stages, with bounded interpolation
+    // while a stage is running. They never reach 100% before stage completion.
+    const int completed=std::clamp(completedStages.load(),0,6);
+    const int active=std::clamp(stage.load(),0,5);
+    const char* names[]={
+        "SYSTEM INTEGRITY","EXECUTION ARTIFACTS",
+        "PROCESS ANALYSIS","EVIDENCE CORRELATION"
+    };
+    // Existing worker: 1 process, 2 services, 3 startup, 4 network,
+    // 5 extensive integrity/artifacts, 6 publish results.
+    const int gates[]={2,4,5,6};
+    static float stageVisual[4]={0,0,0,0};
+    static double stageTime=-1.0;
+    static double lastStageScanStart=-1.0;
+    const double now=ImGui::GetTime();
+    if(lastStageScanStart!=inspectionProgressStart){
+        for(float& v:stageVisual)v=0.f;
+        lastStageScanStart=inspectionProgressStart;stageTime=now;
     }
+    if(stageTime<0.0 || now<stageTime || now-stageTime>3.0)stageTime=now;
+    const float dt=std::clamp(static_cast<float>(now-stageTime),0.f,.1f);
+    stageTime=now;
+    for(int i=0;i<4;++i){
+        const int begin=i==0?0:gates[i-1];
+        const int finish=gates[i];
+        float target=std::clamp((completed-begin)/(float)(finish-begin),0.f,1.f);
+        if(completed>=finish)target=1.f;
+        // No fabricated per-stage percentage: smooth only verified milestones.
+
+        if(completed==0 && !scanning)stageVisual[i]=0.f;
+        else if(target<stageVisual[i]-.4f)stageVisual[i]=0.f;
+        stageVisual[i]+=(std::max)(0.f,target-stageVisual[i])*
+                         (1.f-std::exp(-dt*5.f));
+        if(target==1.f && stageVisual[i]>.999f)stageVisual[i]=1.f;
+        ImGui::TextDisabled("%s",names[i]);
+        ImGui::SameLine();
+        ImGui::Text("%.0f%%",stageVisual[i]*100.f);
+        drawProfessionalProgressTrack(names[i],names[i],stageVisual[i],
+                                      width,11.f);
+        ImGui::Spacing();
+    }
+    const char* phase=scanFailed?"INSPECTION FAILED":
+        scanCancelled?"INSPECTION CANCELLED":
+        done?(verified>=100?"INSPECTION COMPLETE":"PREPARING RESULTS"):
+        scanning?(cancelRequested?"CANCELLING INSPECTION":
+            stages[std::clamp(stage.load(),0,5)]):"READY";
+    ImGui::TextDisabled("%s",phase);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Bars animate smoothly. Completion is gated by real scan stages and the presentation timer.");
 }
 
 static void renderUI() {
@@ -5605,7 +5779,7 @@ static void renderUI() {
     // All non-dashboard pages are locked until the scan AND its presentation
     // reach 100%. This is a visual privacy curtain, not a fake scan result.
     const bool waitingForPresentation=
-        !done || inspectionProgressStart<=0.0 || inspectionDisplayPercent()<100;
+        !done || scanFailed || scanCancelled || inspectionProgressStart<=0.0 || inspectionDisplayPercent()<100;
     // Dashboard and Preferences remain accessible; investigation pages unlock at 100%.
     // Once progress reaches 100%, animate the shackle opening before
     // revealing scan-derived content. Reset on each new inspection.
