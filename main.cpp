@@ -1,3 +1,4 @@
+#include <cstdio>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -1243,32 +1244,52 @@ static ImVec4 orange(){return accentColor();}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=8; st.ChildRounding=9; st.FrameRounding=6;
-    st.PopupRounding=9; st.ScrollbarRounding=9;
-    st.WindowPadding=ImVec2(18,18);st.FramePadding=ImVec2(11,densityIndex==0?5.f:densityIndex==2?12.f:8.f);
-    st.ItemSpacing=ImVec2(11,densityIndex==0?5.f:densityIndex==2?15.f:10.f);st.ItemInnerSpacing=ImVec2(9,6);
-    st.ScrollbarSize=9; st.WindowBorderSize=0; st.ChildBorderSize=1;
+    st.WindowRounding=13.f; st.ChildRounding=13.f; st.FrameRounding=8.f;
+    st.PopupRounding=12.f; st.ScrollbarRounding=10.f;
+    st.WindowPadding=ImVec2(18,16);
+    st.FramePadding=ImVec2(12,densityIndex==0?6.f:densityIndex==2?12.f:9.f);
+    st.ItemSpacing=ImVec2(10,densityIndex==0?6.f:densityIndex==2?13.f:9.f);
+    st.ItemInnerSpacing=ImVec2(8,6);
+    st.ScrollbarSize=7.f;
+    st.WindowBorderSize=0.f; st.ChildBorderSize=1.f;
+    st.FrameBorderSize=0.f; st.TabRounding=8.f;
+    st.GrabRounding=6.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=themeIndex==2?ImVec4(.028f,.031f,.075f,1):themeIndex==1?ImVec4(.080f,.083f,.092f,1):ImVec4(.047f,.052f,.066f,1);
-    c[ImGuiCol_ChildBg]=themeIndex==2?ImVec4(.048f,.056f,.108f,1):themeIndex==1?ImVec4(.11f,.12f,.13f,1):ImVec4(.080f,.088f,.109f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.105f,.115f,.140f,1);
-    c[ImGuiCol_Border]=ImVec4(.18f,.20f,.24f,1);
-    c[ImGuiCol_Text]=ImVec4(.94f,.95f,.97f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.57f,.60f,.66f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.14f,.15f,.19f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.19f,.21f,.26f,1);
-    c[ImGuiCol_Button]=ImVec4(.16f,.18f,.22f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.24f,.26f,.31f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.29f,.31f,.37f,1);
-    c[ImGuiCol_Header]=ImVec4(.18f,.20f,.25f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.24f,.26f,.32f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.28f,.30f,.36f,1);
+    const bool midnight=themeIndex==2;
+    const bool graphite=themeIndex==1;
+    c[ImGuiCol_WindowBg]=midnight?ImVec4(.035f,.042f,.080f,1):
+        graphite?ImVec4(.065f,.072f,.083f,1):ImVec4(.043f,.051f,.066f,1);
+    c[ImGuiCol_ChildBg]=midnight?ImVec4(.065f,.077f,.125f,1):
+        graphite?ImVec4(.096f,.106f,.119f,1):ImVec4(.069f,.082f,.105f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.085f,.101f,.130f,1);
+    c[ImGuiCol_Border]=ImVec4(.18f,.215f,.27f,.78f);
+    c[ImGuiCol_Separator]=ImVec4(.19f,.225f,.28f,.75f);
+    c[ImGuiCol_Text]=ImVec4(.93f,.95f,.98f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.56f,.62f,.70f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.11f,.135f,.17f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.205f,.26f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.21f,.25f,.31f,1);
+    c[ImGuiCol_Button]=ImVec4(.13f,.16f,.21f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.19f,.235f,.30f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.24f,.28f,.35f,1);
+    c[ImGuiCol_Header]=ImVec4(.15f,.19f,.24f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.21f,.25f,.32f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.25f,.29f,.37f,1);
     c[ImGuiCol_CheckMark]=orange();
     c[ImGuiCol_SliderGrab]=orange();
-    c[ImGuiCol_Tab]=ImVec4(.12f,.14f,.18f,1);
-    c[ImGuiCol_TabHovered]=orange();
-    c[ImGuiCol_TabSelected]=ImVec4(orange().x*.5f,orange().y*.5f,orange().z*.5f,1);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.12f,.13f,.16f,.55f);
+    c[ImGuiCol_SliderGrabActive]=orange();
+    c[ImGuiCol_Tab]=ImVec4(.095f,.115f,.15f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(orange().x*.40f,orange().y*.40f,orange().z*.40f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(orange().x*.28f,orange().y*.28f,orange().z*.28f,1);
+    c[ImGuiCol_TabDimmed]=ImVec4(.085f,.105f,.135f,1);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.11f,.14f,.18f,1);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.20f,.24f,.29f,1);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.15f,.18f,.23f,.65f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.07f,.09f,.12f,.40f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.12f,.15f,.19f,.43f);
+    c[ImGuiCol_NavHighlight]=orange();
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.05f,.065f,.085f,1);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.22f,.27f,.33f,1);
 }
 static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
     ImGui::PushStyleColor(ImGuiCol_Button,orange());
@@ -1280,16 +1301,28 @@ static bool accentButton(const char* text,ImVec2 size=ImVec2(0,0)) {
     return clicked;
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
-    ImGui::TextColored(orange(),"%s",title);
-    if(description)ImGui::TextDisabled("%s",description);
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0,4));
+    ImGui::SetWindowFontScale(1.20f);
+    ImGui::TextUnformatted(title);
+    ImGui::SetWindowFontScale(1.f);
+    if(description) {
+        ImGui::TextDisabled("%s",description);
+    }
+    ImGui::Dummy(ImVec2(0,7));
 }
 static void metric(const char* label,const std::string& value,float width) {
-    ImGui::BeginChild(label,ImVec2(width,94),ImGuiChildFlags_Borders);
+    ImGui::BeginChild(label,ImVec2(width,110),ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    ImVec2 a=ImGui::GetWindowPos();
+    dl->AddRectFilled(ImVec2(a.x+1,a.y+16),ImVec2(a.x+4,a.y+70),
+        ImGui::ColorConvertFloat4ToU32(orange()),3.f);
+    ImGui::Indent(10.f);
     ImGui::TextDisabled("%s",label);
-    ImGui::SetWindowFontScale(1.35f);
+    ImGui::SetWindowFontScale(1.65f);
     ImGui::Text("%s",value.c_str());
     ImGui::SetWindowFontScale(1.f);
+    ImGui::Unindent(10.f);
     ImGui::EndChild();
 }
 static const char* stateText() {
@@ -1350,13 +1383,16 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(full>780.f && i%2)ImGui::SameLine(0,gap);
-        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,135),ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar);
-        ImGui::TextColored(m.implemented?orange():ImVec4(.70f,.72f,.76f,1),"%s",m.title);
+        ImGui::BeginChild("moduleTile",ImVec2(tileWidth,154),ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar);
+        ImGui::SetWindowFontScale(1.07f);
+        ImGui::TextUnformatted(m.title);
+        ImGui::SetWindowFontScale(1.f);
         ImGui::SameLine();
-        ImGui::TextDisabled("  %s",m.implemented?"AVAILABLE":"PLANNED");
+        ImGui::TextColored(m.implemented?ImVec4(.42f,.83f,.64f,1):ImVec4(.67f,.70f,.76f,1),
+            "  %s",m.implemented?"ACTIVE":"NOT IMPLEMENTED");
         ImGui::Separator();
-        ImGui::TextDisabled("%s",m.summary);
-        if(ImGui::Button("Inspect Evidence",ImVec2(150,29))) {
+        ImGui::TextWrapped("%s",m.summary);
+        if(ImGui::Button("Open investigation",ImVec2(180,31))) {
             inspectedModule=i;
             moduleSearch[0]=0;
             openInspectorRequested = true;
@@ -1909,47 +1945,92 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    const float sidebar=280.f;
+    const float sidebar=254.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16,17));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.066f,.088f,1.f));
     ImGui::BeginChild("##sidebar",ImVec2(sidebar,0),ImGuiChildFlags_None);
-    ImGui::Dummy(ImVec2(0,18));
+    ImGui::Dummy(ImVec2(0,9));
+    ImGui::BeginGroup();
     if(syncLogoTexture) {
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(70,70));
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        ImGui::SetWindowFontScale(1.20f);
-        ImGui::TextColored(orange(),"SYNC PC");
-        ImGui::Text("CHECKER");
-        ImGui::SetWindowFontScale(1.f);
-        ImGui::EndGroup();
-    } else {
-        ImGui::TextColored(orange(),"SYNC PC CHECKER");
+        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(58,58));
+        ImGui::SameLine(0,12);
     }
-    ImGui::TextDisabled("Developer: Mudin");
-    ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+    ImGui::BeginGroup();
+    ImGui::SetWindowFontScale(1.13f);
+    ImGui::TextUnformatted("SYNC PC");
+    ImGui::TextColored(orange(),"CHECKER");
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::EndGroup();
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0,8));
+    ImGui::TextDisabled("SECURITY ANALYSIS  /  MUDIN");
+    ImGui::Dummy(ImVec2(0,16));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,14));
+    ImGui::TextDisabled("  WORKSPACE");
+    ImGui::Dummy(ImVec2(0,8));
     const char* names[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
+    const char* symbols[]={"01","02","03","04","05","06"};
     for(int i=0;i<6;i++) {
         ImGui::PushID(i);
         const bool selected=(page==i);
         if(selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(orange().x*.34f,orange().y*.34f,orange().z*.34f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,orange());
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                ImVec4(orange().x*.20f,orange().y*.20f,orange().z*.20f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.98f,.98f,1.f,1.f));
         }
-        const bool clicked=ImGui::Button(names[i],ImVec2(-1,50));
-        if(selected)ImGui::PopStyleColor(2);
+        char nav[96];
+        snprintf(nav,sizeof(nav),"%s    %s",symbols[i],names[i]);
+        const ImVec2 pos=ImGui::GetCursorScreenPos();
+        const bool clicked=ImGui::Button(nav,ImVec2(-1,45));
+        if(selected) {
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(pos.x,pos.y+7),ImVec2(pos.x+3,pos.y+38),
+                ImGui::ColorConvertFloat4ToU32(orange()),2.f);
+            ImGui::PopStyleColor(2);
+        }
         if(clicked)page=i;
         ImGui::PopID();
+        ImGui::Dummy(ImVec2(0,3));
     }
-    ImGui::Dummy(ImVec2(0,22));
+    ImGui::Dummy(ImVec2(0,20));
     ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,12));
     ImGui::TextDisabled("SYSTEM ACCESS");
-    ImGui::TextColored(isAdministrator()?ImVec4(.43f,.81f,.60f,1):ImVec4(1,.65f,.36f,1),
-                       "%s",isAdministrator()?"Administrator":"Standard User");
+    ImGui::TextColored(isAdministrator()?ImVec4(.40f,.84f,.65f,1):
+        ImVec4(1,.65f,.36f,1),"%s",
+        isAdministrator()?"●  Administrator":"●  Standard User");
+    ImGui::Dummy(ImVec2(0,12));
+    ImGui::TextDisabled("READ-ONLY INSPECTION");
     ImGui::EndChild();
-    ImGui::SameLine();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::SameLine(0,0);
     ImGui::BeginChild("##main",ImVec2(0,0),ImGuiChildFlags_None);
-    ImGui::TextColored(orange(),"SYNC PC CHECKER");
-    ImGui::SameLine();ImGui::TextDisabled(" /  %s",names[page]);
-    ImGui::Separator();ImGui::Dummy(ImVec2(0,8));
+    // Command header: navigation context, scan state, and direct access to the scan.
+    ImGui::BeginChild("##commandHeader",ImVec2(0,67),ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::TextDisabled("WORKSPACE  /  %s",names[page]);
+    ImGui::SetWindowFontScale(1.17f);
+    ImGui::TextUnformatted("Sync PC Checker");
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::SameLine();
+    const float right=ImGui::GetContentRegionAvail().x;
+    if(right>300.f) {
+        ImGui::SameLine(ImGui::GetWindowWidth()-315.f);
+        ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.84f,.65f,1):
+            ImVec4(.63f,.68f,.75f,1),"%s",stateText());
+        ImGui::SameLine();
+        if(!scanning) {
+            if(accentButton("Run Scan",ImVec2(125,29))) {
+                startScan();page=1;
+            }
+        } else {
+            ImGui::TextDisabled("Collecting...");
+        }
+    }
+    ImGui::EndChild();
+    ImGui::Dummy(ImVec2(0,9));
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
