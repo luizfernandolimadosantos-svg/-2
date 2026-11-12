@@ -3453,7 +3453,7 @@ static void renderUI() {
     if(scanning || done){
         const int finished=completedStages.load();
         const int total=(std::max)(1,totalStages.load());
-        const int percent=done?100:(std::max)(0,(std::min)(99,finished*100/total)));
+        const int percent=done ? 100 : std::clamp(finished*100/total,0,99);
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.31f,.59f,.96f,1.f));
         const std::string overlay=std::to_string(percent)+"%";
         ImGui::ProgressBar(percent/100.f,ImVec2(-1,20.f),overlay.c_str());
@@ -3482,8 +3482,7 @@ static void renderUI() {
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING");
             const int total=(std::max)(1,totalStages.load());
-            const int percent=(std::max)(0,(std::min)(99,
-                completedStages.load()*100/total)));
+            const int percent=std::clamp(completedStages.load()*100/total,0,99);
             const std::string progressLabel=std::to_string(percent)+"%";
             ImGui::ProgressBar(percent/100.f,ImVec2(-1,18),
                                progressLabel.c_str());
