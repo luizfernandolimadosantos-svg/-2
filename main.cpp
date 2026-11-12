@@ -3449,6 +3449,67 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     draw->PopClipRect();
 }
 
+// Premium progress visualization. Percentage remains tied to the existing
+// 35-second presentation and completed scan stages; no synthetic detections.
+static void drawAtlasProgress(bool compact=false){
+    const int pct=inspectionDisplayPercent();
+    const float fraction=std::clamp(pct/100.f,0.f,1.f);
+    const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
+    const float height=compact?21.f:28.f;
+    const ImVec2 p=ImGui::GetCursorScreenPos();
+    const ImVec2 q(p.x+width,p.y+height);
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    const float t=static_cast<float>(ImGui::GetTime());
+    dl->AddRectFilled(p,q,IM_COL32(13,27,46,255),9.f);
+    dl->AddRect(p,q,IM_COL32(66,102,149,195),9.f,0,1.1f);
+    if(fraction>0.001f){
+        const float fillW=width*fraction;
+        dl->PushClipRect(p,ImVec2(p.x+fillW,q.y),true);
+        dl->AddRectFilledMultiColor(
+            ImVec2(p.x,p.y+2.f),ImVec2(p.x+width,p.y+height-2.f),
+            IM_COL32(32,102,194,255),IM_COL32(72,156,255,255),
+            IM_COL32(32,102,194,255),IM_COL32(72,156,255,255));
+        dl->AddRectFilled(
+            ImVec2(p.x,p.y+2.f),ImVec2(p.x+fillW,p.y+5.f),
+            IM_COL32(177,218,255,65),2.f);
+        // A soft moving highlight is clipped to the filled part only.
+        const float sweep=std::fmod(t*92.f,width+120.f)-60.f;
+        for(int i=0;i<10;++i){
+            const float x=p.x+sweep+i*4.f;
+            dl->AddRectFilled(ImVec2(x,p.y+3.f),
+                ImVec2(x+4.f,q.y-3.f),
+                IM_COL32(209,232,255,(i<5?i+1:10-i)*5));
+        }
+        dl->PopClipRect();
+        const float edgeX=p.x+fillW;
+        dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
+            8.f,IM_COL32(108,178,255,36),18);
+        dl->AddCircleFilled(ImVec2(edgeX,p.y+height*.5f),
+            3.f,IM_COL32(209,236,255,135),12);
+    }
+    char label[16]{};
+    snprintf(label,sizeof(label),"%d%%",pct);
+    const ImVec2 textSize=ImGui::CalcTextSize(label);
+    dl->AddText(ImVec2(p.x+(width-textSize.x)*.5f,
+                       p.y+(height-textSize.y)*.5f),
+                IM_COL32(246,250,255,255),label);
+    ImGui::Dummy(ImVec2(width,height));
+    if(!compact){
+        ImGui::Dummy(ImVec2(0,5.f));
+        const char* phase=done?
+            (pct==100?"INSPECTION COMPLETE":"PREPARING RESULTS"):
+            scanning?(cancelRequested?"CANCELLING INSPECTION":
+                      stages[std::clamp(stage.load(),0,5)]):
+            "READY";
+        ImGui::TextColored(ImVec4(.59f,.72f,.89f,1.f),"%s",phase);
+        if(ImGui::IsItemHovered()){
+            ImGui::SetTooltip(
+                "Progress shows completed scan stages and the presentation timer. "
+                "Results unlock only after both are complete.");
+        }
+    }
+}
+
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
@@ -3694,10 +3755,7 @@ static void renderUI() {
     // Shared across every page: measured completed stages, never timer-based.
     if(scanning || done){
         const int percent=inspectionDisplayPercent();
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.31f,.59f,.96f,1.f));
-        const std::string overlay=std::to_string(percent)+"%";
-        ImGui::ProgressBar(percent/100.f,ImVec2(-1,20.f),overlay.c_str());
-        ImGui::PopStyleColor();
+        drawAtlasProgress(false);
         ImGui::TextDisabled("%s",
             done ? (percent==100 ? "INSPECTION COMPLETE" :
                 "SCAN COMPLETE - PREPARING RESULTS") :
@@ -3829,9 +3887,7 @@ static void renderUI() {
         if(scanning){
             ImGui::TextColored(accent,"INSPECTION RUNNING");
             const int percent=inspectionDisplayPercent();
-            const std::string progressLabel=std::to_string(percent)+"%";
-            ImGui::ProgressBar(percent/100.f,ImVec2(-1,18),
-                               progressLabel.c_str());
+            drawAtlasProgress(true);
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else{
             if(accentButton("START FULL INSPECTION",ImVec2(220,42)))startScan();
