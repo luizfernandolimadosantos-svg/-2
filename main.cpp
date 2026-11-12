@@ -1681,7 +1681,8 @@ static int inspectionDisplayPercent(){
     return (std::min)(paced,measured);
 }
 static void startScan() {
-    if(scanning)return;
+    if(scanning || (done && inspectionProgressStart>0.0 &&
+        inspectionDisplayPercent()<100))return;
     peFilesInspected=0;
     inspectionProgressStart=ImGui::GetTime();
     cancelRequested=false;done=false;scanFailed=false;scanCancelled=false;defenderAlerts=0;defenderNotificationPending=false;completedStages=0;stage=0;scanning=true;
@@ -3699,12 +3700,80 @@ static void renderUI() {
         ImGui::PopStyleColor();
         ImGui::TextDisabled("%s",
             done ? (percent==100 ? "INSPECTION COMPLETE" :
-                "SCAN COMPLETE - RESULTS READY (DISPLAY ANIMATION)") :
+                "SCAN COMPLETE - PREPARING RESULTS") :
                 "FULL INSPECTION IN PROGRESS");
         ImGui::Spacing();
     }
     float available=ImGui::GetContentRegionAvail().x;
-    if(page==0) {
+    // All non-dashboard pages are locked until the scan AND its presentation
+    // reach 100%. This is a visual privacy curtain, not a fake scan result.
+    const bool waitingForPresentation=
+        inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 &&
+        (scanning || done);
+    if(waitingForPresentation && page!=0) {
+        const ImVec2 area=ImGui::GetCursorScreenPos();
+        const ImVec2 avail=ImGui::GetContentRegionAvail();
+        const float w=(std::max)(300.f,avail.x);
+        const float h=(std::max)(290.f,avail.y);
+        ImDrawList* curtain=ImGui::GetWindowDrawList();
+        // Frosted-glass approximation: layered translucent panels and
+        // diffuse highlights. No unimplemented GPU blur is claimed.
+        curtain->AddRectFilled(area,ImVec2(area.x+w,area.y+h),
+            IM_COL32(9,18,32,247),14.f);
+        curtain->AddRectFilledMultiColor(
+            ImVec2(area.x+12,area.y+12),ImVec2(area.x+w-12,area.y+h-12),
+            IM_COL32(35,68,107,85),IM_COL32(23,43,75,65),
+            IM_COL32(13,25,43,95),IM_COL32(25,46,78,80));
+        for(int ring=9;ring>=1;--ring){
+            const float r=95.f+ring*13.f;
+            curtain->AddCircleFilled(
+                ImVec2(area.x+w*.5f,area.y+h*.39f),r,
+                IM_COL32(69,127,206,2),48);
+        }
+        curtain->AddRect(area,ImVec2(area.x+w,area.y+h),
+            IM_COL32(72,116,166,130),14.f,0,1.2f);
+        // Lock silhouette rendered directly with ImDrawList.
+        const ImVec2 center(area.x+w*.5f,area.y+h*.39f);
+        curtain->AddCircleFilled(center,54.f,IM_COL32(27,52,83,220),48);
+        curtain->AddCircle(center,54.f,IM_COL32(91,150,222,160),48,1.6f);
+        curtain->PathClear();
+        curtain->PathArcTo(ImVec2(center.x,center.y-9.f),19.f,3.14159265f,6.2831853f,24);
+        curtain->PathStroke(IM_COL32(201,227,255,255),0,5.f);
+        curtain->AddRectFilled(
+            ImVec2(center.x-26.f,center.y-13.f),
+            ImVec2(center.x+26.f,center.y+26.f),
+            IM_COL32(110,173,245,255),7.f);
+        curtain->AddCircleFilled(
+            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(13,31,54,255),16);
+        curtain->AddRectFilled(
+            ImVec2(center.x-2.f,center.y+3.f),
+            ImVec2(center.x+2.f,center.y+14.f),
+            IM_COL32(13,31,54,255),2.f);
+        ImGui::SetCursorScreenPos(ImVec2(area.x,center.y+76.f));
+        ImGui::PushTextWrapPos(area.x+w-24.f);
+        ImGui::SetWindowFontScale(1.35f);
+        const char* heading="INSPECTION LOCKED";
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
+            (w-ImGui::CalcTextSize(heading).x)*.5f);
+        ImGui::TextColored(ImVec4(.90f,.96f,1.f,1.f),"%s",heading);
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::Dummy(ImVec2(0,9.f));
+        const char* detail="Results unlock when the scan reaches 100%.";
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
+            (w-ImGui::CalcTextSize(detail).x)*.5f);
+        ImGui::TextColored(ImVec4(.62f,.73f,.86f,1.f),"%s",detail);
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0,22.f));
+        const float buttonWidth=245.f;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
+            (w-buttonWidth)*.5f);
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.16f,.35f,.59f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.22f,.46f,.75f,1.f));
+        if(ImGui::Button("RETURN TO SCAN",ImVec2(buttonWidth,45.f)))
+            page=0;
+        ImGui::PopStyleColor(2);
+        ImGui::Dummy(ImVec2(0,1.f));
+    } else if(page==0) {
         // Rebuilt command center; no legacy metric() tiles.
         const ImVec4 pale(.93f,.96f,1,1),quiet(.52f,.61f,.73f,1),accent(.48f,.70f,1,1);
         const float full=ImGui::GetContentRegionAvail().x;
