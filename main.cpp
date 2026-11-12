@@ -11,6 +11,8 @@
 #include <winsvc.h>
 #include <iphlpapi.h>
 #include <ws2tcpip.h>
+#include <tcpmib.h>
+#include <cstring>
 #include <winreg.h>
 #include <cctype>
 #include <cwctype>
@@ -610,12 +612,15 @@ static std::vector<Record> enumerateTcp6() {
     std::vector<BYTE> buffer(bytes);
     rc=GetExtendedTcpTable(buffer.data(),&bytes,FALSE,AF_INET6,TCP_TABLE_OWNER_PID_ALL,0);
     if(rc!=NO_ERROR)return out;
-    auto* table=reinterpret_cast<PMIB_TCP6TABLE_OWNER_PID>(buffer.data());
+    auto* table=reinterpret_cast<MIB_TCP6TABLE_OWNER_PID*>(buffer.data());
     for(DWORD i=0;i<table->dwNumEntries && !cancelRequested;i++) {
         const auto& e=table->table[i];
         char local[INET6_ADDRSTRLEN]{},remote[INET6_ADDRSTRLEN]{};
-        InetNtopA(AF_INET6,(void*)e.ucLocalAddr,local,sizeof(local));
-        InetNtopA(AF_INET6,(void*)e.ucRemoteAddr,remote,sizeof(remote));
+        IN6_ADDR localAddress{}, remoteAddress{};
+        std::memcpy(&localAddress, e.ucLocalAddr, sizeof(localAddress));
+        std::memcpy(&remoteAddress, e.ucRemoteAddr, sizeof(remoteAddress));
+        InetNtopA(AF_INET6, &localAddress, local, sizeof(local));
+        InetNtopA(AF_INET6, &remoteAddress, remote, sizeof(remote));
         std::ostringstream detail;
         detail<<"["<<local<<"]:"<<ntohs((u_short)e.dwLocalPort)
               <<" -> ["<<remote<<"]:"<<ntohs((u_short)e.dwRemotePort)
