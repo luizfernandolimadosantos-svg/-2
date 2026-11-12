@@ -1969,11 +1969,12 @@ static void renderUI() {
     ImGui::Dummy(ImVec2(0,14));
     ImGui::TextDisabled("  WORKSPACE");
     ImGui::Dummy(ImVec2(0,8));
-    const char* names[]={"Dashboard","Inspection","Results","Timeline","Settings","Digital Identity"};
-    const char* symbols[]={"01","02","03","04","05","06"};
-    for(int i=0;i<6;i++) {
+    const char* names[]={"Dashboard","Results","Timeline","Settings","Digital Identity"};
+    const char* symbols[]={"01","02","03","04","05"};
+    const int targets[]={0,2,3,4,5};
+    for(int i=0;i<5;i++) {
         ImGui::PushID(i);
-        const bool selected=(page==i);
+        const bool selected=(page==targets[i]);
         if(selected) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                 ImVec4(orange().x*.20f,orange().y*.20f,orange().z*.20f,1.f));
@@ -1989,7 +1990,7 @@ static void renderUI() {
                 ImGui::ColorConvertFloat4ToU32(orange()),2.f);
             ImGui::PopStyleColor(2);
         }
-        if(clicked)page=i;
+        if(clicked)page=targets[i];
         ImGui::PopID();
         ImGui::Dummy(ImVec2(0,3));
     }
@@ -2007,82 +2008,41 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::SameLine(0,0);
     ImGui::BeginChild("##main",ImVec2(0,0),ImGuiChildFlags_None);
-    // Command header: navigation context, scan state, and direct access to the scan.
-    ImGui::BeginChild("##commandHeader",ImVec2(0,67),ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar);
-    ImGui::TextDisabled("WORKSPACE  /  %s",names[page]);
-    ImGui::SetWindowFontScale(1.17f);
-    ImGui::TextUnformatted("Sync PC Checker");
-    ImGui::SetWindowFontScale(1.f);
-    ImGui::SameLine();
-    const float right=ImGui::GetContentRegionAvail().x;
-    if(right>300.f) {
-        ImGui::SameLine(ImGui::GetWindowWidth()-315.f);
-        ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.84f,.65f,1):
-            ImVec4(.63f,.68f,.75f,1),"%s",stateText());
-        ImGui::SameLine();
-        if(!scanning) {
-            if(accentButton("Run Scan",ImVec2(125,29))) {
-                startScan();page=1;
-            }
-        } else {
-            ImGui::TextDisabled("Collecting...");
-        }
-    }
-    ImGui::EndChild();
-    ImGui::Dummy(ImVec2(0,9));
+    // The dashboard owns scan controls and module coverage.
+    // No duplicate workspace/scan header is rendered.
+    if(page==1)page=0;
     float available=ImGui::GetContentRegionAvail().x;
     float metricWidth=(available-24.f)/3.f;
     if(page==0) {
-        sectionTitle("SYSTEM OVERVIEW","Comprehensive read-only system inspection");
-        ImGui::BeginChild("hero",ImVec2(0,183),ImGuiChildFlags_Borders);
-        ImGui::TextDisabled("INSPECTION CENTER");
-        ImGui::SetWindowFontScale(1.6f);
-        ImGui::Text("%s",scanning?"Inspection in Progress":done?"Inspection Completed":"Ready for Inspection");
-        ImGui::SetWindowFontScale(1.f);
-        ImGui::TextDisabled("All available modules. One complete workflow.");
-        ImGui::Spacing();
-        if(!scanning) {
-            if(accentButton("Start Full Scan",ImVec2(225,46))) { startScan(); page=1; }
+        sectionTitle("SECURITY OVERVIEW","Live system inventory, scan controls and module investigations");
+        ImGui::BeginChild("scanControls",ImVec2(0,scanning?151:125),ImGuiChildFlags_Borders);
+        ImGui::TextColored(scanning?orange():done?ImVec4(.40f,.84f,.65f,1):
+            ImVec4(.70f,.76f,.84f,1),"%s",stateText());
+        ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
+        if(scanning) {
+            const int idx=(std::min)(stage.load(),5);
+            ImGui::TextDisabled("Collecting: %s",stages[idx]);
+            const int total=(std::max)(1,totalStages.load());
+            ImGui::ProgressBar(completedStages.load()/(float)total,ImVec2(-1,12));
+            if(ImGui::Button("Cancel Scan",ImVec2(160,31)))cancelRequested=true;
         } else {
-            if(ImGui::Button("View Inspection",ImVec2(225,46)))page=1;
+            if(accentButton("Start Full Scan",ImVec2(210,39))) {
+                startScan();
+                status="Full inspection running";
+            }
+            ImGui::SameLine();
+            if(ImGui::Button("View Results",ImVec2(150,39)))page=2;
         }
         ImGui::EndChild();
-        ImGui::Spacing();
+        ImGui::Dummy(ImVec2(0,9));
         metric("Processes",std::to_string(processCount.load()),metricWidth);
         ImGui::SameLine();
         metric("System Records",std::to_string(recordCount.load()),metricWidth);
         ImGui::SameLine();
         metric("Files Verified",std::to_string(fileCount.load()),metricWidth);
-        ImGui::Spacing();
-        sectionTitle("INSPECTION COVERAGE","Real collection status; no fabricated findings");
-        ImGui::BeginChild("coverage",ImVec2(0,0),ImGuiChildFlags_Borders);
-        ImGui::Text("Current status: %s",stateText());
-        ImGui::Separator();
-        ImGui::TextDisabled("Available: Processes, Services, Drivers, Startup, TCP/UDP IPv4, USB storage, File Integrity");
-        ImGui::TextDisabled("Planned: Memory, Hooks, USB timestamps, Execution forensics, FiveM reference checks");
-        if(ImGui::Button("Browse Inspection Modules"))page=1;
-        ImGui::EndChild();
-    } else if(page==1) {
-        sectionTitle("SYSTEM INSPECTION","Live collection status and module availability");
-        ImGui::BeginChild("inspectionCard",ImVec2(0,scanning?160:126),ImGuiChildFlags_Borders);
-        ImGui::Text("Status: %s",stateText());
-        ImGui::SameLine();ImGui::TextDisabled("  |  %zu processes / %zu records",processCount.load(),recordCount.load());
-        if(scanning) {
-            int idx=(std::min)(stage.load(),5);
-            ImGui::TextDisabled("Current stage: %s",stages[idx]);
-            ImGui::ProgressBar(completedStages.load()/(float)totalStages.load(),ImVec2(-1,15));
-            if(ImGui::Button("Cancel Inspection"))cancelRequested=true;
-        } else {
-            ImGui::TextDisabled("Read-only inspection of accessible Windows sources.");
-            if(accentButton("Start Full Scan",ImVec2(210,42))) {
-                startScan();status="Full inspection running";page=2;
-            }
-        }
-        ImGui::EndChild();
-        ImGui::Spacing();
-        sectionTitle("MODULE COVERAGE","12 inspection categories preserved");
-        ImGui::BeginChild("moduleBrowser",ImVec2(0,0),ImGuiChildFlags_None);
+        ImGui::Dummy(ImVec2(0,9));
+        sectionTitle("INSPECTION MODULES","Select Open investigation to view collected evidence");
+        ImGui::BeginChild("dashboardModules",ImVec2(0,0),ImGuiChildFlags_None);
         modulesList();
         ImGui::EndChild();
     } else if(page==2) {
