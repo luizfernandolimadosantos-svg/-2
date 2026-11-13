@@ -19496,6 +19496,33 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::Dummy(ImVec2(width,height));
     ImGui::PopID();
 }
+// UI-only stage presentation: never changes worker progress or scan results.
+// Completed milestones are revealed sequentially even if the worker finishes
+// several of them between two rendered frames.
+static int inspectionPresentedStages(){
+    static double lastScanStart=-1.0;
+    static double lastAdvance=0.0;
+    static int presented=0;
+    const double now=ImGui::GetTime();
+    if(lastScanStart!=inspectionProgressStart){
+        lastScanStart=inspectionProgressStart;
+        lastAdvance=now;
+        presented=0;
+    }
+    const int actual=std::clamp(completedStages.load(),0,6);
+    if(inspectionProgressStart<=0.0 || (!scanning && !done)){
+        presented=0;
+        lastAdvance=now;
+        return presented;
+    }
+    if(actual<presented){presented=actual;lastAdvance=now;}
+    // Presentation only: at most one completed stage every 0.65 seconds.
+    if(presented<actual && now-lastAdvance>=0.65){
+        ++presented;
+        lastAdvance=now;
+    }
+    return presented;
+}
 static void drawAtlasProgress(bool compact=false){
     const int verified=inspectionDisplayPercent();
     const float fraction=smoothInspectionVisual(
@@ -19532,7 +19559,9 @@ static void drawAtlasProgress(bool compact=false){
         "PUBLICAÇÃO DOS RESULTADOS"
     };
     constexpr int phaseCount=6;
-    const int completed=std::clamp(completedStages.load(),0,6);
+    const int actualCompleted=std::clamp(completedStages.load(),0,6);
+    const int completed=inspectionPresentedStages();
+    const bool presentingEarlierStage=completed<actualCompleted;
     const int activeIndex=std::clamp(completed,0,5);
     const char* activeName=displayLanguage==1?
         phaseNamesPt[activeIndex]:phaseNames[activeIndex];
@@ -19553,12 +19582,16 @@ static void drawAtlasProgress(bool compact=false){
         ImGui::SetTooltip("6 real scan stages | Green: complete | Grey: active | Dark: pending");
     ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
     ImGui::SameLine();
-    ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
-    ImGui::TextUnformatted(done?
+    ImGui::TextDisabled("%02d / %02d",done && completed==6?6:activeIndex+1,phaseCount);
+    ImGui::TextUnformatted(done && completed==6?
         (displayLanguage==1?"TODAS AS ETAPAS CONCLUÍDAS":"ALL STAGES COMPLETE"):activeName);
+    if(presentingEarlierStage)
+        ImGui::TextDisabled("%s",displayLanguage==1?
+            "Exibindo etapas concluidas (progresso real acima)":
+            "Showing completed stages (actual progress above)");
     // A stage reaches 100% only when its worker milestone is completed.
     // Use indeterminate activity rather than inventing a percentage within it.
-    if(!done && scanning){
+    if(!done && scanning && !presentingEarlierStage){
         const unsigned total=sequentialTotal.load();
         const unsigned checked=sequentialDone.load();
         const float t=static_cast<float>(ImGui::GetTime());
@@ -19572,8 +19605,9 @@ static void drawAtlasProgress(bool compact=false){
         const std::string current=getSequentialItem();
         if(!current.empty())ImGui::TextWrapped("%s: %s",
             displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
-    }else if(!done){
-        drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
+    }else if(!done || presentingEarlierStage){
+        drawProfessionalProgressTrack("active-stage",activeName,
+            presentingEarlierStage?1.f:0.f,width,11.f);
     }
     ImGui::Spacing();
     const char* phase=scanFailed?"INSPECTION FAILED":
