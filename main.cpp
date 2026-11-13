@@ -17703,12 +17703,12 @@ static ImVec4 orange(){return ImVec4(.88f,.88f,.88f,1.f);}
 static void applyTheme() {
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=10.f;
-    st.ChildRounding=12.f;
+    st.WindowRounding=13.f;
+    st.ChildRounding=13.f;
     st.FrameRounding=cornerStyle==0?3.f:cornerStyle==1?7.f:11.f;
     st.PopupRounding=12.f;
     st.ScrollbarRounding=3.f;
-    st.TabRounding=9.f;
+    st.TabRounding=8.f;
     st.GrabRounding=3.f;
     st.WindowBorderSize=0.f;
     st.ChildBorderSize=1.f;
@@ -17720,42 +17720,42 @@ static void applyTheme() {
     st.CellPadding=ImVec2(16.f,densityIndex==0?11.f:densityIndex==2?16.f:13.f);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.027f,.027f,.027f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.052f,.052f,.052f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.075f,.075f,.075f,1);
-    c[ImGuiCol_Border]=ImVec4(.22f,.22f,.22f,1);
-    c[ImGuiCol_Separator]=ImVec4(.18f,.18f,.18f,1);
-    c[ImGuiCol_Text]=ImVec4(.96f,.96f,.96f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.61f,.61f,.61f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.105f,.105f,.105f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.17f,.17f,.17f,1);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.23f,.23f,.23f,1);
-    c[ImGuiCol_Button]=ImVec4(.105f,.105f,.105f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.22f,.22f,.22f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.33f,.33f,.33f,1);
-    c[ImGuiCol_Header]=ImVec4(.18f,.18f,.18f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.27f,.27f,.27f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.36f,.36f,.36f,1);
-    c[ImGuiCol_CheckMark]=ImVec4(.95f,.95f,.95f,1);
-    c[ImGuiCol_SliderGrab]=ImVec4(.72f,.72f,.72f,1);
-    c[ImGuiCol_SliderGrabActive]=ImVec4(.95f,.95f,.95f,1);
-    c[ImGuiCol_Tab]=ImVec4(.12f,.12f,.12f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.24f,.24f,.24f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.33f,.33f,.33f,1);
-    c[ImGuiCol_TabDimmed]=ImVec4(.07f,.07f,.07f,1);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.13f,.13f,.13f,1);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.25f,.25f,.25f,1);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.17f,.17f,.17f,1);
-    c[ImGuiCol_TableRowBg]=ImVec4(.045f,.045f,.045f,1);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.075f,.075f,.075f,1);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(.55f,.55f,.55f,.4f);
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.04f,.04f,.04f,1);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.30f,.30f,.30f,1);
-    c[ImGuiCol_NavHighlight]=ImVec4(.80f,.80f,.80f,1);
+    c[ImGuiCol_WindowBg]=ImVec4(.035f,.047f,.067f,1);
+    c[ImGuiCol_ChildBg]=ImVec4(.055f,.070f,.095f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.073f,.092f,.122f,1);
+    c[ImGuiCol_Border]=ImVec4(.19f,.25f,.31f,1);
+    c[ImGuiCol_Separator]=ImVec4(.16f,.22f,.28f,1);
+    c[ImGuiCol_Text]=ImVec4(.94f,.97f,.98f,1);
+    c[ImGuiCol_TextDisabled]=ImVec4(.64f,.72f,.78f,1);
+    c[ImGuiCol_FrameBg]=ImVec4(.095f,.12f,.15f,1);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.14f,.20f,.23f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.18f,.25f,.28f,1);
+    c[ImGuiCol_Button]=ImVec4(.095f,.14f,.17f,1);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.13f,.23f,.23f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.13f,.32f,.28f,1);
+    c[ImGuiCol_Header]=ImVec4(.12f,.19f,.22f,1);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.15f,.26f,.27f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.16f,.33f,.29f,1);
+    c[ImGuiCol_CheckMark]=ImVec4(.34f,.91f,.69f,1);
+    c[ImGuiCol_SliderGrab]=ImVec4(.32f,.76f,.60f,1);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.44f,.94f,.75f,1);
+    c[ImGuiCol_Tab]=ImVec4(.09f,.14f,.18f,1);
+    c[ImGuiCol_TabHovered]=ImVec4(.15f,.26f,.27f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.13f,.29f,.27f,1);
+    c[ImGuiCol_TabDimmed]=ImVec4(.055f,.085f,.11f,1);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.09f,.15f,.18f,1);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.21f,.29f,.33f,1);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.14f,.20f,.24f,1);
+    c[ImGuiCol_TableRowBg]=ImVec4(.055f,.075f,.098f,1);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.072f,.097f,.123f,1);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.19f,.58f,.46f,.40f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.045f,.065f,.084f,1);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.22f,.33f,.37f,1);
+    c[ImGuiCol_NavHighlight]=ImVec4(.34f,.90f,.70f,1);
     c[ImGuiCol_TitleBg]=ImVec4(.035f,.035f,.035f,1.f);
     c[ImGuiCol_TitleBgActive]=ImVec4(.055f,.055f,.055f,1.f);
     c[ImGuiCol_MenuBarBg]=ImVec4(.055f,.055f,.055f,1.f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.088f,.088f,.088f,1.f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.072f,.097f,.123f,1);
     c[ImGuiCol_PlotLines]=ImVec4(.74f,.74f,.74f,1.f);
     c[ImGuiCol_PlotHistogram]=ImVec4(.82f,.82f,.82f,1.f);
     c[ImGuiCol_ResizeGrip]=ImVec4(.40f,.40f,.40f,.40f);
@@ -19670,7 +19670,7 @@ static void renderUI() {
     const ImVec4 titleInk(.97f,.97f,.97f,1);
     const ImVec4 subtleInk(.60f,.60f,.60f,1);
     const ImVec4 accentInk(.84f,.84f,.84f,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.039f,0.039f,0.039f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.074f,.094f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
@@ -19740,6 +19740,35 @@ static void renderUI() {
     ImGui::SameLine(0,7);
     if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
     ImGui::EndChild();
+
+    // Compact, factual status strip: no inferred malware verdict.
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.092f,.115f,1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
+    if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
+        ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
+        const bool running=scanning.load();
+        const bool completed=done && !scanFailed && !scanCancelled;
+        const ImVec4 stateColor=scanFailed?
+            ImVec4(.96f,.45f,.45f,1.f):
+            running?ImVec4(.93f,.74f,.38f,1.f):
+            completed?ImVec4(.36f,.90f,.68f,1.f):
+            ImVec4(.65f,.74f,.81f,1.f);
+        ImGui::TextColored(stateColor,"%s",
+            scanFailed?"SCAN FAILED":scanCancelled?"CANCELLED":
+            running?"SCANNING":completed?"SCAN COMPLETE":"READY");
+        ImGui::SameLine(0,18);
+        ImGui::TextDisabled("Processes: %zu",processCount.load());
+        ImGui::SameLine(0,18);
+        ImGui::TextDisabled("Records: %zu",recordCount.load());
+        if(ImGui::GetContentRegionAvail().x>180.f) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Read-only  |  Manual review");
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
     // Global alert appears on every main page after a completed scan.
     if(bypassCorrelatedAlert.load() && !scanning.load()){
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.29f,.055f,.065f,1.f));
@@ -19756,11 +19785,13 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.030f,0.030f,0.030f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.065f,.084f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
     const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
     const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
-    const int navRows=simplifiedInterface?1:(9+navColumns-1)/navColumns;
+    const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
+    const int navRows=simplifiedInterface?
+        (4+simpleColumns-1)/simpleColumns:(9+navColumns-1)/navColumns;
     const float navRowHeight=46.f;
     ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
@@ -19795,17 +19826,17 @@ static void renderUI() {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
     const float navWidth=(std::max)(85.f,
         (ImGui::GetContentRegionAvail().x-
-         ((simplifiedInterface?4:navColumns)-1)*navGap)/
-         (simplifiedInterface?4:navColumns));
+         ((simplifiedInterface?simpleColumns:navColumns)-1)*navGap)/
+         (simplifiedInterface?simpleColumns:navColumns));
     for(int visible=0;visible<visibleNavCount;visible++){
         const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.261f,0.261f,0.261f,1));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.13f,.29f,.26f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.947f,0.947f,0.947f,1));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(0.590f,0.590f,0.590f,1));
+            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.28f,.78f,.60f,1));
         }
         const bool hoveredBefore=ImGui::IsMousePosValid() &&
             ImGui::IsMouseHoveringRect(ImGui::GetCursorScreenPos(),
@@ -19841,7 +19872,7 @@ static void renderUI() {
             ImGui::GetWindowDrawList()->AddRectFilled(
                 ImVec2(tabMin.x+1.f,tabMin.y+9.f),
                 ImVec2(tabMin.x+3.f,tabMax.y-9.f),
-                IM_COL32(186,186,186,230),1.f);
+                IM_COL32(79,220,163,230),1.f);
         } else if(showNavHover && ImGui::IsItemHovered()){
             ImGui::GetWindowDrawList()->AddRect(
                 ImVec2(tabMin.x+.5f,tabMin.y+.5f),
@@ -19852,7 +19883,8 @@ static void renderUI() {
         ImGui::PopStyleVar();
         ImGui::PopID();
         if(simplifiedInterface){
-            if(visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
+            if(visible%simpleColumns!=simpleColumns-1 &&
+               visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
         }else if(i%navColumns!=navColumns-1 && i!=8){
             ImGui::SameLine(0,navGap);
         }
@@ -19862,7 +19894,7 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.019f,0.019f,0.019f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.038f,.054f,.074f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
