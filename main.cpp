@@ -2693,7 +2693,7 @@ static std::vector<Record> inspectShellInitialization(){
             if(!nameMatch && !unusual)continue;
             out.push_back({"Shell Initialization",utf8(valueName),
                 std::string(nameMatch?"REVIEW - NAME RULE":
-                    (broad||temp?"NEEDS REVIEW":"INVENTORY ONLY"))+
+                    (unusual?"NEEDS REVIEW":"INVENTORY ONLY"))+
                 " | "+k.label+" | Value: "+utf8(value)+
                 " | Why: shell initialization references an unusual command "
                 "or a name-rule match. Confirm this is expected."});
@@ -6045,7 +6045,7 @@ static void drawServiceReviews() {
     ImGui::SetNextItemWidth((std::max)(100.f,ImGui::GetContentRegionAvail().x-245.f));
     ImGui::InputTextWithHint("##serviceSearch","Search service name, display name, state, assessment...",serviceSearch,sizeof(serviceSearch));
     ImGui::SameLine();
-    if(ImGui::SmallButton("Clear##serviceSearch"))serviceSearch[0]='\\0';
+    if(ImGui::SmallButton("Clear##serviceSearch"))serviceSearch[0]='\0';
     ImGui::SameLine();
     ImGui::SetNextItemWidth(128.f);
     ImGui::Combo("##serviceStateFilter",&serviceStateFilter,"All\\0Running\\0Stopped\\0Suspect\\0\\0");
