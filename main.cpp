@@ -6,6 +6,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <winver.h>
+#include <corhdr.h>
+#pragma comment(lib,"version.lib")
 #include <winioctl.h>
 #include <windowsx.h>
 #include <ctime>
@@ -3572,13 +3575,25 @@ static void drawEvidenceInspector(){
     static int selected=-1;
     static char query[160]{};
     ImGui::InputTextWithHint("##evidenceSearch","Search category, name or details...",query,sizeof(query));
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Clear evidence filter"))query[0]='\\0';
+    ImGui::TextDisabled("Tip: use category, executable name, PID or rule number to narrow the evidence.");
     ImGui::TextDisabled("%zu records available | Read-only evidence inspector",records.size());
+    ImGui::TextDisabled("Search ignores letter case. Findings are indicators, not verdicts.");
     if(ImGui::BeginChild("##evidenceList",ImVec2(0,270),ImGuiChildFlags_Borders)){
         unsigned shown=0;
         for(size_t i=0;i<records.size() && shown<500;++i){
             const auto& r=records[i];
             const std::string text=r.category+" / "+r.name+" / "+r.detail;
-            if(query[0] && text.find(query)==std::string::npos)continue;
+            if(query[0]){
+                std::string needle=query;
+                std::string haystack=text;
+                std::transform(needle.begin(),needle.end(),needle.begin(),
+                    [](unsigned char c){return static_cast<char>(std::tolower(c));});
+                std::transform(haystack.begin(),haystack.end(),haystack.begin(),
+                    [](unsigned char c){return static_cast<char>(std::tolower(c));});
+                if(haystack.find(needle)==std::string::npos)continue;
+            }
             ImGui::PushID(static_cast<int>(i));
             if(ImGui::Selectable((r.category+" | "+r.name).c_str(),
                                  selected==static_cast<int>(i)))
@@ -4577,6 +4592,12387 @@ static std::vector<Record> inspectExecutableAndDriverReview(const std::vector<Pr
     }
     return records;
 }
+
+// Fifteen bounded, read-only artifact rules. These are path/name heuristics,
+// NOT proof of injection, kernel bypass, malware, or cheating.
+static std::vector<Record> inspectFifteenArtifactRules(const std::vector<Process>& processes){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seenPaths;
+    const auto has=[](const std::wstring& a,const wchar_t* b){
+        return a.find(b)!=std::wstring::npos;
+    };
+    auto add=[&](const char* category,const char* rule,const std::wstring& name,
+                 DWORD pid,const std::wstring& path){
+        if(out.size()>=450)return;
+        out.push_back({category,utf8(name),
+            std::string("REVIEW ONLY | Rule: ")+rule+
+            " | PID: "+std::to_string(pid)+" | Path: "+utf8(path)+
+            " | Name/path indicator only; verify provenance and signature."});
+    };
+    for(const auto& p:processes){
+        if(cancelRequested || out.size()>=450)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const auto path=lowerPath(p.path);
+        if(!seenPaths.insert(path).second)continue;
+        const auto name=lowerPath(fs::path(path).filename().wstring());
+        // 1-10: executable file-location and masquerade indicators.
+        if(has(path,L"\\appdata\\local\\temp\\") && has(name,L"update"))
+            add("EXE Artifact Rule","01 temporary updater",p.name,p.pid,p.path);
+        if(has(path,L"\\downloads\\") && has(name,L"setup"))
+            add("EXE Artifact Rule","02 downloads setup executable",p.name,p.pid,p.path);
+        if(has(path,L"\\appdata\\roaming\\") && has(name,L"service"))
+            add("EXE Artifact Rule","03 roaming service-like executable",p.name,p.pid,p.path);
+        if(has(path,L"\\programdata\\") && has(name,L"svchost"))
+            add("EXE Artifact Rule","04 programdata service impersonation",p.name,p.pid,p.path);
+        if(has(path,L"\\users\\public\\") && has(name,L"system"))
+            add("EXE Artifact Rule","05 public folder system-like executable",p.name,p.pid,p.path);
+        if(has(name,L"powershell") && !has(path,L"\\windows\\"))
+            add("EXE Artifact Rule","06 powershell-name outside Windows",p.name,p.pid,p.path);
+        if(has(name,L"rundll32") && !has(path,L"\\windows\\"))
+            add("EXE Artifact Rule","07 rundll32-name outside Windows",p.name,p.pid,p.path);
+        if(has(name,L"regsvr32") && !has(path,L"\\windows\\"))
+            add("EXE Artifact Rule","08 regsvr32-name outside Windows",p.name,p.pid,p.path);
+        if(has(name,L"taskhostw") && !has(path,L"\\windows\\"))
+            add("EXE Artifact Rule","09 taskhostw-name outside Windows",p.name,p.pid,p.path);
+        if(has(name,L"conhost") && !has(path,L"\\windows\\"))
+            add("EXE Artifact Rule","10 conhost-name outside Windows",p.name,p.pid,p.path);
+        // 11-13: unusual names combining a suspicious location and a token.
+        if(has(path,L"\\temp\\") && has(name,L"driver"))
+            add("EXE Artifact Rule","11 temporary driver-named EXE",p.name,p.pid,p.path);
+        if(has(path,L"\\downloads\\") && has(name,L"loader"))
+            add("EXE Artifact Rule","12 downloads loader-named EXE",p.name,p.pid,p.path);
+        if(has(path,L"\\appdata\\") && has(name,L"mapper"))
+            add("EXE Artifact Rule","13 appdata mapper-named EXE",p.name,p.pid,p.path);
+    }
+    // 14-15: loaded driver location indicators, using OS-visible inventory.
+    std::array<LPVOID,2048> driverAddresses{};
+    DWORD bytesNeeded=0;
+    if(EnumDeviceDrivers(driverAddresses.data(),
+        static_cast<DWORD>(driverAddresses.size()*sizeof(LPVOID)),&bytesNeeded)){
+        const size_t count=(std::min)(driverAddresses.size(),
+            static_cast<size_t>(bytesNeeded/sizeof(LPVOID)));
+        for(size_t i=0;i<count && !cancelRequested && out.size()<450;++i){
+            wchar_t buffer[MAX_PATH]{};
+            if(!GetDeviceDriverFileNameW(driverAddresses[i],buffer,MAX_PATH))continue;
+            const std::wstring path=lowerPath(buffer);
+            const std::wstring name=fs::path(path).filename().wstring();
+            if(has(path,L"\\users\\") && has(path,L".sys"))
+                add("Driver Artifact Rule","14 loaded driver path under Users",name,0,buffer);
+            if(has(path,L"\\temp\\") && has(path,L".sys"))
+                add("Driver Artifact Rule","15 loaded driver path under Temp",name,0,buffer);
+        }
+    }
+    return out;
+}
+
+// Additional read-only executable review rules (16-30).
+// Multiple conditions are used to reduce noisy filename-only matches.
+static std::vector<Record> inspectAdditionalFifteenRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    const auto contains=[](const std::wstring& value,const wchar_t* token){
+        return value.find(token)!=std::wstring::npos;
+    };
+    auto report=[&](const char* rule,const Process& p){
+        if(findings.size()>=300)return;
+        findings.push_back({"Executable Context Review",utf8(p.name),
+            std::string("REVIEW ONLY | ")+rule+
+            " | PID: "+std::to_string(p.pid)+
+            " | Path: "+utf8(p.path)+
+            " | Review publisher, signature and expected install location."});
+    };
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const auto path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const auto name=lowerPath(fs::path(path).filename().wstring());
+        const bool temp=contains(path,L"\\temp\\");
+        const bool downloads=contains(path,L"\\downloads\\");
+        const bool roaming=contains(path,L"\\appdata\\roaming\\");
+        const bool local=contains(path,L"\\appdata\\local\\");
+        const bool publicDir=contains(path,L"\\users\\public\\");
+        const bool programData=contains(path,L"\\programdata\\");
+        const bool outsideWindows=!contains(path,L"\\windows\\");
+        if(temp && contains(name,L"helper"))report("16 - helper executable from Temp",p);
+        if(temp && contains(name,L"client"))report("17 - client executable from Temp",p);
+        if(temp && contains(name,L"runtime"))report("18 - runtime executable from Temp",p);
+        if(downloads && contains(name,L"patch"))report("19 - patch executable from Downloads",p);
+        if(downloads && contains(name,L"service"))report("20 - service-named executable from Downloads",p);
+        if(roaming && contains(name,L"host"))report("21 - host-named executable from Roaming",p);
+        if(roaming && contains(name,L"agent"))report("22 - agent-named executable from Roaming",p);
+        if(local && contains(name,L"driver"))report("23 - driver-named executable from Local AppData",p);
+        if(local && contains(name,L"kernel"))report("24 - kernel-named executable from Local AppData",p);
+        if(publicDir && contains(name,L"update"))report("25 - updater executable from Public",p);
+        if(publicDir && contains(name,L"helper"))report("26 - helper executable from Public",p);
+        if(programData && contains(name,L"lsass"))report("27 - LSASS-like executable from ProgramData",p);
+        if(programData && contains(name,L"winlogon"))report("28 - Winlogon-like executable from ProgramData",p);
+        if(outsideWindows && name==L"wmic.exe")report("29 - WMIC name outside Windows",p);
+        if(outsideWindows && name==L"wevtutil.exe")report("30 - Wevtutil name outside Windows",p);
+    }
+    return findings;
+}
+
+// Rules 31-45: bounded, read-only executable context review.
+// These are leads only; a filename/path match cannot prove cheating.
+static std::vector<Record> inspectThirdFifteenRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    auto contains=[](const std::wstring& a,const wchar_t* b){
+        return a.find(b)!=std::wstring::npos;
+    };
+    auto report=[&](const char* rule,const Process& p){
+        if(findings.size()>=300)return;
+        findings.push_back({"Executable Context Review",utf8(p.name),
+            std::string("REVIEW ONLY | ")+rule+
+            " | PID: "+std::to_string(p.pid)+
+            " | Path: "+utf8(p.path)+
+            " | Verify publisher, signature, file origin and context."});
+    };
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const auto path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const auto name=lowerPath(fs::path(path).filename().wstring());
+        const bool temp=contains(path,L"\\temp\\");
+        const bool downloads=contains(path,L"\\downloads\\");
+        const bool roaming=contains(path,L"\\appdata\\roaming\\");
+        const bool local=contains(path,L"\\appdata\\local\\");
+        const bool publicDir=contains(path,L"\\users\\public\\");
+        const bool programData=contains(path,L"\\programdata\\");
+        const bool windowsDir=contains(path,L"\\windows\\");
+        if(temp && contains(name,L"bootstrap"))report("31 - bootstrap executable in Temp",p);
+        if(temp && contains(name,L"updater"))report("32 - updater executable in Temp",p);
+        if(downloads && contains(name,L"inject"))report("33 - injection-named executable in Downloads",p);
+        if(downloads && contains(name,L"mapper"))report("34 - mapper-named executable in Downloads",p);
+        if(roaming && contains(name,L"watchdog"))report("35 - watchdog-named executable in Roaming",p);
+        if(roaming && contains(name,L"monitor"))report("36 - monitor-named executable in Roaming",p);
+        if(local && contains(name,L"hook"))report("37 - hook-named executable in Local AppData",p);
+        if(local && contains(name,L"overlay"))report("38 - overlay-named executable in Local AppData",p);
+        if(publicDir && contains(name,L"launcher"))report("39 - launcher executable in Public",p);
+        if(publicDir && contains(name,L"runtime"))report("40 - runtime executable in Public",p);
+        if(programData && contains(name,L"csrss"))report("41 - CSRSS-like executable in ProgramData",p);
+        if(programData && contains(name,L"smss"))report("42 - SMSS-like executable in ProgramData",p);
+        if(!windowsDir && name==L"mshta.exe")report("43 - MSHTA name outside Windows",p);
+        if(!windowsDir && name==L"certutil.exe")report("44 - Certutil name outside Windows",p);
+        if(!windowsDir && name==L"bitsadmin.exe")report("45 - Bitsadmin name outside Windows",p);
+    }
+    return findings;
+}
+
+
+// Additional read-only contextual indicators (rules 46-65).
+// A name/path match is an investigation lead, not a cheat verdict.
+static std::vector<Record> inspectFourthTwentyRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    auto contains=[](const std::wstring& a,const wchar_t* b){
+        return a.find(b)!=std::wstring::npos;
+    };
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=350)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+        const bool temp=contains(path,L"\\temp\\");
+        const bool downloads=contains(path,L"\\downloads\\");
+        const bool roaming=contains(path,L"\\appdata\\roaming\\");
+        const bool local=contains(path,L"\\appdata\\local\\");
+        const bool publicDir=contains(path,L"\\users\\public\\");
+        const bool programData=contains(path,L"\\programdata\\");
+        const bool outsideWindows=!contains(path,L"\\windows\\");
+        auto report=[&](const char* rule){
+            if(findings.size()>=350)return;
+            findings.push_back({"Executable Context Review",utf8(p.name),
+                std::string("REVIEW ONLY | ")+rule+
+                " | PID: "+std::to_string(p.pid)+
+                " | Path: "+utf8(p.path)+
+                " | Name and location are not proof of cheating; review signature and origin."});
+        };
+        if(temp && contains(name,L"bridge"))report("46 - temporary bridge-named executable");
+        if(temp && contains(name,L"proxy"))report("47 - temporary proxy-named executable");
+        if(temp && contains(name,L"stub"))report("48 - temporary stub-named executable");
+        if(downloads && contains(name,L"payload"))report("49 - downloaded payload-named executable");
+        if(downloads && contains(name,L"bootstrap"))report("50 - downloaded bootstrap executable");
+        if(downloads && contains(name,L"spoofer"))report("51 - downloaded spoofer-named executable");
+        if(roaming && contains(name,L"inject"))report("52 - injection-named executable in Roaming");
+        if(roaming && contains(name,L"loader"))report("53 - loader-named executable in Roaming");
+        if(roaming && contains(name,L"patcher"))report("54 - patcher-named executable in Roaming");
+        if(local && contains(name,L"bypass"))report("55 - bypass-named executable in Local AppData");
+        if(local && contains(name,L"executor"))report("56 - executor-named executable in Local AppData");
+        if(local && contains(name,L"hook"))report("57 - hook-named executable in Local AppData");
+        if(publicDir && contains(name,L"service"))report("58 - service-named executable in Public");
+        if(publicDir && contains(name,L"driver"))report("59 - driver-named executable in Public");
+        if(programData && contains(name,L"winlogon"))report("60 - Winlogon-like executable in ProgramData");
+        if(programData && contains(name,L"services"))report("61 - Services-like executable in ProgramData");
+        if(programData && contains(name,L"lsass"))report("62 - LSASS-like executable in ProgramData");
+        if(outsideWindows && name==L"dllhost.exe")report("63 - dllhost executable name outside Windows");
+        if(outsideWindows && name==L"sihost.exe")report("64 - sihost executable name outside Windows");
+        if(outsideWindows && name==L"fontdrvhost.exe")report("65 - fontdrvhost executable name outside Windows");
+    }
+    return findings;
+}
+
+// v7.10: bounded, read-only context indicators. Each match is a lead,
+// never an assertion that the process is malicious or associated with cheating.
+static std::vector<Record> inspectFifthTwentyRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+        auto report=[&](const char* rule){
+            if(findings.size()>=300)return;
+            findings.push_back({"Executable Context Review",utf8(p.name),
+                std::string("REVIEW ONLY | ")+rule+" | PID: "+
+                std::to_string(p.pid)+" | Path: "+utf8(p.path)+
+                " | Filename and location heuristic; verify before drawing conclusions."});
+        };
+        if(path.find(L"\\temp\\\\")!=std::wstring::npos && name.find(L"diagnostic")!=std::wstring::npos) report("66 - diagnostic in Temp");
+        if(path.find(L"\\temp\\\\")!=std::wstring::npos && name.find(L"telemetry")!=std::wstring::npos) report("67 - telemetry in Temp");
+        if(path.find(L"\\temp\\\\")!=std::wstring::npos && name.find(L"servicehost")!=std::wstring::npos) report("68 - servicehost in Temp");
+        if(path.find(L"\\downloads\\\\")!=std::wstring::npos && name.find(L"unpacker")!=std::wstring::npos) report("69 - unpacker in Downloads");
+        if(path.find(L"\\downloads\\\\")!=std::wstring::npos && name.find(L"launcher")!=std::wstring::npos) report("70 - launcher in Downloads");
+        if(path.find(L"\\downloads\\\\")!=std::wstring::npos && name.find(L"debugger")!=std::wstring::npos) report("71 - debugger in Downloads");
+        if(path.find(L"\\appdata\\roaming\\\\")!=std::wstring::npos && name.find(L"updater")!=std::wstring::npos) report("72 - updater in Roaming");
+        if(path.find(L"\\appdata\\roaming\\\\")!=std::wstring::npos && name.find(L"bootstrap")!=std::wstring::npos) report("73 - bootstrap in Roaming");
+        if(path.find(L"\\appdata\\roaming\\\\")!=std::wstring::npos && name.find(L"daemon")!=std::wstring::npos) report("74 - daemon in Roaming");
+        if(path.find(L"\\appdata\\local\\\\")!=std::wstring::npos && name.find(L"patcher")!=std::wstring::npos) report("75 - patcher in Local AppData");
+        if(path.find(L"\\appdata\\local\\\\")!=std::wstring::npos && name.find(L"proxy")!=std::wstring::npos) report("76 - proxy in Local AppData");
+        if(path.find(L"\\appdata\\local\\\\")!=std::wstring::npos && name.find(L"servicehost")!=std::wstring::npos) report("77 - servicehost in Local AppData");
+        if(path.find(L"\\users\\public\\\\")!=std::wstring::npos && name.find(L"agent")!=std::wstring::npos) report("78 - agent in Public");
+        if(path.find(L"\\users\\public\\\\")!=std::wstring::npos && name.find(L"watchdog")!=std::wstring::npos) report("79 - watchdog in Public");
+        if(path.find(L"\\users\\public\\\\")!=std::wstring::npos && name.find(L"monitor")!=std::wstring::npos) report("80 - monitor in Public");
+        if(path.find(L"\\programdata\\\\")!=std::wstring::npos && name.find(L"taskhost")!=std::wstring::npos) report("81 - taskhost in ProgramData");
+        if(path.find(L"\\programdata\\\\")!=std::wstring::npos && name.find(L"runtimebroker")!=std::wstring::npos) report("82 - runtimebroker in ProgramData");
+        if(path.find(L"\\windows\\\\")==std::wstring::npos && name==L"wscript.exe") report("83 - wscript.exe in Outside Windows");
+        if(path.find(L"\\windows\\\\")==std::wstring::npos && name==L"cscript.exe") report("84 - cscript.exe in Outside Windows");
+        if(path.find(L"\\windows\\\\")==std::wstring::npos && name==L"schtasks.exe") report("85 - schtasks.exe in Outside Windows");
+    }
+    return findings;
+}
+
+
+// v7.11: twenty independent, read-only executable-context review rules.
+// A match is a lead for an analyst, never a cheat verdict.
+static std::vector<Record> inspectSixthTwentyRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    auto contains=[](const std::wstring& text,const wchar_t* needle){
+        return text.find(needle)!=std::wstring::npos;
+    };
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+        auto report=[&](const char* rule){
+            if(findings.size()>=300)return;
+            findings.push_back({"Executable Context Review",utf8(p.name),
+                std::string("REVIEW ONLY | ")+rule+" | PID: "+
+                std::to_string(p.pid)+" | Path: "+utf8(p.path)+
+                " | Heuristic filename/location match; validate provenance."});
+        };
+        // Double-extension disguises (distinct from prior PDF/JPG/PNG/TXT/DOCX rules).
+        if(contains(name,L".zip.exe"))report("86 - zip double extension");
+        if(contains(name,L".rar.exe"))report("87 - rar double extension");
+        if(contains(name,L".7z.exe"))report("88 - 7z double extension");
+        if(contains(name,L".mp4.exe"))report("89 - mp4 double extension");
+        if(contains(name,L".mp3.exe"))report("90 - mp3 double extension");
+        if(contains(name,L".gif.exe"))report("91 - gif double extension");
+        if(contains(name,L".jpeg.exe"))report("92 - jpeg double extension");
+        if(contains(name,L".xlsx.exe"))report("93 - xlsx double extension");
+        if(contains(name,L".pptx.exe"))report("94 - pptx double extension");
+        if(contains(name,L".lnk.exe"))report("95 - shortcut double extension");
+        // Running from unusual per-user cache and deployment locations.
+        if(contains(path,L"\\inetcache\\") && contains(name,L".exe"))
+            report("96 - executable in internet cache");
+        if(contains(path,L"\\webcache\\") && contains(name,L".exe"))
+            report("97 - executable in web cache");
+        if(contains(path,L"\\crashdumps\\") && contains(name,L".exe"))
+            report("98 - executable in crash dumps");
+        if(contains(path,L"\\recent\\") && contains(name,L".exe"))
+            report("99 - executable in recent-items folder");
+        if(contains(path,L"\\recycle.bin\\") && contains(name,L".exe"))
+            report("100 - executable in recycle bin");
+        if(contains(path,L"\\startup\\") && contains(name,L".exe"))
+            report("101 - executable running from startup folder");
+        if(contains(path,L"\\windows\\fonts\\") && contains(name,L".exe"))
+            report("102 - executable in Windows fonts");
+        if(contains(path,L"\\windows\\help\\") && contains(name,L".exe"))
+            report("103 - executable in Windows help");
+        if(contains(path,L"\\windows\\media\\") && contains(name,L".exe"))
+            report("104 - executable in Windows media");
+        if(contains(path,L"\\windows\\tracing\\") && contains(name,L".exe"))
+            report("105 - executable in Windows tracing");
+    }
+    return findings;
+}
+
+// v7.12: twenty bounded, read-only process image context checks.
+// These are review signals only; legitimate executables may match.
+static std::vector<Record> inspectSeventhTwentyRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+        if(name.size()<4 || name.substr(name.size()-4)!=L".exe")continue;
+        auto report=[&](const char* rule){
+            if(findings.size()>=300)return;
+            findings.push_back({"Executable Context Review",utf8(p.name),
+                std::string("REVIEW ONLY | ")+rule+" | PID: "+
+                std::to_string(p.pid)+" | Path: "+utf8(p.path)+
+                " | Context heuristic; verify the executable before drawing conclusions."});
+        };
+        if(name.find(L".iso.exe")!=std::wstring::npos)report("106 - iso double extension");
+        if(name.find(L".img.exe")!=std::wstring::npos)report("107 - img double extension");
+        if(name.find(L".vhd.exe")!=std::wstring::npos)report("108 - vhd double extension");
+        if(name.find(L".vhdx.exe")!=std::wstring::npos)report("109 - vhdx double extension");
+        if(name.find(L".msi.exe")!=std::wstring::npos)report("110 - msi double extension");
+        if(name.find(L".cab.exe")!=std::wstring::npos)report("111 - cab double extension");
+        if(name.find(L".ps1.exe")!=std::wstring::npos)report("112 - ps1 double extension");
+        if(name.find(L".bat.exe")!=std::wstring::npos)report("113 - bat double extension");
+        if(name.find(L".cmd.exe")!=std::wstring::npos)report("114 - cmd double extension");
+        if(name.find(L".reg.exe")!=std::wstring::npos)report("115 - reg double extension");
+        if(path.find(L"\\windows\\tasks\\")!=std::wstring::npos)report("116 - executable in Windows tasks");
+        if(path.find(L"\\windows\\debug\\")!=std::wstring::npos)report("117 - executable in Windows debug");
+        if(path.find(L"\\windows\\logs\\")!=std::wstring::npos)report("118 - executable in Windows logs");
+        if(path.find(L"\\windows\\temp\\")!=std::wstring::npos)report("119 - executable in Windows temp");
+        if(path.find(L"\\windows\\performance\\")!=std::wstring::npos)report("120 - executable in Windows performance");
+        if(path.find(L"\\programdata\\cache\\")!=std::wstring::npos)report("121 - executable in programdata cache");
+        if(path.find(L"\\tempstate\\")!=std::wstring::npos)report("122 - executable in appdata local packages tempstate");
+        if(path.find(L"\\appdata\\local\\crashdumps\\")!=std::wstring::npos)report("123 - executable in appdata local crashdumps");
+        if(path.find(L"\\spool\\drivers\\color\\")!=std::wstring::npos)report("124 - executable in Windows system32 spool drivers color");
+        if(path.find(L"\\wbem\\repository\\")!=std::wstring::npos)report("125 - executable in Windows system32 wbem repository");
+    }
+    return findings;
+}
+
+// Rules 126-155: bounded, read-only executable context indicators.
+static std::vector<Record> inspectEighthThirtyRules(const std::vector<Process>& processes){
+    std::vector<Record> findings;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& p:processes){
+        if(cancelRequested || findings.size()>=300)break;
+        if(p.path.empty() || p.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(p.path);
+        if(!seen.insert(path).second)continue;
+        const std::wstring name=lowerPath(fs::path(path).filename().wstring());
+        if(name.size()<4 || name.substr(name.size()-4)!=L".exe")continue;
+        auto report=[&](const char* rule){
+            if(findings.size()>=300)return;
+            findings.push_back({"Executable Context Review",utf8(p.name),
+                std::string("REVIEW ONLY | ")+rule+" | PID: "+
+                std::to_string(p.pid)+" | Path: "+utf8(p.path)+
+                " | Name/location heuristic only; legitimate software can match."});
+        };
+        if(name.find(L".json.exe")!=std::wstring::npos)report("126 - .json.exe double extension");
+        if(name.find(L".xml.exe")!=std::wstring::npos)report("127 - .xml.exe double extension");
+        if(name.find(L".csv.exe")!=std::wstring::npos)report("128 - .csv.exe double extension");
+        if(name.find(L".log.exe")!=std::wstring::npos)report("129 - .log.exe double extension");
+        if(name.find(L".ini.exe")!=std::wstring::npos)report("130 - .ini.exe double extension");
+        if(name.find(L".cfg.exe")!=std::wstring::npos)report("131 - .cfg.exe double extension");
+        if(name.find(L".db.exe")!=std::wstring::npos)report("132 - .db.exe double extension");
+        if(name.find(L".sqlite.exe")!=std::wstring::npos)report("133 - .sqlite.exe double extension");
+        if(name.find(L".bak.exe")!=std::wstring::npos)report("134 - .bak.exe double extension");
+        if(name.find(L".old.exe")!=std::wstring::npos)report("135 - .old.exe double extension");
+        if(name.find(L".tmp.exe")!=std::wstring::npos)report("136 - .tmp.exe double extension");
+        if(name.find(L".dat.exe")!=std::wstring::npos)report("137 - .dat.exe double extension");
+        if(name.find(L".url.exe")!=std::wstring::npos)report("138 - .url.exe double extension");
+        if(name.find(L".lnk.exe")!=std::wstring::npos)report("139 - .lnk.exe double extension");
+        if(name.find(L".hta.exe")!=std::wstring::npos)report("140 - .hta.exe double extension");
+        if(path.find(L"\\appdata\\local\\packages\\")!=std::wstring::npos)report("141 - AppData package data executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\inetcache\\")!=std::wstring::npos)report("142 - Internet cache executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\webcache\\")!=std::wstring::npos)report("143 - WebCache executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\explorer\\")!=std::wstring::npos)report("144 - Explorer cache executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\history\\")!=std::wstring::npos)report("145 - History executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\temporary internet files\\")!=std::wstring::npos)report("146 - Temporary Internet Files executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\notifications\\")!=std::wstring::npos)report("147 - Notifications executable");
+        if(path.find(L"\\appdata\\local\\microsoft\\windows\\thumbcache\\")!=std::wstring::npos)report("148 - Thumbnail cache executable");
+        if(path.find(L"\\appdata\\roaming\\microsoft\\windows\\recent\\")!=std::wstring::npos)report("149 - Recent items executable");
+        if(path.find(L"\\appdata\\roaming\\microsoft\\windows\\sendto\\")!=std::wstring::npos)report("150 - SendTo executable");
+        if(path.find(L"\\appdata\\roaming\\microsoft\\windows\\templates\\")!=std::wstring::npos)report("151 - Templates executable");
+        if(path.find(L"\\windows\\system32\\spool\\printers\\")!=std::wstring::npos)report("152 - Print spool executable");
+        if(path.find(L"\\windows\\system32\\config\\systemprofile\\appdata\\")!=std::wstring::npos)report("153 - System profile data executable");
+        if(path.find(L"\\windows\\servicing\\")!=std::wstring::npos)report("154 - Windows servicing executable");
+        if(path.find(L"\\windows\\winsxs\\temp\\")!=std::wstring::npos)report("155 - WinSxS temporary executable");
+    }
+    return findings;
+}
+
+// Sync PC Checker 8.0 - read-only Windows evidence engine.
+// Findings are triage indicators; none establish cheating or maliciousness.
+// Every collection is bounded, and failures remain explicit.
+namespace real_detect {
+struct Evidence {
+    std::string category, subject, explanation;
+};
+struct Collector {
+    std::vector<Record> results;
+    size_t cap=1200;
+    void emit(const std::string& category,const std::wstring& subject,
+              const std::string& explanation) {
+        if(results.size()>=cap)return;
+        results.push_back({category,utf8(subject),
+            "REVIEW ONLY | "+explanation});
+    }
+    bool stopped() const {return cancelRequested || results.size()>=cap;}
+};
+static std::wstring lower(std::wstring x) {
+    std::transform(x.begin(),x.end(),x.begin(),
+                   [](wchar_t c){return std::towlower(c);});
+    return x;
+}
+static bool contains(const std::wstring& x,const wchar_t* y){
+    return x.find(y)!=std::wstring::npos;
+}
+static bool starts(const std::wstring& x,const wchar_t* y){
+    return x.rfind(y,0)==0;
+}
+static std::wstring expanded(const std::wstring& value) {
+    DWORD size=ExpandEnvironmentStringsW(value.c_str(),nullptr,0);
+    if(!size || size>32768)return value;
+    std::wstring buffer(size,L'\0');
+    if(!ExpandEnvironmentStringsW(value.c_str(),buffer.data(),size))
+        return value;
+    if(!buffer.empty() && buffer.back()==L'\0')buffer.pop_back();
+    return buffer;
+}
+static std::wstring pathFromCommand(std::wstring command) {
+    command=expanded(command);
+    while(!command.empty() && std::iswspace(command.front()))
+        command.erase(command.begin());
+    if(command.empty())return {};
+    if(command.front()==L'"') {
+        auto end=command.find(L'"',1);
+        return end==std::wstring::npos ? std::wstring{} :
+               command.substr(1,end-1);
+    }
+    const std::wstring low=lower(command);
+    for(const wchar_t* ext:{L".exe",L".com",L".bat",L".cmd",L".ps1"}) {
+        auto pos=low.find(ext);
+        if(pos!=std::wstring::npos && pos<4096)
+            return command.substr(0,pos+wcslen(ext));
+    }
+    return {};
+}
+static std::string errorCode(DWORD code){
+    return "Windows error "+std::to_string(code);
+}
+static bool isFile(const std::wstring& path) {
+    DWORD a=GetFileAttributesW(path.c_str());
+    return a!=INVALID_FILE_ATTRIBUTES && !(a&FILE_ATTRIBUTE_DIRECTORY);
+}
+static std::wstring fullPath(const std::wstring& path){
+    if(path.empty())return {};
+    DWORD size=GetFullPathNameW(path.c_str(),0,nullptr,nullptr);
+    if(!size || size>32768)return path;
+    std::wstring buffer(size,L'\0');
+    DWORD n=GetFullPathNameW(path.c_str(),size,buffer.data(),nullptr);
+    if(!n || n>=size)return path;
+    buffer.resize(n);
+    return buffer;
+}
+static bool isExecutableExtension(const std::wstring& path){
+    const std::wstring e=lower(fs::path(path).extension().wstring());
+    return e==L".exe" || e==L".dll" || e==L".sys" ||
+           e==L".scr" || e==L".com";
+}
+static bool isUserWritableContext(const std::wstring& path) {
+    auto p=lower(path);
+    return contains(p,L"\\appdata\\") ||
+           contains(p,L"\\downloads\\") ||
+           contains(p,L"\\users\\public\\") ||
+           contains(p,L"\\temp\\");
+}
+static void checkFileMetadata(Collector& out,const std::wstring& path,
+                              const std::string& context) {
+    if(out.stopped() || !isFile(path))return;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&data))
+        return;
+    const auto low=lower(path);
+    if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
+        out.emit("File Metadata Review",path,
+                 context+" | File has reparse-point attribute");
+    if(data.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN)
+        out.emit("File Metadata Review",path,
+                 context+" | Executable has hidden attribute");
+    if(data.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM &&
+       isUserWritableContext(low))
+        out.emit("File Metadata Review",path,
+                 context+" | System attribute in user-writable location");
+    ULARGE_INTEGER bytes{};
+    bytes.HighPart=data.nFileSizeHigh;
+    bytes.LowPart=data.nFileSizeLow;
+    if(bytes.QuadPart<1024 && isExecutableExtension(path))
+        out.emit("File Metadata Review",path,
+                 context+" | Executable-sized file below 1 KiB");
+    if(bytes.QuadPart>512ULL*1024*1024 &&
+       isUserWritableContext(low))
+        out.emit("File Metadata Review",path,
+                 context+" | File above 512 MiB in user-writable location");
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER current{},created{},modified{};
+    current.LowPart=now.dwLowDateTime;current.HighPart=now.dwHighDateTime;
+    created.LowPart=data.ftCreationTime.dwLowDateTime;
+    created.HighPart=data.ftCreationTime.dwHighDateTime;
+    modified.LowPart=data.ftLastWriteTime.dwLowDateTime;
+    modified.HighPart=data.ftLastWriteTime.dwHighDateTime;
+    const ULONGLONG hour=3600ULL*10000000ULL;
+    if(created.QuadPart>current.QuadPart+hour)
+        out.emit("File Timestamp Review",path,
+                 context+" | Creation timestamp more than 1 hour in future");
+    if(modified.QuadPart>current.QuadPart+hour)
+        out.emit("File Timestamp Review",path,
+                 context+" | Modification timestamp more than 1 hour in future");
+    if(created.QuadPart>modified.QuadPart+24ULL*hour)
+        out.emit("File Timestamp Review",path,
+                 context+" | Creation timestamp newer than modification by 24h");
+}
+static bool readFilePrefix(const std::wstring& path,std::vector<unsigned char>& bytes,
+                           size_t limit=8*1024*1024) {
+    HANDLE h=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+        OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(h,&size) || size.QuadPart<0) {
+        CloseHandle(h);return false;
+    }
+    size_t n=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(size.QuadPart),
+        static_cast<ULONGLONG>(limit)));
+    bytes.resize(n);
+    DWORD got=0;
+    bool ok=n==0 || (ReadFile(h,bytes.data(),static_cast<DWORD>(n),
+                             &got,nullptr)!=FALSE);
+    CloseHandle(h);
+    bytes.resize(ok?got:0);
+    return ok;
+}
+static bool within(size_t off,size_t len,size_t total){
+    return off<=total && len<=total-off;
+}
+static void inspectPortableExecutable(Collector& out,
+                                      const std::wstring& path) {
+    if(out.stopped() || !isExecutableExtension(path))return;
+    std::vector<unsigned char> bytes;
+    if(!readFilePrefix(path,bytes))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE) {
+        out.emit("PE Format Review",path,
+                 "Executable extension but missing MZ header");
+        return;
+    }
+    if(dos.e_lfanew<0 || !within(static_cast<size_t>(dos.e_lfanew),
+       sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),bytes.size())) {
+        out.emit("PE Format Review",path,"Invalid PE header offset");
+        return;
+    }
+    const size_t pe=static_cast<size_t>(dos.e_lfanew);
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+pe,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE) {
+        out.emit("PE Format Review",path,"MZ file without valid PE signature");
+        return;
+    }
+    IMAGE_FILE_HEADER file{};
+    memcpy(&file,bytes.data()+pe+sizeof(DWORD),sizeof(file));
+    if(file.NumberOfSections==0 || file.NumberOfSections>96) {
+        out.emit("PE Format Review",path,
+                 "Unusual PE section count: "+
+                 std::to_string(file.NumberOfSections));
+        if(file.NumberOfSections>96)return;
+    }
+    const size_t optional=pe+sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER);
+    if(!within(optional,file.SizeOfOptionalHeader,bytes.size())) {
+        out.emit("PE Format Review",path,"Truncated PE optional header");
+        return;
+    }
+    WORD magic=0;
+    if(file.SizeOfOptionalHeader>=2)
+        memcpy(&magic,bytes.data()+optional,2);
+    if(magic!=IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+       magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        out.emit("PE Format Review",path,"Unknown optional-header magic");
+    if(file.Characteristics&IMAGE_FILE_RELOCS_STRIPPED &&
+       file.Characteristics&IMAGE_FILE_DLL)
+        out.emit("PE Layout Review",path,
+                 "DLL with relocation information stripped");
+    if(!(file.Characteristics&IMAGE_FILE_EXECUTABLE_IMAGE))
+        out.emit("PE Layout Review",path,
+                 "PE lacks executable-image characteristic");
+    const size_t sections=optional+file.SizeOfOptionalHeader;
+    if(!within(sections,static_cast<size_t>(file.NumberOfSections)*
+       sizeof(IMAGE_SECTION_HEADER),bytes.size())) {
+        out.emit("PE Format Review",path,"Section table not fully readable");
+        return;
+    }
+    unsigned writableExecutable=0,rawOverlap=0;
+    std::vector<std::pair<DWORD,DWORD>> ranges;
+    for(unsigned i=0;i<file.NumberOfSections && !out.stopped();++i) {
+        IMAGE_SECTION_HEADER sec{};
+        memcpy(&sec,bytes.data()+sections+
+               i*sizeof(IMAGE_SECTION_HEADER),sizeof(sec));
+        if((sec.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           (sec.Characteristics&IMAGE_SCN_MEM_WRITE))
+            ++writableExecutable;
+        if(sec.SizeOfRawData>0) {
+            const uint64_t end=static_cast<uint64_t>(sec.PointerToRawData)+
+                               sec.SizeOfRawData;
+            if(end>bytes.size() && end<=8ULL*1024*1024)
+                out.emit("PE Layout Review",path,
+                         "Section raw data extends beyond available file prefix");
+            for(const auto& previous:ranges) {
+                uint64_t a=sec.PointerToRawData,b=end;
+                uint64_t c=previous.first,d=previous.second;
+                if(a<d && c<b){++rawOverlap;break;}
+            }
+            if(end<=UINT32_MAX)
+                ranges.push_back({sec.PointerToRawData,
+                                  static_cast<DWORD>(end)});
+        }
+        if(sec.Misc.VirtualSize>0x40000000)
+            out.emit("PE Layout Review",path,
+                     "Section virtual size above 1 GiB");
+        if(sec.SizeOfRawData>0 &&
+           within(sec.PointerToRawData,sec.SizeOfRawData,bytes.size()) &&
+           sec.SizeOfRawData>=4096) {
+            std::array<unsigned,256> histogram{};
+            const size_t count=(std::min)(
+                static_cast<size_t>(sec.SizeOfRawData),size_t(262144));
+            for(size_t j=0;j<count;++j)
+                ++histogram[bytes[sec.PointerToRawData+j]];
+            double entropy=0;
+            for(unsigned countByte:histogram)if(countByte) {
+                const double probability=double(countByte)/count;
+                entropy-=probability*std::log2(probability);
+            }
+            if(entropy>7.85 &&
+               (sec.Characteristics&IMAGE_SCN_MEM_EXECUTE))
+                out.emit("PE Entropy Review",path,
+                    "Executable section with high entropy ("+
+                    std::to_string(entropy)+"); compression may be legitimate");
+        }
+    }
+    if(writableExecutable)
+        out.emit("PE Permissions Review",path,
+                 std::to_string(writableExecutable)+
+                 " section(s) marked writable and executable");
+    if(rawOverlap)
+        out.emit("PE Layout Review",path,
+                 "Overlapping raw section ranges");
+}
+static void inspectProcessToken(Collector& out,const Process& proc) {
+    if(out.stopped())return;
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                               FALSE,proc.pid);
+    if(!process)return;
+    HANDLE token=nullptr;
+    if(!OpenProcessToken(process,TOKEN_QUERY,&token)){
+        CloseHandle(process);return;
+    }
+    DWORD required=0;
+    GetTokenInformation(token,TokenIntegrityLevel,nullptr,0,&required);
+    if(required && required<8192) {
+        std::vector<unsigned char> buffer(required);
+        if(GetTokenInformation(token,TokenIntegrityLevel,
+                               buffer.data(),required,&required)) {
+            auto label=reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer.data());
+            DWORD rid=0;
+            if(label->Label.Sid &&
+               IsValidSid(label->Label.Sid)) {
+                const auto n=*GetSidSubAuthorityCount(label->Label.Sid);
+                if(n)rid=*GetSidSubAuthority(label->Label.Sid,n-1);
+            }
+            if(rid>=SECURITY_MANDATORY_SYSTEM_RID &&
+               isUserWritableContext(lower(proc.path)))
+                out.emit("Process Integrity Review",proc.path,
+                    "PID "+std::to_string(proc.pid)+
+                    " | System-integrity process in user-writable directory");
+            if(rid>=SECURITY_MANDATORY_HIGH_RID &&
+               rid<SECURITY_MANDATORY_SYSTEM_RID &&
+               contains(lower(proc.path),L"\\downloads\\"))
+                out.emit("Process Integrity Review",proc.path,
+                    "PID "+std::to_string(proc.pid)+
+                    " | Elevated process running from Downloads");
+        }
+    }
+    TOKEN_ELEVATION elevation{};
+    DWORD read=0;
+    if(GetTokenInformation(token,TokenElevation,&elevation,
+                           sizeof(elevation),&read) &&
+       elevation.TokenIsElevated &&
+       contains(lower(proc.path),L"\\temp\\"))
+        out.emit("Process Elevation Review",proc.path,
+                 "PID "+std::to_string(proc.pid)+
+                 " | Elevated process launched from Temp");
+    CloseHandle(token);
+    CloseHandle(process);
+}
+static void inspectProcessMitigations(Collector& out,const Process& proc) {
+    if(out.stopped())return;
+    HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,proc.pid);
+    if(!h)return;
+    PROCESS_MITIGATION_DEP_POLICY dep{};
+    if(GetProcessMitigationPolicy(h,ProcessDEPPolicy,&dep,sizeof(dep)) &&
+       !dep.Enable && isUserWritableContext(lower(proc.path)))
+        out.emit("Process Mitigation Review",proc.path,
+                 "PID "+std::to_string(proc.pid)+
+                 " | DEP not enabled for process in user-writable directory");
+    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
+    if(GetProcessMitigationPolicy(h,ProcessDynamicCodePolicy,
+                                 &dynamic,sizeof(dynamic)) &&
+       dynamic.ProhibitDynamicCode)
+        ; // Positive mitigation: not a suspicious finding.
+    CloseHandle(h);
+}
+static void inspectAutostartKey(Collector& out,HKEY hive,
+                                const wchar_t* subkey,
+                                const char* source,
+                                REGSAM view=0) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    LONG status=RegOpenKeyExW(hive,subkey,0,KEY_READ|view,&key);
+    if(status!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,nullptr,nullptr,
+                        nullptr,&count,&maxName,&maxData,nullptr,nullptr)
+       !=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(16384));
+    maxData=(std::min)(maxData,DWORD(65536));
+    std::vector<wchar_t> name(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD nameLen=static_cast<DWORD>(name.size()-1);
+        DWORD dataLen=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        LONG result=RegEnumValueW(key,i,name.data(),&nameLen,nullptr,
+                                  &type,data.data(),&dataLen);
+        if(result!=ERROR_SUCCESS)continue;
+        if(type!=REG_SZ && type!=REG_EXPAND_SZ)continue;
+        if(dataLen<sizeof(wchar_t) || dataLen%sizeof(wchar_t))continue;
+        const wchar_t* raw=reinterpret_cast<const wchar_t*>(data.data());
+        const size_t chars=dataLen/sizeof(wchar_t);
+        size_t end=0;
+        while(end<chars && raw[end]!=L'\0')++end;
+        std::wstring command(raw,end);
+        std::wstring path=pathFromCommand(command);
+        if(path.empty())continue;
+        std::wstring normalized=lower(fullPath(path));
+        const std::string keyName=utf8(std::wstring(name.data(),nameLen));
+        if(isUserWritableContext(normalized)) {
+            out.emit("Autostart Review",path,
+                std::string(source)+" | Entry: "+keyName+
+                " | Autorun points into user-writable directory");
+            checkFileMetadata(out,path,"Autostart "+keyName);
+        }
+        if(!isFile(path) && !contains(lower(command),L"rundll32") &&
+           !contains(lower(command),L"powershell"))
+            out.emit("Autostart Review",path,
+                std::string(source)+" | Entry: "+keyName+
+                " | Direct executable target is missing or inaccessible");
+    }
+    RegCloseKey(key);
+}
+static void inspectAutostarts(Collector& out) {
+    constexpr const wchar_t* run=
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    constexpr const wchar_t* runonce=
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+    inspectAutostartKey(out,HKEY_CURRENT_USER,run,"HKCU Run");
+    inspectAutostartKey(out,HKEY_CURRENT_USER,runonce,"HKCU RunOnce");
+    inspectAutostartKey(out,HKEY_LOCAL_MACHINE,run,"HKLM Run 64-bit",
+                        KEY_WOW64_64KEY);
+    inspectAutostartKey(out,HKEY_LOCAL_MACHINE,runonce,"HKLM RunOnce 64-bit",
+                        KEY_WOW64_64KEY);
+    inspectAutostartKey(out,HKEY_LOCAL_MACHINE,run,"HKLM Run 32-bit",
+                        KEY_WOW64_32KEY);
+    inspectAutostartKey(out,HKEY_LOCAL_MACHINE,runonce,"HKLM RunOnce 32-bit",
+                        KEY_WOW64_32KEY);
+    inspectAutostartKey(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+        "HKCU Policies Explorer Run");
+    inspectAutostartKey(out,HKEY_LOCAL_MACHINE,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+        "HKLM Policies Explorer Run");
+}
+static void inspectStartupDirectory(Collector& out,const wchar_t* env,
+                                    const wchar_t* suffix,
+                                    const char* source) {
+    wchar_t root[32768]{};
+    DWORD n=GetEnvironmentVariableW(env,root,32768);
+    if(!n || n>=32768)return;
+    fs::path dir=fs::path(root)/suffix;
+    std::error_code ec;
+    if(!fs::is_directory(dir,ec))return;
+    size_t checked=0;
+    for(fs::directory_iterator it(dir,fs::directory_options::skip_permission_denied,ec),
+                               end;
+        !ec && it!=end && checked<256 && !out.stopped();
+        it.increment(ec),++checked) {
+        if(!it->is_regular_file(ec))continue;
+        auto path=it->path().wstring();
+        auto ext=lower(it->path().extension().wstring());
+        if(ext==L".exe" || ext==L".bat" || ext==L".cmd" ||
+           ext==L".ps1" || ext==L".vbs" || ext==L".js")
+            out.emit("Startup Folder Review",path,
+                     std::string(source)+
+                     " | Executable or script in startup folder");
+        if(ext==L".exe")checkFileMetadata(out,path,"Startup folder");
+    }
+}
+static void inspectStartupFolders(Collector& out) {
+    inspectStartupDirectory(out,L"APPDATA",
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+        "Current-user Startup");
+    inspectStartupDirectory(out,L"PROGRAMDATA",
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+        "All-users Startup");
+}
+static void inspectServiceConfiguration(Collector& out) {
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm)return;
+    DWORD required=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
+        nullptr,0,&required,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || !required ||
+       required>16*1024*1024) {
+        CloseServiceHandle(scm);return;
+    }
+    std::vector<BYTE> buffer(required);
+    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
+        buffer.data(),required,&required,&count,&resume,nullptr)) {
+        CloseServiceHandle(scm);return;
+    }
+    const auto entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(
+        buffer.data());
+    count=(std::min)(count,DWORD(2048));
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        SC_HANDLE service=OpenServiceW(scm,entries[i].lpServiceName,
+                                      SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD needed=0;
+        QueryServiceConfigW(service,nullptr,0,&needed);
+        if(!needed || needed>65536) {
+            CloseServiceHandle(service);continue;
+        }
+        std::vector<BYTE> config(needed);
+        if(QueryServiceConfigW(service,
+            reinterpret_cast<QUERY_SERVICE_CONFIGW*>(config.data()),
+            needed,&needed)) {
+            auto c=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(config.data());
+            if(c->lpBinaryPathName) {
+                const std::wstring command=c->lpBinaryPathName;
+                const std::wstring path=pathFromCommand(command);
+                const std::wstring low=lower(fullPath(path));
+                if(!path.empty() && isUserWritableContext(low))
+                    out.emit("Service Path Review",path,
+                        "Service: "+utf8(entries[i].lpServiceName)+
+                        " | Binary path under user-writable directory");
+                if(!path.empty() && !isFile(path) &&
+                   !starts(lower(path),L"\\systemroot\\") &&
+                   !starts(lower(path),L"system32\\") &&
+                   !starts(lower(path),L"\\??\\"))
+                    out.emit("Service Path Review",path,
+                        "Service: "+utf8(entries[i].lpServiceName)+
+                        " | Binary target missing or inaccessible");
+                if(!path.empty() && isFile(path) &&
+                   isUserWritableContext(low))
+                    checkFileMetadata(out,path,
+                        "Service "+utf8(entries[i].lpServiceName));
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(scm);
+}
+static void inspectProcessFiles(Collector& out,
+                                const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> paths;
+    size_t checked=0;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=512)break;
+        if(process.path.empty() || process.path[0]==L'[')continue;
+        inspectProcessToken(out,process);
+        inspectProcessMitigations(out,process);
+        const auto normalized=lower(fullPath(process.path));
+        if(!paths.insert(normalized).second)continue;
+        ++checked;
+        checkFileMetadata(out,process.path,
+                          "Running process PID "+std::to_string(process.pid));
+        inspectPortableExecutable(out,process.path);
+    }
+}
+
+// Read-only inspection of loaded modules; access failures are expected.
+static void inspectLoadedModules(Collector& out,
+                                 const std::vector<Process>& processes) {
+    size_t visited=0;
+    std::unordered_set<std::wstring> inspected;
+    for(const auto& proc:processes) {
+        if(out.stopped() || visited>=160)break;
+        HANDLE handle=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
+                                  FALSE,proc.pid);
+        if(!handle)continue;
+        ++visited;
+        std::array<HMODULE,1024> modules{};
+        DWORD needed=0;
+        if(EnumProcessModulesEx(handle,modules.data(),
+             static_cast<DWORD>(modules.size()*sizeof(HMODULE)),
+             &needed,LIST_MODULES_ALL)) {
+            size_t count=(std::min)(modules.size(),
+                        static_cast<size_t>(needed/sizeof(HMODULE)));
+            for(size_t i=0;i<count && !out.stopped();++i) {
+                wchar_t path[32768]{};
+                if(!GetModuleFileNameExW(handle,modules[i],path,32768))
+                    continue;
+                const std::wstring modulePath=path;
+                const auto low=lower(modulePath);
+                const auto extension=lower(fs::path(low).extension().wstring());
+                if(extension!=L".dll" && extension!=L".exe")continue;
+                if(isUserWritableContext(low) && extension==L".dll")
+                    out.emit("Loaded Module Location Review",modulePath,
+                        "PID "+std::to_string(proc.pid)+
+                        " | DLL loaded from user-writable directory");
+                if(contains(low,L"\\recycle.bin\\") ||
+                   contains(low,L"\\temporary internet files\\"))
+                    out.emit("Loaded Module Location Review",modulePath,
+                        "PID "+std::to_string(proc.pid)+
+                        " | Loaded module in temporary or recycle location");
+                if(inspected.size()<400 && inspected.insert(low).second &&
+                   isUserWritableContext(low)) {
+                    checkFileMetadata(out,modulePath,"Loaded module");
+                    inspectPortableExecutable(out,modulePath);
+                }
+            }
+        }
+        CloseHandle(handle);
+    }
+}
+// Examine known registry extension points without altering their values.
+static void inspectRegistryString(Collector& out,HKEY hive,
+                                  const wchar_t* keyPath,
+                                  const wchar_t* valueName,
+                                  const char* source,
+                                  bool flagAny=false) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,keyPath,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    DWORD type=0,size=0;
+    LONG result=RegQueryValueExW(key,valueName,nullptr,&type,nullptr,&size);
+    if(result!=ERROR_SUCCESS || size<sizeof(wchar_t) ||
+       size>32768 || (type!=REG_SZ && type!=REG_EXPAND_SZ)) {
+        RegCloseKey(key);return;
+    }
+    std::vector<wchar_t> buffer(size/sizeof(wchar_t)+1,L'\0');
+    result=RegQueryValueExW(key,valueName,nullptr,&type,
+                            reinterpret_cast<BYTE*>(buffer.data()),&size);
+    RegCloseKey(key);
+    if(result!=ERROR_SUCCESS)return;
+    std::wstring value(buffer.data());
+    if(value.empty())return;
+    auto low=lower(expanded(value));
+    if(flagAny || isUserWritableContext(low))
+        out.emit("Registry Extension Review",value,
+                 std::string(source)+
+                 " | Non-empty extension point; review configuration");
+}
+static void inspectRegistryExtensions(Collector& out) {
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+        L"AppInit_DLLs","AppInit DLL list",true);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+        L"LoadAppInit_DLLs","AppInit enabled setting",false);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        L"Shell","Winlogon shell",false);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        L"Userinit","Winlogon userinit",false);
+    inspectRegistryString(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+        L"Load","Current user Windows Load",true);
+    inspectRegistryString(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+        L"Run","Current user Windows Run",true);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+        L"Debugger","Global IFEO debugger",true);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+        L"BootExecute","BootExecute",false);
+}
+static void inspectIFEO(Collector& out) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+        0,KEY_READ|KEY_WOW64_64KEY,&root)!=ERROR_SUCCESS)return;
+    DWORD total=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+                        &total,&maxName,nullptr,nullptr,nullptr,
+                        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    total=(std::min)(total,DWORD(1024));
+    maxName=(std::min)(maxName,DWORD(32767));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<total && !out.stopped();++i) {
+        DWORD len=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&len,nullptr,
+                         nullptr,nullptr,nullptr)!=ERROR_SUCCESS)
+            continue;
+        HKEY sub=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,&sub)!=ERROR_SUCCESS)
+            continue;
+        for(const wchar_t* valueName:{L"Debugger",L"GlobalFlag"}) {
+            DWORD type=0,size=0;
+            if(RegQueryValueExW(sub,valueName,nullptr,&type,nullptr,&size)
+               !=ERROR_SUCCESS)continue;
+            if(size>32768)continue;
+            if(wcscmp(valueName,L"Debugger")==0 &&
+               (type==REG_SZ || type==REG_EXPAND_SZ) &&
+               size>=sizeof(wchar_t)) {
+                std::vector<wchar_t> value(size/sizeof(wchar_t)+1,L'\0');
+                if(RegQueryValueExW(sub,valueName,nullptr,&type,
+                    reinterpret_cast<BYTE*>(value.data()),&size)
+                   ==ERROR_SUCCESS && value[0])
+                    out.emit("IFEO Debugger Review",
+                        std::wstring(name.data(),len),
+                        "Image File Execution Options debugger: "+
+                        utf8(value.data())+
+                        " | May be legitimate debugging configuration");
+            }
+            if(wcscmp(valueName,L"GlobalFlag")==0 &&
+               type==REG_DWORD && size==sizeof(DWORD)) {
+                DWORD flag=0;
+                if(RegQueryValueExW(sub,valueName,nullptr,&type,
+                    reinterpret_cast<BYTE*>(&flag),&size)
+                   ==ERROR_SUCCESS && flag!=0)
+                    out.emit("IFEO GlobalFlag Review",
+                        std::wstring(name.data(),len),
+                        "Nonzero image-specific GlobalFlag: "+
+                        std::to_string(flag));
+            }
+        }
+        RegCloseKey(sub);
+    }
+    RegCloseKey(root);
+}
+// Scan named service DLL paths stored under the service Parameters key.
+static void inspectServiceDllRegistry(Collector& out) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+       L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,&root)
+       !=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(2048));
+    maxName=(std::min)(maxName,DWORD(32767));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(root,i,names.data(),&n,nullptr,
+                         nullptr,nullptr,nullptr)!=ERROR_SUCCESS)
+            continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(root,names.data(),0,KEY_READ,&service)
+           !=ERROR_SUCCESS)continue;
+        HKEY parameters=nullptr;
+        if(RegOpenKeyExW(service,L"Parameters",0,KEY_READ,&parameters)
+           ==ERROR_SUCCESS) {
+            DWORD type=0,size=0;
+            if(RegQueryValueExW(parameters,L"ServiceDll",nullptr,
+               &type,nullptr,&size)==ERROR_SUCCESS &&
+               (type==REG_SZ || type==REG_EXPAND_SZ) &&
+               size>=sizeof(wchar_t) && size<=32768) {
+                std::vector<wchar_t> value(size/sizeof(wchar_t)+1,L'\0');
+                if(RegQueryValueExW(parameters,L"ServiceDll",nullptr,
+                   &type,reinterpret_cast<BYTE*>(value.data()),&size)
+                   ==ERROR_SUCCESS) {
+                    std::wstring path=expanded(value.data());
+                    if(isUserWritableContext(lower(path)))
+                        out.emit("Service DLL Review",path,
+                            "Service "+utf8(std::wstring(names.data(),n))+
+                            " | ServiceDll points into user-writable location");
+                    if(!path.empty() && !isFile(path) &&
+                       !starts(lower(path),L"\\systemroot\\"))
+                        out.emit("Service DLL Review",path,
+                            "Service "+utf8(std::wstring(names.data(),n))+
+                            " | ServiceDll missing or inaccessible");
+                }
+            }
+            RegCloseKey(parameters);
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(root);
+}
+// Inspect process-parent relationships using the same snapshot.
+static void inspectParentRelationships(Collector& out,
+                                       const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    for(const auto& proc:processes) {
+        if(out.stopped())break;
+        auto parent=byPid.find(proc.parent);
+        if(parent==byPid.end())continue;
+        const auto& pp=*parent->second;
+        const auto child=lower(proc.name);
+        const auto parentName=lower(pp.name);
+        if((child==L"services.exe" || child==L"lsass.exe" ||
+            child==L"winlogon.exe") &&
+           isUserWritableContext(lower(proc.path)))
+            out.emit("Process Parent Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | System-like process in user-writable location; parent "+
+                utf8(pp.name)+" ("+std::to_string(pp.pid)+")");
+        if(child==L"cmd.exe" && parentName==L"winword.exe" &&
+           isUserWritableContext(lower(proc.path)))
+            out.emit("Process Parent Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | Office-spawned command interpreter outside Windows");
+        if(child==L"powershell.exe" &&
+           (parentName==L"excel.exe" || parentName==L"winword.exe") &&
+           isUserWritableContext(lower(proc.path)))
+            out.emit("Process Parent Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | Office-spawned PowerShell-like binary in user directory");
+    }
+}
+// Enumerate established TCP connections with owning PIDs.
+// Connections alone are not suspicious; this reports only a bounded
+// correlation with a process executing from a temporary directory.
+static void inspectTcpConnections(Collector& out,
+                                  const std::vector<Process>& processes) {
+    if(out.stopped())return;
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    DWORD bytes=0;
+    DWORD status=GetExtendedTcpTable(nullptr,&bytes,TRUE,AF_INET,
+                                     TCP_TABLE_OWNER_PID_ALL,0);
+    if(status!=ERROR_INSUFFICIENT_BUFFER ||
+       !bytes || bytes>32*1024*1024)return;
+    std::vector<BYTE> data(bytes);
+    status=GetExtendedTcpTable(data.data(),&bytes,TRUE,AF_INET,
+                               TCP_TABLE_OWNER_PID_ALL,0);
+    if(status!=NO_ERROR)return;
+    auto table=reinterpret_cast<MIB_TCPTABLE_OWNER_PID*>(data.data());
+    const DWORD count=(std::min)(table->dwNumEntries,DWORD(8192));
+    std::unordered_set<DWORD> reported;
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        const auto& row=table->table[i];
+        if(row.dwState!=MIB_TCP_STATE_ESTAB)continue;
+        auto it=byPid.find(row.dwOwningPid);
+        if(it==byPid.end() || !reported.insert(row.dwOwningPid).second)
+            continue;
+        const auto& proc=*it->second;
+        if(contains(lower(proc.path),L"\\temp\\"))
+            out.emit("Process Network Context Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | Established TCP connection while running from Temp");
+    }
+}
+// Enumerate executable-related Alternate Data Stream names where supported.
+// This checks metadata only; it never reads or executes ADS contents.
+static void inspectStreams(Collector& out,const std::wstring& path) {
+    if(out.stopped() || !isFile(path))return;
+    WIN32_FIND_STREAM_DATA info{};
+    HANDLE find=FindFirstStreamW(path.c_str(),FindStreamInfoStandard,
+                                 &info,0);
+    if(find==INVALID_HANDLE_VALUE)return;
+    unsigned count=0;
+    do {
+        if(out.stopped() || ++count>32)break;
+        const std::wstring stream=info.cStreamName;
+        if(stream!=L"::$DATA" && !stream.empty()) {
+            const auto low=lower(stream);
+            if(contains(low,L".exe") || contains(low,L".dll") ||
+               contains(low,L".ps1") || contains(low,L".bat"))
+                out.emit("Alternate Data Stream Review",path,
+                    "Executable/script-like alternate stream name: "+
+                    utf8(stream));
+        }
+    }while(FindNextStreamW(find,&info));
+    FindClose(find);
+}
+// Inspect current-user Explorer shell launch hooks.
+static void inspectShellExtensions(Collector& out) {
+    inspectRegistryString(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"Shell","HKCU shell policy",true);
+    inspectRegistryString(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"Shell","HKLM shell policy",true);
+    inspectRegistryString(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        L"Shell","HKCU Winlogon shell",true);
+    inspectRegistryString(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+        L"Userinit","HKCU Winlogon userinit",true);
+}
+// Review known startup approval flags, without calling a disabled
+// item malicious or attempting to re-enable anything.
+static void inspectStartupApproval(Collector& out) {
+    const wchar_t* keys[]={
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder"
+    };
+    for(const wchar_t* subkey:keys) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_CURRENT_USER,subkey,0,KEY_READ,&key)
+           !=ERROR_SUCCESS)continue;
+        DWORD count=0,maxName=0,maxData=0;
+        if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+            nullptr,nullptr)!=ERROR_SUCCESS) {
+            RegCloseKey(key);continue;
+        }
+        count=(std::min)(count,DWORD(256));
+        maxName=(std::min)(maxName,DWORD(4096));
+        maxData=(std::min)(maxData,DWORD(1024));
+        std::vector<wchar_t> name(maxName+2);
+        std::vector<BYTE> data(maxData+2);
+        for(DWORD i=0;i<count && !out.stopped();++i) {
+            DWORD n=static_cast<DWORD>(name.size()-1);
+            DWORD size=static_cast<DWORD>(data.size());
+            DWORD type=0;
+            if(RegEnumValueW(key,i,name.data(),&n,nullptr,
+                             &type,data.data(),&size)!=ERROR_SUCCESS)
+                continue;
+            if(type!=REG_BINARY || size<1)continue;
+            if(data[0]==0x02)continue; // ordinary enabled state
+            if(data[0]==0x03)continue; // ordinary disabled state
+            out.emit("Startup Approval Format Review",
+                std::wstring(name.data(),n),
+                "Unrecognized startup approval state byte: "+
+                std::to_string(data[0]));
+        }
+        RegCloseKey(key);
+    }
+}
+
+
+// Parse PE optional header flags from a bounded local file snapshot.
+// These flags are context, not an assertion that mitigations are bypassed.
+static void inspectPEMitigationHeaders(Collector& out,
+                                       const std::wstring& path) {
+    if(out.stopped() || !isExecutableExtension(path))return;
+    std::vector<unsigned char> bytes;
+    if(!readFilePrefix(path,bytes,1024*1024))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)return;
+    const size_t offset=static_cast<size_t>(dos.e_lfanew);
+    if(!within(offset,sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),
+               bytes.size()))return;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+offset,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE)return;
+    IMAGE_FILE_HEADER file{};
+    memcpy(&file,bytes.data()+offset+sizeof(DWORD),sizeof(file));
+    const size_t optional=offset+sizeof(DWORD)+sizeof(file);
+    if(!within(optional,file.SizeOfOptionalHeader,bytes.size()))return;
+    if(file.SizeOfOptionalHeader<sizeof(WORD))return;
+    WORD magic=0;
+    memcpy(&magic,bytes.data()+optional,sizeof(magic));
+    WORD dllCharacteristics=0,subsystem=0;
+    DWORD checksum=0;
+    bool valid=false;
+    if(magic==IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+       file.SizeOfOptionalHeader>=sizeof(IMAGE_OPTIONAL_HEADER64)) {
+        IMAGE_OPTIONAL_HEADER64 hdr{};
+        memcpy(&hdr,bytes.data()+optional,sizeof(hdr));
+        dllCharacteristics=hdr.DllCharacteristics;
+        subsystem=hdr.Subsystem;
+        checksum=hdr.CheckSum;
+        valid=true;
+        if(hdr.SizeOfImage>0x80000000)
+            out.emit("PE Header Review",path,
+                     "Declared image size exceeds 2 GiB");
+        if(hdr.AddressOfEntryPoint>=hdr.SizeOfImage &&
+           hdr.AddressOfEntryPoint!=0)
+            out.emit("PE Header Review",path,
+                     "Entry point outside declared image size");
+    }
+    if(magic==IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+       file.SizeOfOptionalHeader>=sizeof(IMAGE_OPTIONAL_HEADER32)) {
+        IMAGE_OPTIONAL_HEADER32 hdr{};
+        memcpy(&hdr,bytes.data()+optional,sizeof(hdr));
+        dllCharacteristics=hdr.DllCharacteristics;
+        subsystem=hdr.Subsystem;
+        checksum=hdr.CheckSum;
+        valid=true;
+        if(hdr.SizeOfImage>0x80000000)
+            out.emit("PE Header Review",path,
+                     "Declared image size exceeds 2 GiB");
+        if(hdr.AddressOfEntryPoint>=hdr.SizeOfImage &&
+           hdr.AddressOfEntryPoint!=0)
+            out.emit("PE Header Review",path,
+                     "Entry point outside declared image size");
+    }
+    if(!valid)return;
+    if(!(dllCharacteristics&IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) &&
+       isUserWritableContext(lower(path)))
+        out.emit("PE Mitigation Header Review",path,
+                 "Dynamic-base (ASLR) flag absent in user-directory binary");
+    if(!(dllCharacteristics&IMAGE_DLLCHARACTERISTICS_NX_COMPAT) &&
+       isUserWritableContext(lower(path)))
+        out.emit("PE Mitigation Header Review",path,
+                 "NX-compatible flag absent in user-directory binary");
+    if(subsystem==IMAGE_SUBSYSTEM_NATIVE &&
+       contains(lower(path),L"\\downloads\\"))
+        out.emit("PE Subsystem Review",path,
+                 "Native subsystem executable in Downloads");
+    if(checksum==0 && lower(fs::path(path).extension().wstring())==L".sys")
+        out.emit("PE Header Review",path,
+                 "Driver image has zero PE checksum");
+}
+// Examine environment-specified process image for missing/relative paths.
+// This is a read-only consistency check against OS process enumeration.
+static void inspectProcessPathConsistency(Collector& out,
+                                          const std::vector<Process>& processes) {
+    size_t reviewed=0;
+    for(const auto& proc:processes) {
+        if(out.stopped() || reviewed>=512)break;
+        if(proc.path.empty() || proc.path[0]==L'[')continue;
+        ++reviewed;
+        const auto low=lower(proc.path);
+        if(low.find(L":\\")==std::wstring::npos &&
+           !starts(low,L"\\\\") &&
+           !starts(low,L"\\device\\") &&
+           !starts(low,L"\\systemroot\\"))
+            out.emit("Process Path Consistency Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | Non-absolute process image path");
+        const auto filename=lower(fs::path(proc.path).filename().wstring());
+        const auto name=lower(proc.name);
+        if(!filename.empty() && !name.empty() && filename!=name &&
+           isUserWritableContext(low))
+            out.emit("Process Path Consistency Review",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | Snapshot process name differs from image filename");
+    }
+}
+
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    Collector out;
+    inspectProcessFiles(out,processes);
+    if(!out.stopped())inspectParentRelationships(out,processes);
+    if(!out.stopped())inspectProcessPathConsistency(out,processes);
+    size_t mitigationChecked=0;
+    for(const auto& proc:processes) {
+        if(out.stopped() || mitigationChecked>=128)break;
+        if(isUserWritableContext(lower(proc.path))) {
+            inspectPEMitigationHeaders(out,proc.path);
+            ++mitigationChecked;
+        }
+    }
+    if(!out.stopped())inspectLoadedModules(out,processes);
+    if(!out.stopped())inspectTcpConnections(out,processes);
+    if(!out.stopped())inspectAutostarts(out);
+    if(!out.stopped())inspectStartupFolders(out);
+    if(!out.stopped())inspectServiceConfiguration(out);
+    if(!out.stopped())inspectRegistryExtensions(out);
+    if(!out.stopped())inspectIFEO(out);
+    if(!out.stopped())inspectServiceDllRegistry(out);
+    if(!out.stopped())inspectShellExtensions(out);
+    if(!out.stopped())inspectStartupApproval(out);
+    size_t streamsChecked=0;
+    for(const auto& proc:processes) {
+        if(out.stopped() || streamsChecked>=128)break;
+        if(isUserWritableContext(lower(proc.path))) {
+            inspectStreams(out,proc.path);
+            ++streamsChecked;
+        }
+    }
+    return std::move(out.results);
+}
+} // namespace real_detect
+
+// Sync PC Checker 8.1: additional bounded, read-only evidence collectors.
+// These checks only report observed configuration and anomalous file context.
+// A finding does not establish malware, cheating, injection, or bypass.
+namespace deep_evidence {
+struct Sink {
+    std::vector<Record> rows;
+    size_t limit=900;
+    void push(const char* kind,const std::wstring& subject,
+              const std::string& reason) {
+        if(rows.size()>=limit || cancelRequested)return;
+        rows.push_back({kind,utf8(subject),"REVIEW ONLY | "+reason});
+    }
+    bool stop() const {return cancelRequested || rows.size()>=limit;}
+};
+static std::wstring low(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+                   [](wchar_t c){return std::towlower(c);});
+    return value;
+}
+static bool has(const std::wstring& value,const wchar_t* needle){
+    return value.find(needle)!=std::wstring::npos;
+}
+static bool begins(const std::wstring& value,const wchar_t* needle){
+    return value.rfind(needle,0)==0;
+}
+static std::wstring expand(const std::wstring& value){
+    DWORD needed=ExpandEnvironmentStringsW(value.c_str(),nullptr,0);
+    if(!needed || needed>32768)return value;
+    std::wstring result(needed,L'\0');
+    DWORD written=ExpandEnvironmentStringsW(value.c_str(),result.data(),needed);
+    if(!written || written>needed)return value;
+    if(!result.empty() && result.back()==L'\0')result.pop_back();
+    return result;
+}
+static bool userLocation(const std::wstring& path){
+    const auto p=low(path);
+    return has(p,L"\\appdata\\") || has(p,L"\\downloads\\") ||
+           has(p,L"\\users\\public\\") || has(p,L"\\temp\\") ||
+           has(p,L"\\desktop\\");
+}
+static bool fileExists(const std::wstring& path){
+    DWORD attr=GetFileAttributesW(path.c_str());
+    return attr!=INVALID_FILE_ATTRIBUTES &&
+           !(attr&FILE_ATTRIBUTE_DIRECTORY);
+}
+static std::wstring commandImage(const std::wstring& command){
+    auto text=expand(command);
+    const size_t first=text.find_first_not_of(L" \t\r\n");
+    if(first==std::wstring::npos)return {};
+    text=text.substr(first);
+    if(text.front()==L'"') {
+        size_t last=text.find(L'"',1);
+        if(last!=std::wstring::npos)return text.substr(1,last-1);
+        return {};
+    }
+    const auto normalized=low(text);
+    for(const auto* suffix:{L".exe",L".com",L".cmd",L".bat",L".dll",L".sys"}) {
+        auto pos=normalized.find(suffix);
+        if(pos!=std::wstring::npos && pos<4096)
+            return text.substr(0,pos+wcslen(suffix));
+    }
+    return {};
+}
+static std::wstring keyName(HKEY hive){
+    return hive==HKEY_LOCAL_MACHINE?L"HKLM":
+           hive==HKEY_CURRENT_USER?L"HKCU":L"Registry";
+}
+static bool readString(HKEY key,const wchar_t* name,std::wstring& out){
+    DWORD type=0,bytes=0;
+    LONG rc=RegQueryValueExW(key,name,nullptr,&type,nullptr,&bytes);
+    if(rc!=ERROR_SUCCESS || bytes<sizeof(wchar_t) ||
+       bytes>65536 || (type!=REG_SZ && type!=REG_EXPAND_SZ))return false;
+    std::vector<wchar_t> data(bytes/sizeof(wchar_t)+1,L'\0');
+    rc=RegQueryValueExW(key,name,nullptr,&type,
+                        reinterpret_cast<BYTE*>(data.data()),&bytes);
+    if(rc!=ERROR_SUCCESS)return false;
+    out.assign(data.data());
+    return !out.empty();
+}
+static bool readDword(HKEY key,const wchar_t* name,DWORD& value){
+    DWORD type=0,bytes=sizeof(value);
+    LONG rc=RegQueryValueExW(key,name,nullptr,&type,
+                             reinterpret_cast<BYTE*>(&value),&bytes);
+    return rc==ERROR_SUCCESS && type==REG_DWORD && bytes==sizeof(value);
+}
+static void inspectImageReference(Sink& sink,const char* source,
+                                  const std::wstring& value,
+                                  const std::wstring& label) {
+    if(sink.stop())return;
+    auto path=commandImage(value);
+    if(path.empty())return;
+    const auto normalized=low(path);
+    if(userLocation(normalized))
+        sink.push("Persistence Path Review",path,
+                  std::string(source)+" | "+utf8(label)+
+                  " | Target under user-writable directory");
+    if(has(normalized,L"\\recycle.bin\\") ||
+       has(normalized,L"\\temporary internet files\\"))
+        sink.push("Persistence Path Review",path,
+                  std::string(source)+" | "+utf8(label)+
+                  " | Target in temporary or recycled directory");
+}
+static void inspectStringValue(Sink& sink,HKEY hive,
+                               const wchar_t* subkey,const wchar_t* value,
+                               const char* source,REGSAM view=0) {
+    if(sink.stop())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ|view,&key)!=ERROR_SUCCESS)return;
+    std::wstring data;
+    bool found=readString(key,value,data);
+    RegCloseKey(key);
+    if(found)inspectImageReference(sink,source,data,value);
+}
+static void inspectEnumeratedValues(Sink& sink,HKEY hive,
+                                    const wchar_t* subkey,
+                                    const char* source,REGSAM view=0) {
+    if(sink.stop())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ|view,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(16384));
+    maxData=(std::min)(maxData,DWORD(65536));
+    std::vector<wchar_t> name(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        DWORD b=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,name.data(),&n,nullptr,&type,
+                         data.data(),&b)!=ERROR_SUCCESS)continue;
+        if((type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+           b<sizeof(wchar_t) || b%sizeof(wchar_t))continue;
+        const wchar_t* chars=reinterpret_cast<const wchar_t*>(data.data());
+        size_t length=0;
+        while(length<b/sizeof(wchar_t) && chars[length])++length;
+        std::wstring value(chars,length);
+        inspectImageReference(sink,source,value,
+                              std::wstring(name.data(),n));
+    }
+    RegCloseKey(key);
+}
+static void inspectSubkeyValues(Sink& sink,HKEY hive,
+                                const wchar_t* subkey,
+                                const wchar_t* targetValue,
+                                const char* source,REGSAM view=0) {
+    if(sink.stop())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ|view,&root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(768));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(root,i,names.data(),&n,nullptr,
+                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(root,names.data(),0,KEY_READ,&child)
+           !=ERROR_SUCCESS)continue;
+        std::wstring value;
+        if(readString(child,targetValue,value))
+            inspectImageReference(sink,source,value,
+                                  std::wstring(names.data(),n));
+        RegCloseKey(child);
+    }
+    RegCloseKey(root);
+}
+
+static void checkCurrentUserRun(Sink& sink) {
+    if(sink.stop())return;
+    // Source: CurrentUserRun. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", "CurrentUserRun");
+}
+
+static void checkCurrentUserRunOnce(Sink& sink) {
+    if(sink.stop())return;
+    // Source: CurrentUserRunOnce. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "CurrentUserRunOnce");
+}
+
+static void checkMachineRun64(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRun64. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "MachineRun64",KEY_WOW64_64KEY);
+}
+
+static void checkMachineRun32(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRun32. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "MachineRun32",KEY_WOW64_32KEY);
+}
+
+static void checkMachineRunOnce64(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRunOnce64. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "MachineRunOnce64",KEY_WOW64_64KEY);
+}
+
+static void checkMachineRunOnce32(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRunOnce32. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "MachineRunOnce32",KEY_WOW64_32KEY);
+}
+
+static void checkUserPoliciesRun(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserPoliciesRun. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run", "UserPoliciesRun");
+}
+
+static void checkMachinePoliciesRun(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachinePoliciesRun. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run", "MachinePoliciesRun");
+}
+
+static void checkCurrentUserRunServices(Sink& sink) {
+    if(sink.stop())return;
+    // Source: CurrentUserRunServices. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServices", "CurrentUserRunServices");
+}
+
+static void checkCurrentUserRunServicesOnce(Sink& sink) {
+    if(sink.stop())return;
+    // Source: CurrentUserRunServicesOnce. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce", "CurrentUserRunServicesOnce");
+}
+
+static void checkMachineRunServices(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRunServices. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServices", "MachineRunServices");
+}
+
+static void checkMachineRunServicesOnce(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineRunServicesOnce. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce", "MachineRunServicesOnce");
+}
+
+static void checkUserWindowsRun(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserWindowsRun. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"Run","UserWindowsRun");
+}
+
+static void checkUserWindowsLoad(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserWindowsLoad. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"Load","UserWindowsLoad");
+}
+
+static void checkMachineAppInit(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineAppInit. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"AppInit_DLLs","MachineAppInit");
+}
+
+static void checkMachineWinlogonShell(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineWinlogonShell. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Shell","MachineWinlogonShell");
+}
+
+static void checkMachineWinlogonUserinit(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineWinlogonUserinit. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Userinit","MachineWinlogonUserinit");
+}
+
+static void checkUserWinlogonShell(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserWinlogonShell. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Shell","UserWinlogonShell");
+}
+
+static void checkUserWinlogonUserinit(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserWinlogonUserinit. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Userinit","UserWinlogonUserinit");
+}
+
+static void checkMachineShellPolicy(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineShellPolicy. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"Shell","MachineShellPolicy");
+}
+
+static void checkUserShellPolicy(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserShellPolicy. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"Shell","UserShellPolicy");
+}
+
+static void checkMachineBootExecute(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineBootExecute. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager",L"BootExecute","MachineBootExecute");
+}
+
+static void checkMachineSetupCmdline(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineSetupCmdline. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SYSTEM\\Setup",L"CmdLine","MachineSetupCmdline");
+}
+
+static void checkUserCommandProcessor(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserCommandProcessor. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Command Processor",L"AutoRun","UserCommandProcessor");
+}
+
+static void checkMachineCommandProcessor(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineCommandProcessor. Only suspicious executable paths produce a finding.
+    inspectStringValue(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Command Processor",L"AutoRun","MachineCommandProcessor");
+}
+
+static void checkMachineActiveSetup(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineActiveSetup. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Active Setup\\Installed Components",L"StubPath","MachineActiveSetup");
+}
+
+static void checkUserActiveSetup(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserActiveSetup. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Active Setup\\Installed Components",L"StubPath","UserActiveSetup");
+}
+
+static void checkMachineIFEO(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineIFEO. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",L"Debugger","MachineIFEO");
+}
+
+static void checkMachineSilentProcessExit(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineSilentProcessExit. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",L"MonitorProcess","MachineSilentProcessExit");
+}
+
+static void checkMachineAppPaths(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineAppPaths. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",L"","MachineAppPaths");
+}
+
+static void checkUserAppPaths(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserAppPaths. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",L"","UserAppPaths");
+}
+
+static void checkMachineShellExecuteHooks(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineShellExecuteHooks. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks", "MachineShellExecuteHooks");
+}
+
+static void checkUserShellExecuteHooks(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserShellExecuteHooks. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks", "UserShellExecuteHooks");
+}
+
+static void checkMachineExplorerSharedTaskScheduler(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineExplorerSharedTaskScheduler. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SharedTaskScheduler", "MachineExplorerSharedTaskScheduler");
+}
+
+static void checkMachineExplorerShellServiceObjectDelayLoad(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineExplorerShellServiceObjectDelayLoad. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\ShellServiceObjectDelayLoad", "MachineExplorerShellServiceObjectDelayLoad");
+}
+
+static void checkMachinePrintMonitors(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachinePrintMonitors. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors",L"Driver","MachinePrintMonitors");
+}
+
+static void checkMachinePrintProcessors(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachinePrintProcessors. Only suspicious executable paths produce a finding.
+    inspectSubkeyValues(sink,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Print\\Environments\\Windows x64\\Print Processors",L"Driver","MachinePrintProcessors");
+}
+
+static void checkMachineWindowsNTDrivers(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineWindowsNTDrivers. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32", "MachineWindowsNTDrivers");
+}
+
+static void checkUserWindowsNTDrivers(Sink& sink) {
+    if(sink.stop())return;
+    // Source: UserWindowsNTDrivers. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32", "UserWindowsNTDrivers");
+}
+
+static void checkMachineWow6432Drivers(Sink& sink) {
+    if(sink.stop())return;
+    // Source: MachineWow6432Drivers. Only suspicious executable paths produce a finding.
+    inspectEnumeratedValues(sink,HKEY_LOCAL_MACHINE,L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32", "MachineWow6432Drivers");
+}
+
+// Enumerate service failure-action commands and recovery programs.
+// The SCM is queried read-only, and service handles are closed on every path.
+static void inspectServiceRecovery(Sink& sink) {
+    if(sink.stop())return;
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm)return;
+    DWORD bytes=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,SERVICE_STATE_ALL,nullptr,0,
+        &bytes,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || !bytes ||
+       bytes>16*1024*1024) {
+        CloseServiceHandle(scm);
+        return;
+    }
+    std::vector<BYTE> buffer(bytes);
+    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,SERVICE_STATE_ALL,buffer.data(),bytes,
+        &bytes,&count,&resume,nullptr)) {
+        CloseServiceHandle(scm);
+        return;
+    }
+    const auto entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(
+        buffer.data());
+    count=(std::min)(count,DWORD(1536));
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        SC_HANDLE service=OpenServiceW(scm,entries[i].lpServiceName,
+                                      SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD needed=0;
+        QueryServiceConfig2W(service,SERVICE_CONFIG_FAILURE_ACTIONS,
+                             nullptr,0,&needed);
+        if(needed && needed<=65536) {
+            std::vector<BYTE> config(needed);
+            if(QueryServiceConfig2W(service,SERVICE_CONFIG_FAILURE_ACTIONS,
+                                   config.data(),needed,&needed)) {
+                const auto actions=reinterpret_cast<
+                    SERVICE_FAILURE_ACTIONSW*>(config.data());
+                if(actions->lpCommand && *actions->lpCommand)
+                    inspectImageReference(sink,"Service recovery command",
+                        actions->lpCommand,entries[i].lpServiceName);
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(scm);
+}
+// Review executable paths configured for service DLL and driver services.
+// This intentionally avoids opening devices or changing service state.
+static void inspectServiceImageRegistry(Sink& sink) {
+    if(sink.stop())return;
+    HKEY services=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,
+        &services)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(services,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(services);
+        return;
+    }
+    count=(std::min)(count,DWORD(3072));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(services,i,name.data(),&n,nullptr,
+                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(services,name.data(),0,KEY_READ,&service)
+           !=ERROR_SUCCESS)continue;
+        std::wstring path;
+        if(readString(service,L"ImagePath",path))
+            inspectImageReference(sink,"Service ImagePath",path,
+                                  std::wstring(name.data(),n));
+        HKEY parameters=nullptr;
+        if(RegOpenKeyExW(service,L"Parameters",0,KEY_READ,&parameters)
+           ==ERROR_SUCCESS) {
+            if(readString(parameters,L"ServiceDll",path))
+                inspectImageReference(sink,"ServiceDll",path,
+                                      std::wstring(name.data(),n));
+            RegCloseKey(parameters);
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(services);
+}
+// Check execution-related attributes without loading or executing a file.
+static void inspectAttributes(Sink& sink,const std::wstring& path,
+                              const char* source) {
+    if(sink.stop() || !fileExists(path))return;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&data))
+        return;
+    const DWORD a=data.dwFileAttributes;
+    const auto lower=low(path);
+    if((a&FILE_ATTRIBUTE_HIDDEN) && userLocation(lower))
+        sink.push("Executable Attribute Review",path,
+                  std::string(source)+" | Hidden executable in user directory");
+    if((a&FILE_ATTRIBUTE_SYSTEM) && userLocation(lower))
+        sink.push("Executable Attribute Review",path,
+                  std::string(source)+" | System attribute in user directory");
+    if((a&FILE_ATTRIBUTE_REPARSE_POINT) && userLocation(lower))
+        sink.push("Executable Attribute Review",path,
+                  std::string(source)+" | Reparse point in user directory");
+    if((a&FILE_ATTRIBUTE_OFFLINE) && userLocation(lower))
+        sink.push("Executable Attribute Review",path,
+                  std::string(source)+" | Offline attribute in user directory");
+    ULARGE_INTEGER size{};
+    size.LowPart=data.nFileSizeLow;
+    size.HighPart=data.nFileSizeHigh;
+    if(size.QuadPart==0)
+        sink.push("Executable Size Review",path,
+                  std::string(source)+" | Zero-byte executable file");
+    if(size.QuadPart>1024ULL*1024*1024 &&
+       userLocation(lower))
+        sink.push("Executable Size Review",path,
+                  std::string(source)+" | Executable larger than 1 GiB");
+}
+// Read-only checks of the current process image's Win32 attributes.
+// File sizes and timestamps are not treated as evidence of wrongdoing.
+static void inspectRunningImages(Sink& sink,
+                                 const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0;
+    for(const auto& proc:processes) {
+        if(sink.stop() || checked>=600)break;
+        if(proc.path.empty() || proc.path.front()==L'[')continue;
+        const auto normalized=low(proc.path);
+        if(!seen.insert(normalized).second)continue;
+        ++checked;
+        inspectAttributes(sink,proc.path,"Running process");
+    }
+}
+// Check the owning image for an established TCP endpoint.
+// TCP activity is ordinary; report only when combined with an unusual path.
+static void inspectEstablishedConnections(Sink& sink,
+                                          const std::vector<Process>& processes) {
+    if(sink.stop())return;
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    DWORD bytes=0;
+    DWORD result=GetExtendedTcpTable(nullptr,&bytes,TRUE,AF_INET,
+                                     TCP_TABLE_OWNER_PID_ALL,0);
+    if(result!=ERROR_INSUFFICIENT_BUFFER || !bytes ||
+       bytes>32*1024*1024)return;
+    std::vector<BYTE> buffer(bytes);
+    result=GetExtendedTcpTable(buffer.data(),&bytes,TRUE,AF_INET,
+                               TCP_TABLE_OWNER_PID_ALL,0);
+    if(result!=NO_ERROR)return;
+    const auto table=reinterpret_cast<MIB_TCPTABLE_OWNER_PID*>(
+        buffer.data());
+    const DWORD count=(std::min)(table->dwNumEntries,DWORD(16384));
+    std::unordered_set<DWORD> reported;
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        const auto& row=table->table[i];
+        if(row.dwState!=MIB_TCP_STATE_ESTAB)continue;
+        auto it=byPid.find(row.dwOwningPid);
+        if(it==byPid.end())continue;
+        const auto& proc=*it->second;
+        const auto path=low(proc.path);
+        if(!has(path,L"\\temp\\") && !has(path,L"\\recycle.bin\\"))
+            continue;
+        if(!reported.insert(proc.pid).second)continue;
+        sink.push("Network Process Context",proc.path,
+                  "PID "+std::to_string(proc.pid)+
+                  " | Active TCP connection from temporary-location executable");
+    }
+}
+// Inspect module locations via documented PSAPI functions.
+// Protected processes may deny access, which is not itself a finding.
+static void inspectModuleLocations(Sink& sink,
+                                   const std::vector<Process>& processes) {
+    size_t visited=0;
+    std::unordered_set<std::wstring> reported;
+    for(const auto& proc:processes) {
+        if(sink.stop() || visited>=160)break;
+        HANDLE handle=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
+                                  FALSE,proc.pid);
+        if(!handle)continue;
+        ++visited;
+        std::array<HMODULE,1024> modules{};
+        DWORD needed=0;
+        if(EnumProcessModulesEx(handle,modules.data(),
+             static_cast<DWORD>(modules.size()*sizeof(HMODULE)),
+             &needed,LIST_MODULES_ALL)) {
+            const size_t count=(std::min)(modules.size(),
+                static_cast<size_t>(needed/sizeof(HMODULE)));
+            for(size_t i=0;i<count && !sink.stop();++i) {
+                wchar_t module[MAX_PATH*4]{};
+                if(!GetModuleFileNameExW(handle,modules[i],
+                                         module,MAX_PATH*4))continue;
+                const std::wstring path=module;
+                const auto normalized=low(path);
+                if(!userLocation(normalized))continue;
+                if(!reported.insert(std::to_wstring(proc.pid)+L":"+normalized)
+                   .second)continue;
+                sink.push("Loaded Module Context",path,
+                    "PID "+std::to_string(proc.pid)+
+                    " | Module loaded from user-writable directory");
+                inspectAttributes(sink,path,"Loaded module");
+            }
+        }
+        CloseHandle(handle);
+    }
+}
+// Inspect user and common startup folders without following symlink chains.
+static void inspectStartupFolder(Sink& sink,const wchar_t* variable,
+                                 const wchar_t* suffix,
+                                 const char* label) {
+    wchar_t root[32768]{};
+    DWORD count=GetEnvironmentVariableW(variable,root,32768);
+    if(!count || count>=32768)return;
+    std::error_code error;
+    fs::path folder=fs::path(root)/suffix;
+    if(!fs::is_directory(folder,error))return;
+    size_t scanned=0;
+    for(fs::directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+        !error && it!=end && scanned<256 && !sink.stop();
+        it.increment(error),++scanned) {
+        if(!it->is_regular_file(error))continue;
+        const auto ext=low(it->path().extension().wstring());
+        if(ext!=L".exe" && ext!=L".bat" && ext!=L".cmd" &&
+           ext!=L".ps1" && ext!=L".vbs" && ext!=L".js")continue;
+        const auto path=it->path().wstring();
+        sink.push("Startup Folder Review",path,
+                  std::string(label)+" | Executable or script in startup");
+        if(ext==L".exe")inspectAttributes(sink,path,"Startup executable");
+    }
+}
+static void inspectStartupDirectories(Sink& sink) {
+    inspectStartupFolder(sink,L"APPDATA",
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+        "Current user");
+    inspectStartupFolder(sink,L"PROGRAMDATA",
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+        "All users");
+}
+// Read the PE header without trusting section offsets or unbounded sizes.
+static bool loadPrefix(const std::wstring& path,
+                       std::vector<unsigned char>& bytes,
+                       size_t maximum=4*1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER length{};
+    if(!GetFileSizeEx(file,&length) || length.QuadPart<0) {
+        CloseHandle(file);
+        return false;
+    }
+    const auto size=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(length.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    bytes.resize(size);
+    DWORD read=0;
+    const bool ok=size==0 ||
+        ReadFile(file,bytes.data(),static_cast<DWORD>(size),
+                 &read,nullptr)!=FALSE;
+    CloseHandle(file);
+    bytes.resize(ok?read:0);
+    return ok;
+}
+static bool inBounds(size_t offset,size_t length,size_t size){
+    return offset<=size && length<=size-offset;
+}
+static void inspectPEHeader(Sink& sink,const std::wstring& path) {
+    if(sink.stop())return;
+    std::vector<unsigned char> bytes;
+    if(!loadPrefix(path,bytes))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE) {
+        sink.push("PE Format Review",path,
+                  "Executable filename does not contain an MZ header");
+        return;
+    }
+    if(dos.e_lfanew<0 || !inBounds(static_cast<size_t>(dos.e_lfanew),
+        sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),bytes.size())) {
+        sink.push("PE Format Review",path,"Invalid NT header offset");
+        return;
+    }
+    const size_t offset=static_cast<size_t>(dos.e_lfanew);
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+offset,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE) {
+        sink.push("PE Format Review",path,"Missing NT signature");
+        return;
+    }
+    IMAGE_FILE_HEADER header{};
+    memcpy(&header,bytes.data()+offset+sizeof(DWORD),sizeof(header));
+    const size_t optional=offset+sizeof(DWORD)+sizeof(header);
+    if(!inBounds(optional,header.SizeOfOptionalHeader,bytes.size())) {
+        sink.push("PE Format Review",path,"Optional header outside file prefix");
+        return;
+    }
+    if(header.NumberOfSections==0 || header.NumberOfSections>96) {
+        sink.push("PE Format Review",path,
+                  "Unusual section count "+std::to_string(header.NumberOfSections));
+        if(header.NumberOfSections>96)return;
+    }
+    const size_t sectionStart=optional+header.SizeOfOptionalHeader;
+    const size_t tableSize=static_cast<size_t>(header.NumberOfSections)*
+                           sizeof(IMAGE_SECTION_HEADER);
+    if(!inBounds(sectionStart,tableSize,bytes.size())) {
+        sink.push("PE Format Review",path,"Section table outside file prefix");
+        return;
+    }
+    size_t wx=0,oversized=0;
+    for(unsigned i=0;i<header.NumberOfSections && !sink.stop();++i) {
+        IMAGE_SECTION_HEADER section{};
+        memcpy(&section,bytes.data()+sectionStart+
+               i*sizeof(IMAGE_SECTION_HEADER),sizeof(section));
+        if((section.Characteristics&IMAGE_SCN_MEM_WRITE) &&
+           (section.Characteristics&IMAGE_SCN_MEM_EXECUTE))++wx;
+        if(section.Misc.VirtualSize>1024U*1024*1024)++oversized;
+    }
+    if(wx)
+        sink.push("PE Section Permissions",path,
+                  std::to_string(wx)+" writable/executable sections");
+    if(oversized)
+        sink.push("PE Section Layout",path,
+                  std::to_string(oversized)+" sections larger than 1 GiB");
+}
+static void inspectUserPEFiles(Sink& sink,
+                               const std::vector<Process>& processes) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(sink.stop() || inspected>=180)break;
+        if(!userLocation(proc.path))continue;
+        const auto normalized=low(proc.path);
+        if(!seen.insert(normalized).second)continue;
+        ++inspected;
+        inspectPEHeader(sink,proc.path);
+    }
+}
+
+// Policy values are configuration indicators, not proof of tampering.
+// Missing keys, inaccessible values and organization-managed settings
+// are never automatically considered suspicious.
+struct PolicyRule {
+    HKEY hive;
+    const wchar_t* path;
+    const wchar_t* name;
+    DWORD match;
+    const char* label;
+    const char* context;
+};
+static void inspectPolicyRule(Sink& sink,const PolicyRule& rule) {
+    if(sink.stop())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(rule.hive,rule.path,0,KEY_READ,&key)
+       !=ERROR_SUCCESS)return;
+    DWORD actual=0;
+    const bool exists=readDword(key,rule.name,actual);
+    RegCloseKey(key);
+    if(!exists || actual!=rule.match)return;
+    std::wstring subject=keyName(rule.hive)+L"\\"+
+                         rule.path+L"\\"+rule.name;
+    sink.push("Windows Policy Review",subject,
+              std::string(rule.label)+" | "+rule.context+
+              " | Observed DWORD: "+std::to_string(actual)+
+              " | Review administrator intent and policy");
+}
+
+static void checkPolicyDefenderRealtimeOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableRealtimeMonitoring",
+        1U,
+        "Real-time protection policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderBehaviorOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableBehaviorMonitoring",
+        1U,
+        "Behavior monitoring policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderOnAccessOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableOnAccessProtection",
+        1U,
+        "On-access protection policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderIOAVOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableIOAVProtection",
+        1U,
+        "Download attachment scanning policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderAntiSpywareOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"DisableAntiSpyware",
+        1U,
+        "Legacy antivirus policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderAntiVirusOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"DisableAntiVirus",
+        1U,
+        "Antivirus policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderScriptScanningOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableScriptScanning",
+        1U,
+        "Script scanning policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderCloudOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"SpynetReporting",
+        0U,
+        "Cloud reporting policy disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyDefenderSampleOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"SubmitSamplesConsent",
+        2U,
+        "Sample submission disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicySmartScreenOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"EnableSmartScreen",
+        0U,
+        "SmartScreen disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicySmartScreenExplorerOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+        L"SmartScreenEnabled",
+        0U,
+        "Explorer SmartScreen setting disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallDomainOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\DomainProfile",
+        L"EnableFirewall",
+        0U,
+        "Domain firewall profile disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallPrivateOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
+        L"EnableFirewall",
+        0U,
+        "Standard firewall profile disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallPublicOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\PublicProfile",
+        L"EnableFirewall",
+        0U,
+        "Public firewall profile disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallPolicyDomainOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile",
+        L"EnableFirewall",
+        0U,
+        "Domain firewall disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallPolicyStandardOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\StandardProfile",
+        L"EnableFirewall",
+        0U,
+        "Standard firewall disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyFirewallPolicyPublicOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile",
+        L"EnableFirewall",
+        0U,
+        "Public firewall disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableLUA",
+        0U,
+        "User Account Control disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacPromptAdminOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"ConsentPromptBehaviorAdmin",
+        0U,
+        "Admin elevation prompt disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacPromptUserOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"ConsentPromptBehaviorUser",
+        0U,
+        "Standard-user elevation prompt disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacSecureDesktopOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"PromptOnSecureDesktop",
+        0U,
+        "Secure desktop elevation prompt disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacInstallerDetectionOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableInstallerDetection",
+        0U,
+        "Installer detection disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyUacVirtualizationOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableVirtualization",
+        0U,
+        "UAC virtualization disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyRemoteDesktopOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+        L"fDenyTSConnections",
+        0U,
+        "Remote Desktop connections allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyRemoteAssistanceOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Remote Assistance",
+        L"fAllowToGetHelp",
+        1U,
+        "Remote Assistance allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyWinRMClientBasicOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Client",
+        L"AllowBasic",
+        1U,
+        "WinRM Basic authentication allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyWinRMServiceBasicOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service",
+        L"AllowBasic",
+        1U,
+        "WinRM service Basic authentication allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyWinRMServiceUnencryptedOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service",
+        L"AllowUnencryptedTraffic",
+        1U,
+        "WinRM unencrypted traffic allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyWinRMClientUnencryptedOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Client",
+        L"AllowUnencryptedTraffic",
+        1U,
+        "WinRM client unencrypted traffic allowed",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyPowerShellLoggingOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+        L"EnableScriptBlockLogging",
+        0U,
+        "PowerShell script block logging disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyPowerShellTranscriptionOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",
+        L"EnableTranscripting",
+        0U,
+        "PowerShell transcription disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyPowerShellModuleLoggingOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",
+        L"EnableModuleLogging",
+        0U,
+        "PowerShell module logging disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyWindowsUpdateOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+        L"NoAutoUpdate",
+        1U,
+        "Automatic Windows Update disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyEventLogSecurityOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Security",
+        L"Enabled",
+        0U,
+        "Security event log disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyEventLogSystemOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\System",
+        L"Enabled",
+        0U,
+        "System event log disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyEventLogApplicationOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Application",
+        L"Enabled",
+        0U,
+        "Application event log disabled by policy",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyCredentialGuardOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"EnableVirtualizationBasedSecurity",
+        0U,
+        "Virtualization-based security disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyLSAProtectionOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"RunAsPPL",
+        0U,
+        "LSA protected process disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyNetworkLevelAuthOff(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+        L"UserAuthentication",
+        0U,
+        "RDP Network Level Authentication disabled",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+static void checkPolicyRemoteRegistryOn(Sink& sink) {
+    if(sink.stop())return;
+    // Inspect only an explicit DWORD value; missing values do not trigger.
+    static const PolicyRule rule{
+        HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry",
+        L"Start",
+        2U,
+        "Remote Registry automatic start",
+        "Security configuration may be legitimate or centrally managed"
+    };
+    inspectPolicyRule(sink,rule);
+}
+
+// Query memory region metadata only. Never read process memory contents.
+// Private executable regions can be created by JIT runtimes and browsers.
+static void inspectExecutableMemoryRegions(Sink& sink,
+                                          const std::vector<Process>& processes) {
+    size_t visited=0;
+    for(const auto& proc:processes) {
+        if(sink.stop() || visited>=96)break;
+        HANDLE handle=OpenProcess(PROCESS_QUERY_INFORMATION,FALSE,proc.pid);
+        if(!handle)continue;
+        ++visited;
+        SYSTEM_INFO info{};
+        GetNativeSystemInfo(&info);
+        uintptr_t address=reinterpret_cast<uintptr_t>(
+            info.lpMinimumApplicationAddress);
+        const uintptr_t maximum=reinterpret_cast<uintptr_t>(
+            info.lpMaximumApplicationAddress);
+        size_t regions=0;
+        size_t privateExecutable=0;
+        size_t rwx=0;
+        ULONGLONG privateBytes=0;
+        while(address<maximum && regions<16384 && !sink.stop()) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            SIZE_T got=VirtualQueryEx(handle,
+                reinterpret_cast<LPCVOID>(address),&mbi,sizeof(mbi));
+            if(!got)break;
+            ++regions;
+            const uintptr_t base=reinterpret_cast<uintptr_t>(
+                mbi.BaseAddress);
+            const size_t size=mbi.RegionSize;
+            if(!size || base>UINTPTR_MAX-size)break;
+            const uintptr_t next=base+size;
+            if(next<=address)break;
+            address=next;
+            if(mbi.State!=MEM_COMMIT || mbi.Type!=MEM_PRIVATE)continue;
+            const DWORD protection=mbi.Protect&0xff;
+            const bool execute=protection==PAGE_EXECUTE ||
+                protection==PAGE_EXECUTE_READ ||
+                protection==PAGE_EXECUTE_READWRITE ||
+                protection==PAGE_EXECUTE_WRITECOPY;
+            if(!execute)continue;
+            ++privateExecutable;
+            privateBytes+=(std::min)(static_cast<ULONGLONG>(size),
+                                     1024ULL*1024*1024);
+            if(protection==PAGE_EXECUTE_READWRITE)++rwx;
+        }
+        CloseHandle(handle);
+        // Thresholds intentionally avoid reporting ordinary single JIT pages.
+        if(rwx>=8 && userLocation(proc.path))
+            sink.push("Memory Region Context",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | "+std::to_string(rwx)+
+                " private writable/executable regions; JIT use is possible");
+        if(privateExecutable>=64 && userLocation(proc.path))
+            sink.push("Memory Region Context",proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " | "+std::to_string(privateExecutable)+
+                " private executable regions; review application type");
+    }
+}
+// Check whether the OS reports a digital signature for a process image.
+// Only flag a failed trust verification when other path context exists.
+static void inspectFileTrust(Sink& sink,const std::wstring& path) {
+    if(sink.stop() || !fileExists(path) || !userLocation(path))return;
+    WINTRUST_FILE_INFO file{};
+    file.cbStruct=sizeof(file);
+    file.pcwszFilePath=path.c_str();
+    GUID policy=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA trust{};
+    trust.cbStruct=sizeof(trust);
+    trust.dwUIChoice=WTD_UI_NONE;
+    trust.fdwRevocationChecks=WTD_REVOKE_NONE;
+    trust.dwUnionChoice=WTD_CHOICE_FILE;
+    trust.pFile=&file;
+    trust.dwStateAction=WTD_STATEACTION_IGNORE;
+    trust.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+    LONG status=WinVerifyTrust(nullptr,&policy,&trust);
+    if(status==TRUST_E_NOSIGNATURE)
+        sink.push("Executable Signature Context",path,
+                  "Unsigned executable in user-writable directory");
+    else if(status==TRUST_E_BAD_DIGEST)
+        sink.push("Executable Signature Context",path,
+                  "Digital signature digest does not match file");
+    // Other trust errors may reflect certificate/network/policy issues.
+}
+static void inspectProcessTrust(Sink& sink,
+                                const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(sink.stop() || checked>=160)break;
+        if(!userLocation(proc.path))continue;
+        if(!seen.insert(low(proc.path)).second)continue;
+        ++checked;
+        inspectFileTrust(sink,proc.path);
+    }
+}
+// Read alternate stream names, not stream contents.
+static void inspectAlternateStreams(Sink& sink,
+                                    const std::vector<Process>& processes) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(sink.stop() || inspected>=96)break;
+        if(!userLocation(proc.path) || !fileExists(proc.path))continue;
+        if(!seen.insert(low(proc.path)).second)continue;
+        ++inspected;
+        WIN32_FIND_STREAM_DATA stream{};
+        HANDLE finder=FindFirstStreamW(proc.path.c_str(),
+            FindStreamInfoStandard,&stream,0);
+        if(finder==INVALID_HANDLE_VALUE)continue;
+        unsigned count=0;
+        do {
+            if(sink.stop() || ++count>24)break;
+            const auto name=low(stream.cStreamName);
+            if(name==L"::$data")continue;
+            if(has(name,L".exe") || has(name,L".dll") ||
+               has(name,L".ps1") || has(name,L".cmd"))
+                sink.push("Alternate Stream Name Review",proc.path,
+                    "Executable-like alternate data stream: "+
+                    utf8(stream.cStreamName));
+        }while(FindNextStreamW(finder,&stream));
+        FindClose(finder);
+    }
+}
+// Collect kernel driver paths from the documented PSAPI inventory.
+// The returned paths can be NT device paths; no conversion is assumed.
+static void inspectDriverPaths(Sink& sink) {
+    if(sink.stop())return;
+    std::array<LPVOID,2048> addresses{};
+    DWORD needed=0;
+    if(!EnumDeviceDrivers(addresses.data(),
+        static_cast<DWORD>(addresses.size()*sizeof(LPVOID)),&needed))
+        return;
+    const size_t count=(std::min)(addresses.size(),
+        static_cast<size_t>(needed/sizeof(LPVOID)));
+    std::unordered_set<std::wstring> seen;
+    for(size_t i=0;i<count && !sink.stop();++i) {
+        wchar_t path[MAX_PATH*4]{};
+        if(!GetDeviceDriverFileNameW(addresses[i],path,MAX_PATH*4))
+            continue;
+        const std::wstring normalized=low(path);
+        if(!seen.insert(normalized).second)continue;
+        if(userLocation(normalized))
+            sink.push("Loaded Driver Path Review",path,
+                "Loaded driver reported in user-writable directory");
+        if(has(normalized,L"\\recycle.bin\\"))
+            sink.push("Loaded Driver Path Review",path,
+                "Loaded driver path contains recycle directory");
+    }
+}
+// Compare process executable names against a small set of Windows components.
+// Only report mismatch when a system-like name is outside Windows.
+static void inspectSystemNameLocations(Sink& sink,
+                                       const std::vector<Process>& processes) {
+    static const wchar_t* names[]={
+        L"svchost.exe",L"lsass.exe",L"services.exe",
+        L"winlogon.exe",L"csrss.exe",L"smss.exe",
+        L"taskhostw.exe",L"conhost.exe",L"dllhost.exe",
+        L"fontdrvhost.exe",L"runtimebroker.exe",
+        L"searchindexer.exe",L"spoolsv.exe"
+    };
+    size_t checked=0;
+    for(const auto& proc:processes) {
+        if(sink.stop() || checked>=1024)break;
+        ++checked;
+        const auto name=low(proc.name);
+        bool match=false;
+        for(const auto* candidate:names)
+            if(name==candidate){match=true;break;}
+        if(!match || proc.path.empty())continue;
+        const auto path=low(proc.path);
+        if(has(path,L"\\windows\\system32\\") ||
+           has(path,L"\\windows\\syswow64\\") ||
+           has(path,L"\\windows\\winsxs\\"))continue;
+        sink.push("System Process Location Review",proc.path,
+            "PID "+std::to_string(proc.pid)+
+            " | Windows component name outside expected directories");
+    }
+}
+// Review service start types with path context; automatic start is common.
+static void inspectServiceStartType(Sink& sink) {
+    if(sink.stop())return;
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm)return;
+    DWORD bytes=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,SERVICE_STATE_ALL,nullptr,0,
+        &bytes,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || bytes==0 ||
+       bytes>16*1024*1024) {
+        CloseServiceHandle(scm);return;
+    }
+    std::vector<BYTE> buffer(bytes);
+    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,SERVICE_STATE_ALL,buffer.data(),bytes,
+        &bytes,&count,&resume,nullptr)) {
+        CloseServiceHandle(scm);return;
+    }
+    const auto entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(
+        buffer.data());
+    count=(std::min)(count,DWORD(1536));
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        SC_HANDLE service=OpenServiceW(scm,entries[i].lpServiceName,
+                                      SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD required=0;
+        QueryServiceConfigW(service,nullptr,0,&required);
+        if(required && required<=65536) {
+            std::vector<BYTE> config(required);
+            if(QueryServiceConfigW(service,
+                reinterpret_cast<QUERY_SERVICE_CONFIGW*>(config.data()),
+                required,&required)) {
+                auto c=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(
+                    config.data());
+                if(c->lpBinaryPathName &&
+                   (c->dwStartType==SERVICE_AUTO_START ||
+                    c->dwStartType==SERVICE_BOOT_START ||
+                    c->dwStartType==SERVICE_SYSTEM_START)) {
+                    auto path=commandImage(c->lpBinaryPathName);
+                    if(userLocation(path))
+                        sink.push("Automatic Service Path Review",path,
+                            "Service "+utf8(entries[i].lpServiceName)+
+                            " | Automatic-start executable in user directory");
+                }
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(scm);
+}
+
+// COM in-process server registrations can load DLLs into many applications.
+// Only paths in writable locations are emitted, and a bounded sample is used.
+static void inspectComServerHive(Sink& sink,HKEY hive,
+                                 const wchar_t* subkey,
+                                 const char* source) {
+    if(sink.stop())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&root)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(1800));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
+                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY clsid=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,&clsid)
+           !=ERROR_SUCCESS)continue;
+        for(const wchar_t* serverType:{L"InprocServer32",L"LocalServer32"}) {
+            HKEY server=nullptr;
+            if(RegOpenKeyExW(clsid,serverType,0,KEY_READ,&server)
+               !=ERROR_SUCCESS)continue;
+            std::wstring command;
+            if(readString(server,nullptr,command))
+                inspectImageReference(sink,source,command,
+                                      std::wstring(name.data(),n));
+            RegCloseKey(server);
+        }
+        RegCloseKey(clsid);
+    }
+    RegCloseKey(root);
+}
+static void inspectComRegistrations(Sink& sink) {
+    inspectComServerHive(sink,HKEY_CURRENT_USER,
+        L"Software\\Classes\\CLSID","HKCU COM CLSID");
+    inspectComServerHive(sink,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Classes\\CLSID","HKLM COM CLSID");
+}
+// Review shell verb command handlers in common executable file associations.
+static void inspectShellVerb(Sink& sink,HKEY hive,
+                             const wchar_t* className,
+                             const wchar_t* verb,
+                             const char* source) {
+    if(sink.stop())return;
+    std::wstring key=L"Software\\Classes\\";
+    key+=className;
+    key+=L"\\shell\\";
+    key+=verb;
+    key+=L"\\command";
+    HKEY handle=nullptr;
+    if(RegOpenKeyExW(hive,key.c_str(),0,KEY_READ,&handle)
+       !=ERROR_SUCCESS)return;
+    std::wstring command;
+    if(readString(handle,nullptr,command))
+        inspectImageReference(sink,source,command,key);
+    RegCloseKey(handle);
+}
+static void inspectShellVerbs(Sink& sink) {
+    const wchar_t* classes[]={
+        L"exefile",L"comfile",L"batfile",L"cmdfile",
+        L"scrfile",L"piffile",L"mscfile",L"lnkfile"
+    };
+    const wchar_t* verbs[]={L"open",L"runas",L"edit"};
+    for(const wchar_t* cls:classes) {
+        for(const wchar_t* verb:verbs) {
+            if(sink.stop())return;
+            inspectShellVerb(sink,HKEY_CURRENT_USER,cls,verb,
+                             "HKCU file association");
+            inspectShellVerb(sink,HKEY_LOCAL_MACHINE,cls,verb,
+                             "HKLM file association");
+        }
+    }
+}
+// Read user-specific environment variables that can influence DLL search
+// and child process startup. Report only suspicious path combinations.
+static void inspectEnvironmentValue(Sink& sink,HKEY hive,
+                                    const wchar_t* subkey,
+                                    const wchar_t* name,
+                                    const char* label) {
+    if(sink.stop())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)
+       !=ERROR_SUCCESS)return;
+    std::wstring value;
+    bool found=readString(key,name,value);
+    RegCloseKey(key);
+    if(!found)return;
+    const auto normalized=low(expand(value));
+    if(has(normalized,L"\\temp\\") ||
+       has(normalized,L"\\recycle.bin\\")) {
+        sink.push("Environment Path Review",name,
+                  std::string(label)+
+                  " | Environment path includes temporary location");
+    }
+}
+static void inspectEnvironmentOverrides(Sink& sink) {
+    inspectEnvironmentValue(sink,HKEY_CURRENT_USER,
+        L"Environment",L"PATH","User PATH");
+    inspectEnvironmentValue(sink,HKEY_CURRENT_USER,
+        L"Environment",L"PATHEXT","User PATHEXT");
+    inspectEnvironmentValue(sink,HKEY_CURRENT_USER,
+        L"Environment",L"COMSPEC","User COMSPEC");
+    inspectEnvironmentValue(sink,HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        L"PATH","Machine PATH");
+    inspectEnvironmentValue(sink,HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        L"COMSPEC","Machine COMSPEC");
+}
+// Validate whether process image paths are accessible, without assuming
+// that an inaccessible process or deleted image is malicious.
+static void inspectImageAvailability(Sink& sink,
+                                     const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& proc:processes) {
+        if(sink.stop() || checked>=768)break;
+        if(proc.path.empty() || proc.path[0]==L'[')continue;
+        ++checked;
+        const auto path=low(proc.path);
+        if(!userLocation(path))continue;
+        DWORD attr=GetFileAttributesW(proc.path.c_str());
+        if(attr==INVALID_FILE_ATTRIBUTES) {
+            const DWORD error=GetLastError();
+            if(error==ERROR_FILE_NOT_FOUND ||
+               error==ERROR_PATH_NOT_FOUND)
+                sink.push("Process Image Availability",proc.path,
+                    "PID "+std::to_string(proc.pid)+
+                    " | Image path no longer exists on disk");
+        }
+    }
+}
+// Check only accessible process tokens for integrity context.
+// High-integrity processes in temporary locations merit review,
+// but are not inherently harmful.
+static void inspectTokenContext(Sink& sink,
+                                const std::vector<Process>& processes) {
+    size_t inspected=0;
+    for(const auto& proc:processes) {
+        if(sink.stop() || inspected>=200)break;
+        if(!userLocation(proc.path))continue;
+        HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                   FALSE,proc.pid);
+        if(!process)continue;
+        ++inspected;
+        HANDLE token=nullptr;
+        if(OpenProcessToken(process,TOKEN_QUERY,&token)) {
+            TOKEN_ELEVATION elevation{};
+            DWORD returned=0;
+            if(GetTokenInformation(token,TokenElevation,&elevation,
+                sizeof(elevation),&returned) && elevation.TokenIsElevated &&
+                has(low(proc.path),L"\\temp\\"))
+                sink.push("Process Elevation Context",proc.path,
+                    "PID "+std::to_string(proc.pid)+
+                    " | Elevated process running from Temp");
+            CloseHandle(token);
+        }
+        CloseHandle(process);
+    }
+}
+
+// UDP listener ownership is reported only for unusual executable locations.
+static void inspectUdpListeners(Sink& sink,
+                                const std::vector<Process>& processes) {
+    if(sink.stop())return;
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    DWORD needed=0;
+    DWORD rc=GetExtendedUdpTable(nullptr,&needed,TRUE,AF_INET,
+                                 UDP_TABLE_OWNER_PID,0);
+    if(rc!=ERROR_INSUFFICIENT_BUFFER || !needed ||
+       needed>32*1024*1024)return;
+    std::vector<BYTE> bytes(needed);
+    rc=GetExtendedUdpTable(bytes.data(),&needed,TRUE,AF_INET,
+                           UDP_TABLE_OWNER_PID,0);
+    if(rc!=NO_ERROR)return;
+    const auto table=reinterpret_cast<MIB_UDPTABLE_OWNER_PID*>(
+        bytes.data());
+    const DWORD count=(std::min)(table->dwNumEntries,DWORD(16384));
+    std::unordered_set<DWORD> reported;
+    for(DWORD i=0;i<count && !sink.stop();++i) {
+        const auto& row=table->table[i];
+        auto it=byPid.find(row.dwOwningPid);
+        if(it==byPid.end() || !reported.insert(row.dwOwningPid).second)
+            continue;
+        const auto& proc=*it->second;
+        if(!has(low(proc.path),L"\\temp\\") &&
+           !has(low(proc.path),L"\\recycle.bin\\"))
+            continue;
+        sink.push("UDP Process Context",proc.path,
+            "PID "+std::to_string(proc.pid)+
+            " | UDP endpoint owned by temporary-location executable");
+    }
+}
+// Inspect PE executable-section entropy with a bounded prefix and sample.
+// High entropy is common in packed or compressed legitimate applications.
+static void inspectExecutableEntropy(Sink& sink,const std::wstring& path) {
+    if(sink.stop() || !fileExists(path))return;
+    std::vector<unsigned char> bytes;
+    if(!loadPrefix(path,bytes,8*1024*1024))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)return;
+    const size_t pe=static_cast<size_t>(dos.e_lfanew);
+    if(!inBounds(pe,sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),
+                 bytes.size()))return;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+pe,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE)return;
+    IMAGE_FILE_HEADER file{};
+    memcpy(&file,bytes.data()+pe+sizeof(DWORD),sizeof(file));
+    const size_t start=pe+sizeof(DWORD)+sizeof(file)+
+                       file.SizeOfOptionalHeader;
+    if(file.NumberOfSections>96 ||
+       !inBounds(start,
+        static_cast<size_t>(file.NumberOfSections)*
+        sizeof(IMAGE_SECTION_HEADER),bytes.size()))return;
+    for(unsigned i=0;i<file.NumberOfSections && !sink.stop();++i) {
+        IMAGE_SECTION_HEADER section{};
+        memcpy(&section,bytes.data()+start+
+               i*sizeof(section),sizeof(section));
+        if(!(section.Characteristics&IMAGE_SCN_MEM_EXECUTE))continue;
+        const size_t offset=section.PointerToRawData;
+        const size_t sample=(std::min)(
+            static_cast<size_t>(section.SizeOfRawData),size_t(262144));
+        if(sample<8192 || !inBounds(offset,sample,bytes.size()))continue;
+        std::array<size_t,256> frequency{};
+        for(size_t j=0;j<sample;++j)
+            ++frequency[bytes[offset+j]];
+        double entropy=0.0;
+        for(size_t amount:frequency) {
+            if(!amount)continue;
+            const double probability=double(amount)/double(sample);
+            entropy-=probability*std::log2(probability);
+        }
+        if(entropy>=7.90)
+            sink.push("Executable Section Entropy",path,
+                "Executable section "+std::to_string(i)+
+                " has entropy "+std::to_string(entropy)+
+                " | Packed or compressed software may be legitimate");
+    }
+}
+static void inspectProcessEntropy(Sink& sink,
+                                  const std::vector<Process>& processes) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(sink.stop() || inspected>=100)break;
+        if(!userLocation(proc.path))continue;
+        if(!seen.insert(low(proc.path)).second)continue;
+        ++inspected;
+        inspectExecutableEntropy(sink,proc.path);
+    }
+}
+// Timestamp anomalies are emitted only when a timestamp is implausible.
+// Copying files between volumes can alter creation timestamps normally.
+static void inspectTimestamps(Sink& sink,const std::wstring& path) {
+    if(sink.stop() || !fileExists(path))return;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&data))
+        return;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER current{},created{},modified{};
+    current.LowPart=now.dwLowDateTime;
+    current.HighPart=now.dwHighDateTime;
+    created.LowPart=data.ftCreationTime.dwLowDateTime;
+    created.HighPart=data.ftCreationTime.dwHighDateTime;
+    modified.LowPart=data.ftLastWriteTime.dwLowDateTime;
+    modified.HighPart=data.ftLastWriteTime.dwHighDateTime;
+    const ULONGLONG day=86400ULL*10000000ULL;
+    if(created.QuadPart>current.QuadPart+day)
+        sink.push("File Timestamp Context",path,
+                  "Creation timestamp more than 24 hours in the future");
+    if(modified.QuadPart>current.QuadPart+day)
+        sink.push("File Timestamp Context",path,
+                  "Modification timestamp more than 24 hours in the future");
+}
+static void inspectProcessTimestamps(Sink& sink,
+                                     const std::vector<Process>& processes) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(sink.stop() || inspected>=160)break;
+        if(!userLocation(proc.path))continue;
+        if(!seen.insert(low(proc.path)).second)continue;
+        ++inspected;
+        inspectTimestamps(sink,proc.path);
+    }
+}
+// Explicit per-collector cancellation and record limits keep this
+// additional pass bounded even on systems with many services or processes.
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    Sink sink;
+
+    if(!sink.stop())checkCurrentUserRun(sink);
+
+    if(!sink.stop())checkCurrentUserRunOnce(sink);
+
+    if(!sink.stop())checkMachineRun64(sink);
+
+    if(!sink.stop())checkMachineRun32(sink);
+
+    if(!sink.stop())checkMachineRunOnce64(sink);
+
+    if(!sink.stop())checkMachineRunOnce32(sink);
+
+    if(!sink.stop())checkUserPoliciesRun(sink);
+
+    if(!sink.stop())checkMachinePoliciesRun(sink);
+
+    if(!sink.stop())checkCurrentUserRunServices(sink);
+
+    if(!sink.stop())checkCurrentUserRunServicesOnce(sink);
+
+    if(!sink.stop())checkMachineRunServices(sink);
+
+    if(!sink.stop())checkMachineRunServicesOnce(sink);
+
+    if(!sink.stop())checkUserWindowsRun(sink);
+
+    if(!sink.stop())checkUserWindowsLoad(sink);
+
+    if(!sink.stop())checkMachineAppInit(sink);
+
+    if(!sink.stop())checkMachineWinlogonShell(sink);
+
+    if(!sink.stop())checkMachineWinlogonUserinit(sink);
+
+    if(!sink.stop())checkUserWinlogonShell(sink);
+
+    if(!sink.stop())checkUserWinlogonUserinit(sink);
+
+    if(!sink.stop())checkMachineShellPolicy(sink);
+
+    if(!sink.stop())checkUserShellPolicy(sink);
+
+    if(!sink.stop())checkMachineBootExecute(sink);
+
+    if(!sink.stop())checkMachineSetupCmdline(sink);
+
+    if(!sink.stop())checkUserCommandProcessor(sink);
+
+    if(!sink.stop())checkMachineCommandProcessor(sink);
+
+    if(!sink.stop())checkMachineActiveSetup(sink);
+
+    if(!sink.stop())checkUserActiveSetup(sink);
+
+    if(!sink.stop())checkMachineIFEO(sink);
+
+    if(!sink.stop())checkMachineSilentProcessExit(sink);
+
+    if(!sink.stop())checkMachineAppPaths(sink);
+
+    if(!sink.stop())checkUserAppPaths(sink);
+
+    if(!sink.stop())checkMachineShellExecuteHooks(sink);
+
+    if(!sink.stop())checkUserShellExecuteHooks(sink);
+
+    if(!sink.stop())checkMachineExplorerSharedTaskScheduler(sink);
+
+    if(!sink.stop())checkMachineExplorerShellServiceObjectDelayLoad(sink);
+
+    if(!sink.stop())checkMachinePrintMonitors(sink);
+
+    if(!sink.stop())checkMachinePrintProcessors(sink);
+
+    if(!sink.stop())checkMachineWindowsNTDrivers(sink);
+
+    if(!sink.stop())checkUserWindowsNTDrivers(sink);
+
+    if(!sink.stop())checkMachineWow6432Drivers(sink);
+
+    if(!sink.stop())checkPolicyDefenderRealtimeOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderBehaviorOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderOnAccessOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderIOAVOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderAntiSpywareOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderAntiVirusOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderScriptScanningOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderCloudOff(sink);
+
+    if(!sink.stop())checkPolicyDefenderSampleOff(sink);
+
+    if(!sink.stop())checkPolicySmartScreenOff(sink);
+
+    if(!sink.stop())checkPolicySmartScreenExplorerOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallDomainOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallPrivateOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallPublicOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallPolicyDomainOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallPolicyStandardOff(sink);
+
+    if(!sink.stop())checkPolicyFirewallPolicyPublicOff(sink);
+
+    if(!sink.stop())checkPolicyUacOff(sink);
+
+    if(!sink.stop())checkPolicyUacPromptAdminOff(sink);
+
+    if(!sink.stop())checkPolicyUacPromptUserOff(sink);
+
+    if(!sink.stop())checkPolicyUacSecureDesktopOff(sink);
+
+    if(!sink.stop())checkPolicyUacInstallerDetectionOff(sink);
+
+    if(!sink.stop())checkPolicyUacVirtualizationOff(sink);
+
+    if(!sink.stop())checkPolicyRemoteDesktopOn(sink);
+
+    if(!sink.stop())checkPolicyRemoteAssistanceOn(sink);
+
+    if(!sink.stop())checkPolicyWinRMClientBasicOn(sink);
+
+    if(!sink.stop())checkPolicyWinRMServiceBasicOn(sink);
+
+    if(!sink.stop())checkPolicyWinRMServiceUnencryptedOn(sink);
+
+    if(!sink.stop())checkPolicyWinRMClientUnencryptedOn(sink);
+
+    if(!sink.stop())checkPolicyPowerShellLoggingOff(sink);
+
+    if(!sink.stop())checkPolicyPowerShellTranscriptionOff(sink);
+
+    if(!sink.stop())checkPolicyPowerShellModuleLoggingOff(sink);
+
+    if(!sink.stop())checkPolicyWindowsUpdateOff(sink);
+
+    if(!sink.stop())checkPolicyEventLogSecurityOff(sink);
+
+    if(!sink.stop())checkPolicyEventLogSystemOff(sink);
+
+    if(!sink.stop())checkPolicyEventLogApplicationOff(sink);
+
+    if(!sink.stop())checkPolicyCredentialGuardOff(sink);
+
+    if(!sink.stop())checkPolicyLSAProtectionOff(sink);
+
+    if(!sink.stop())checkPolicyNetworkLevelAuthOff(sink);
+
+    if(!sink.stop())checkPolicyRemoteRegistryOn(sink);
+
+    if(!sink.stop())inspectServiceRecovery(sink);
+
+    if(!sink.stop())inspectServiceImageRegistry(sink);
+
+    if(!sink.stop())inspectRunningImages(sink,processes);
+
+    if(!sink.stop())inspectEstablishedConnections(sink,processes);
+
+    if(!sink.stop())inspectModuleLocations(sink,processes);
+
+    if(!sink.stop())inspectStartupDirectories(sink);
+
+    if(!sink.stop())inspectUserPEFiles(sink,processes);
+
+    if(!sink.stop())inspectExecutableMemoryRegions(sink,processes);
+
+    if(!sink.stop())inspectProcessTrust(sink,processes);
+
+    if(!sink.stop())inspectAlternateStreams(sink,processes);
+
+    if(!sink.stop())inspectDriverPaths(sink);
+
+    if(!sink.stop())inspectSystemNameLocations(sink,processes);
+
+    if(!sink.stop())inspectServiceStartType(sink);
+
+    if(!sink.stop())inspectComRegistrations(sink);
+
+    if(!sink.stop())inspectShellVerbs(sink);
+
+    if(!sink.stop())inspectEnvironmentOverrides(sink);
+
+    if(!sink.stop())inspectImageAvailability(sink,processes);
+
+    if(!sink.stop())inspectTokenContext(sink,processes);
+
+    if(!sink.stop())inspectUdpListeners(sink,processes);
+
+    if(!sink.stop())inspectProcessEntropy(sink,processes);
+
+    if(!sink.stop())inspectProcessTimestamps(sink,processes);
+
+    return std::move(sink.rows);
+}
+} // namespace deep_evidence
+
+
+// Sync PC Checker 8.2 - bounded, read-only forensic evidence expansion.
+// This code reports observations for manual review; it does not determine
+// whether an application is a cheat, bypass, malware, or unauthorized.
+namespace expanded_evidence {
+struct Collector {
+    std::vector<Record> rows;
+    size_t limit=800;
+    bool stopped() const {return cancelRequested || rows.size()>=limit;}
+    void add(const char* category,const std::wstring& name,
+             const std::string& detail) {
+        if(stopped())return;
+        rows.push_back({category,utf8(name),"REVIEW ONLY | "+detail});
+    }
+};
+static std::wstring lower(std::wstring s) {
+    std::transform(s.begin(),s.end(),s.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return s;
+}
+static bool contains(const std::wstring& s,const wchar_t* fragment) {
+    return s.find(fragment)!=std::wstring::npos;
+}
+static bool writableContext(const std::wstring& s) {
+    auto p=lower(s);
+    return contains(p,L"\\appdata\\") ||
+           contains(p,L"\\temp\\") ||
+           contains(p,L"\\downloads\\") ||
+           contains(p,L"\\users\\public\\") ||
+           contains(p,L"\\recycle.bin\\");
+}
+static std::wstring environment(const wchar_t* name) {
+    DWORD n=GetEnvironmentVariableW(name,nullptr,0);
+    if(!n || n>32768)return {};
+    std::wstring result(n,L'\0');
+    DWORD actual=GetEnvironmentVariableW(name,result.data(),n);
+    if(!actual || actual>=n)return {};
+    result.resize(actual);
+    return result;
+}
+static std::wstring readText(const fs::path& path,size_t limit=256*1024) {
+    HANDLE h=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return {};
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(h,&size) || size.QuadPart<0 ||
+       static_cast<ULONGLONG>(size.QuadPart)>limit) {
+        CloseHandle(h);return {};
+    }
+    std::vector<unsigned char> data(static_cast<size_t>(size.QuadPart));
+    DWORD read=0;
+    BOOL ok=data.empty() || ReadFile(h,data.data(),
+         static_cast<DWORD>(data.size()),&read,nullptr);
+    CloseHandle(h);
+    if(!ok)return {};
+    data.resize(read);
+    if(data.size()>=2 && data[0]==0xff && data[1]==0xfe) {
+        const size_t chars=(data.size()-2)/sizeof(wchar_t);
+        std::wstring result(chars,L'\0');
+        if(chars)memcpy(result.data(),data.data()+2,chars*sizeof(wchar_t));
+        return result;
+    }
+    if(data.size()>=3 && data[0]==0xef &&
+       data[1]==0xbb && data[2]==0xbf)
+        data.erase(data.begin(),data.begin()+3);
+    if(data.empty())return {};
+    int required=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+        reinterpret_cast<const char*>(data.data()),
+        static_cast<int>(data.size()),nullptr,0);
+    UINT encoding=CP_UTF8;
+    if(!required) {
+        encoding=CP_ACP;
+        required=MultiByteToWideChar(encoding,0,
+            reinterpret_cast<const char*>(data.data()),
+            static_cast<int>(data.size()),nullptr,0);
+    }
+    if(required<=0 || required>static_cast<int>(limit))return {};
+    std::wstring result(required,L'\0');
+    MultiByteToWideChar(encoding,0,
+        reinterpret_cast<const char*>(data.data()),
+        static_cast<int>(data.size()),result.data(),required);
+    return result;
+}
+static std::wstring xmlValue(const std::wstring& text,
+                             const wchar_t* element) {
+    const std::wstring open=L"<"+std::wstring(element)+L">";
+    const std::wstring close=L"</"+std::wstring(element)+L">";
+    size_t begin=text.find(open);
+    if(begin==std::wstring::npos)return {};
+    begin+=open.size();
+    size_t end=text.find(close,begin);
+    if(end==std::wstring::npos || end-begin>32768)return {};
+    return text.substr(begin,end-begin);
+}
+static void inspectScheduledTasks(Collector& out) {
+    auto windows=environment(L"WINDIR");
+    if(windows.empty())return;
+    const fs::path root=fs::path(windows)/L"System32"/L"Tasks";
+    std::error_code ec;
+    if(!fs::is_directory(root,ec))return;
+    fs::recursive_directory_iterator it(root,
+        fs::directory_options::skip_permission_denied,ec),end;
+    size_t examined=0;
+    while(!ec && it!=end && examined<1500 && !out.stopped()) {
+        if(it.depth()>12) {
+            it.disable_recursion_pending();
+        }
+        std::error_code fileError;
+        if(it->is_regular_file(fileError)) {
+            ++examined;
+            auto xml=readText(it->path());
+            if(!xml.empty()) {
+                auto command=xmlValue(xml,L"Command");
+                auto arguments=xmlValue(xml,L"Arguments");
+                auto lowerCommand=lower(command);
+                if(writableContext(lowerCommand))
+                    out.add("Scheduled Task Path Review",it->path().wstring(),
+                        "Task action points to a user-writable directory: "+
+                        utf8(command));
+                if(contains(lowerCommand,L"powershell") &&
+                   (contains(lower(arguments),L"-encodedcommand") ||
+                    contains(lower(arguments),L" -enc ")))
+                    out.add("Scheduled Task Command Review",it->path().wstring(),
+                        "Task launches PowerShell with encoded command arguments");
+                if(contains(lowerCommand,L"\\recycle.bin\\"))
+                    out.add("Scheduled Task Path Review",it->path().wstring(),
+                        "Task action references Recycle Bin");
+            }
+        }
+        it.increment(ec);
+    }
+}
+// Read recent Windows Event Log entries using the supported Windows Eventing API.
+// Query errors, unavailable channels and insufficient permissions do not imply
+// malicious activity. XML is bounded and never interpreted as executable code.
+static void inspectEventChannel(Collector& out,const wchar_t* channel,
+                                const wchar_t* query,
+                                const char* category,
+                                size_t maxEvents=80) {
+    if(out.stopped())return;
+    EVT_HANDLE handle=EvtQuery(nullptr,channel,query,
+        EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!handle)return;
+    size_t examined=0;
+    while(examined<maxEvents && !out.stopped()) {
+        EVT_HANDLE events[8]{};
+        DWORD returned=0;
+        if(!EvtNext(handle,8,events,100,&returned,0))break;
+        for(DWORD i=0;i<returned;++i) {
+            ++examined;
+            DWORD needed=0,used=0;
+            EvtRender(nullptr,events[i],EvtRenderEventXml,
+                      0,nullptr,&needed,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+               needed>=sizeof(wchar_t) && needed<=128*1024) {
+                std::vector<wchar_t> xml(needed/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,events[i],EvtRenderEventXml,
+                    needed,xml.data(),&needed,&used)) {
+                    std::wstring data(xml.data());
+                    // Store only short excerpts. The event ID alone is
+                    // never classified as evidence of wrongdoing.
+                    auto id=xmlValue(data,L"EventID");
+                    auto computer=xmlValue(data,L"Computer");
+                    if(!id.empty()) {
+                        out.add(category,channel,
+                            "Recent event ID "+utf8(id)+
+                            (computer.empty()?"":" | Host "+utf8(computer))+
+                            " | Review the original Windows event for context");
+                    }
+                }
+            }
+            EvtClose(events[i]);
+        }
+        if(returned==0)break;
+    }
+    EvtClose(handle);
+}
+static void inspectSecurityEvents(Collector& out) {
+    inspectEventChannel(out,L"System",
+        L"*[System[(EventID=7045 or EventID=7036)]]",
+        "Service Event Context",60);
+    inspectEventChannel(out,L"Microsoft-Windows-Windows Defender/Operational",
+        L"*[System[(EventID=1116 or EventID=1117 or EventID=5007)]]",
+        "Defender Event Context",60);
+    inspectEventChannel(out,L"Microsoft-Windows-PowerShell/Operational",
+        L"*[System[(EventID=4104)]]",
+        "PowerShell Event Context",40);
+    inspectEventChannel(out,L"Microsoft-Windows-TaskScheduler/Operational",
+        L"*[System[(EventID=106 or EventID=140 or EventID=141)]]",
+        "Task Scheduler Event Context",40);
+}
+// Inspect only the hosts file; custom entries are common in development
+// and managed environments, so report their presence for manual review.
+static void inspectHosts(Collector& out) {
+    auto root=environment(L"WINDIR");
+    if(root.empty())return;
+    auto path=fs::path(root)/L"System32"/L"drivers"/L"etc"/L"hosts";
+    auto text=readText(path,128*1024);
+    if(text.empty())return;
+    std::wistringstream stream(text);
+    std::wstring line;
+    size_t count=0,custom=0;
+    while(std::getline(stream,line) && count++<2048) {
+        auto start=line.find_first_not_of(L" \t\r");
+        if(start==std::wstring::npos || line[start]==L'#')continue;
+        auto comment=line.find(L'#',start);
+        if(comment!=std::wstring::npos)line.resize(comment);
+        if(line.find_first_not_of(L" \t\r")==std::wstring::npos)continue;
+        ++custom;
+    }
+    if(custom)
+        out.add("Hosts Configuration Review",path.wstring(),
+            std::to_string(custom)+
+            " non-comment mapping(s) found; custom hosts entries may be legitimate");
+}
+// Firewall rules are inspected as configuration only. A program path in
+// a writable directory is a review signal, not proof of compromise.
+static void inspectFirewallRules(Collector& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(4096));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> name(maxName+2);
+    std::vector<BYTE> bytes(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        DWORD size=static_cast<DWORD>(bytes.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,name.data(),&n,nullptr,
+            &type,bytes.data(),&size)!=ERROR_SUCCESS ||
+            (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+            size<sizeof(wchar_t) || size%sizeof(wchar_t))continue;
+        const auto* raw=reinterpret_cast<const wchar_t*>(bytes.data());
+        size_t length=0;
+        while(length<size/sizeof(wchar_t) && raw[length])++length;
+        std::wstring value(raw,length);
+        const auto marker=value.find(L"App=");
+        if(marker==std::wstring::npos)continue;
+        const auto begin=marker+4;
+        const auto end=value.find(L'|',begin);
+        auto path=value.substr(begin,end==std::wstring::npos?
+            std::wstring::npos:end-begin);
+        if(writableContext(path))
+            out.add("Firewall Program Rule Review",path,
+                "Firewall rule references a user-writable executable path");
+    }
+    RegCloseKey(key);
+}
+static void inspectWER(Collector& out) {
+    const auto local=environment(L"LOCALAPPDATA");
+    const auto program=environment(L"PROGRAMDATA");
+    std::vector<fs::path> roots;
+    if(!local.empty())roots.push_back(fs::path(local)/
+        L"Microsoft"/L"Windows"/L"WER"/L"ReportArchive");
+    if(!local.empty())roots.push_back(fs::path(local)/
+        L"Microsoft"/L"Windows"/L"WER"/L"ReportQueue");
+    if(!program.empty())roots.push_back(fs::path(program)/
+        L"Microsoft"/L"Windows"/L"WER"/L"ReportArchive");
+    size_t inspected=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || inspected>=160)break;
+        std::error_code ec;
+        if(!fs::is_directory(root,ec))continue;
+        for(fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,ec),end;
+            !ec && it!=end && inspected<160 && !out.stopped();
+            it.increment(ec)) {
+            if(!it->is_directory(ec))continue;
+            ++inspected;
+            auto report=it->path()/L"Report.wer";
+            auto text=readText(report,128*1024);
+            if(text.empty())continue;
+            std::wistringstream lines(text);
+            std::wstring line;
+            size_t examined=0;
+            while(std::getline(lines,line) && examined++<1024) {
+                if(line.rfind(L"AppPath=",0)!=0)continue;
+                auto path=line.substr(8);
+                if(writableContext(path))
+                    out.add("Crash Report Context",path,
+                        "WER report references an executable in a user-writable directory");
+                break;
+            }
+        }
+    }
+}
+
+// Defender exclusions may be legitimate for developers and game launchers.
+// Report only exclusion entries, never infer that Defender was bypassed.
+static void inspectDefenderExclusionKey(Collector& out,
+                                       const wchar_t* subkey,
+                                       const char* category) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,subkey,0,KEY_READ,&key)
+       !=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,nullptr,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(256));
+    maxName=(std::min)(maxName,DWORD(32767));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumValueW(key,i,name.data(),&length,nullptr,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        std::wstring item(name.data(),length);
+        if(item.empty())continue;
+        out.add(category,item,
+            "Configured Defender exclusion; review whether an administrator intended it");
+    }
+    RegCloseKey(key);
+}
+static void inspectDefenderExclusions(Collector& out) {
+    inspectDefenderExclusionKey(out,
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths",
+        "Defender Path Exclusion");
+    inspectDefenderExclusionKey(out,
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Processes",
+        "Defender Process Exclusion");
+    inspectDefenderExclusionKey(out,
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Extensions",
+        "Defender Extension Exclusion");
+}
+// Prefetch filenames are execution-related artifacts, but filenames alone
+// do not prove an executable was launched by a particular user.
+static void inspectPrefetchInventory(Collector& out) {
+    auto windows=environment(L"WINDIR");
+    if(windows.empty())return;
+    auto dir=fs::path(windows)/L"Prefetch";
+    std::error_code ec;
+    if(!fs::is_directory(dir,ec))return;
+    size_t count=0;
+    for(fs::directory_iterator it(dir,
+        fs::directory_options::skip_permission_denied,ec),end;
+        !ec && it!=end && count<1024 && !out.stopped();
+        it.increment(ec)) {
+        if(!it->is_regular_file(ec))continue;
+        if(lower(it->path().extension().wstring())!=L".pf")continue;
+        ++count;
+        auto filename=lower(it->path().filename().wstring());
+        if(contains(filename,L"powershell") ||
+           contains(filename,L"wscript") ||
+           contains(filename,L"cscript"))
+            out.add("Prefetch Execution Context",it->path().wstring(),
+                "Prefetch filename references a script host; review execution context");
+    }
+}
+// Basic proxy configuration is context only; custom proxies are common
+// in schools, organizations, VPNs, and debugging tools.
+static void inspectProxyConfiguration(Collector& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD type=0,size=sizeof(DWORD),enabled=0;
+    bool proxyEnabled=RegQueryValueExW(key,L"ProxyEnable",nullptr,
+        &type,reinterpret_cast<BYTE*>(&enabled),&size)==ERROR_SUCCESS &&
+        type==REG_DWORD && enabled!=0;
+    if(proxyEnabled) {
+        DWORD needed=0;
+        RegQueryValueExW(key,L"ProxyServer",nullptr,&type,nullptr,&needed);
+        if((type==REG_SZ || type==REG_EXPAND_SZ) &&
+           needed>=sizeof(wchar_t) && needed<=16384) {
+            std::vector<wchar_t> buffer(needed/sizeof(wchar_t)+1,L'\0');
+            if(RegQueryValueExW(key,L"ProxyServer",nullptr,&type,
+                reinterpret_cast<BYTE*>(buffer.data()),&needed)==ERROR_SUCCESS)
+                out.add("Proxy Configuration Context",buffer.data(),
+                    "A user-level proxy is configured; may be intentional");
+        }
+    }
+    RegCloseKey(key);
+}
+// Collect metadata on known forensic databases without attempting to
+// parse proprietary formats or modifying locked database files.
+static void inspectArtifactMetadata(Collector& out) {
+    const auto windows=environment(L"WINDIR");
+    const auto program=environment(L"PROGRAMDATA");
+    if(windows.empty())return;
+    std::vector<fs::path> candidates={
+        fs::path(windows)/L"AppCompat"/L"Programs"/L"Amcache.hve",
+        fs::path(windows)/L"System32"/L"sru"/L"SRUDB.dat"
+    };
+    if(!program.empty())
+        candidates.push_back(fs::path(program)/
+            L"Microsoft"/L"Windows"/L"WER");
+    for(const auto& path:candidates) {
+        if(out.stopped())break;
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&data))
+            continue;
+        ULARGE_INTEGER size{};
+        size.LowPart=data.nFileSizeLow;
+        size.HighPart=data.nFileSizeHigh;
+        out.add("Forensic Artifact Availability",path.wstring(),
+            "Artifact exists; size "+std::to_string(size.QuadPart)+
+            " bytes | Contents were not interpreted");
+    }
+}
+static std::vector<Record> collect() {
+    Collector out;
+    inspectScheduledTasks(out);
+    if(!out.stopped())inspectSecurityEvents(out);
+    if(!out.stopped())inspectHosts(out);
+    if(!out.stopped())inspectFirewallRules(out);
+    if(!out.stopped())inspectWER(out);
+    if(!out.stopped())inspectDefenderExclusions(out);
+    if(!out.stopped())inspectPrefetchInventory(out);
+    if(!out.stopped())inspectProxyConfiguration(out);
+    if(!out.stopped())inspectArtifactMetadata(out);
+    return std::move(out.rows);
+}
+} // namespace expanded_evidence
+
+// Sync PC Checker 8.3: independent, read-only Windows artifact correlation.
+// Every result is an observation for review, never an automatic cheat verdict.
+namespace artifact_correlation {
+struct Finding {
+    std::wstring path;
+    std::string reason;
+    std::string category;
+};
+struct State {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> seen;
+    size_t limit=1000;
+    bool stopped() const {
+        return cancelRequested || rows.size()>=limit;
+    }
+    void report(const char* category,const std::wstring& subject,
+                const std::string& reason) {
+        if(stopped())return;
+        std::wstring key=std::wstring(subject)+L"|"+
+            std::wstring(category,category+strlen(category));
+        if(!seen.insert(key).second)return;
+        rows.push_back({category,utf8(subject),"REVIEW ONLY | "+reason});
+    }
+};
+static std::wstring lower(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return value;
+}
+static bool has(const std::wstring& value,const wchar_t* needle) {
+    return value.find(needle)!=std::wstring::npos;
+}
+static bool starts(const std::wstring& value,const wchar_t* needle) {
+    return value.rfind(needle,0)==0;
+}
+static bool userPath(const std::wstring& value) {
+    const auto path=lower(value);
+    return has(path,L"\\appdata\\") ||
+           has(path,L"\\temp\\") ||
+           has(path,L"\\downloads\\") ||
+           has(path,L"\\users\\public\\") ||
+           has(path,L"\\recycle.bin\\");
+}
+static std::wstring env(const wchar_t* name) {
+    DWORD required=GetEnvironmentVariableW(name,nullptr,0);
+    if(!required || required>32768)return {};
+    std::wstring result(required,L'\0');
+    DWORD count=GetEnvironmentVariableW(name,result.data(),required);
+    if(!count || count>=required)return {};
+    result.resize(count);
+    return result;
+}
+static bool readRegistryText(HKEY key,const wchar_t* name,
+                             std::wstring& value) {
+    DWORD type=0,bytes=0;
+    LONG rc=RegQueryValueExW(key,name,nullptr,&type,nullptr,&bytes);
+    if(rc!=ERROR_SUCCESS || bytes<sizeof(wchar_t) ||
+       bytes>65536 || (type!=REG_SZ && type!=REG_EXPAND_SZ))
+        return false;
+    std::vector<wchar_t> buffer(bytes/sizeof(wchar_t)+1,L'\0');
+    rc=RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(buffer.data()),&bytes);
+    if(rc!=ERROR_SUCCESS)return false;
+    value.assign(buffer.data());
+    return !value.empty();
+}
+static bool readRegistryNumber(HKEY key,const wchar_t* name,
+                               DWORD& number) {
+    DWORD type=0,bytes=sizeof(number);
+    return RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(&number),&bytes)==ERROR_SUCCESS &&
+        type==REG_DWORD && bytes==sizeof(number);
+}
+static std::wstring expand(const std::wstring& text) {
+    DWORD required=ExpandEnvironmentStringsW(text.c_str(),nullptr,0);
+    if(!required || required>32768)return text;
+    std::wstring result(required,L'\0');
+    DWORD written=ExpandEnvironmentStringsW(text.c_str(),
+        result.data(),required);
+    if(!written || written>required)return text;
+    if(!result.empty() && result.back()==L'\0')result.pop_back();
+    return result;
+}
+static std::wstring executableFromCommand(const std::wstring& command) {
+    std::wstring text=expand(command);
+    auto begin=text.find_first_not_of(L" \t\r\n");
+    if(begin==std::wstring::npos)return {};
+    text.erase(0,begin);
+    if(text.front()==L'"') {
+        auto end=text.find(L'"',1);
+        return end==std::wstring::npos?std::wstring{}:
+            text.substr(1,end-1);
+    }
+    auto normalized=lower(text);
+    for(const auto* ext:{L".exe",L".dll",L".sys",
+                         L".com",L".cmd",L".bat",L".ps1"}) {
+        auto pos=normalized.find(ext);
+        if(pos!=std::wstring::npos && pos<4096)
+            return text.substr(0,pos+wcslen(ext));
+    }
+    return {};
+}
+static bool regularFile(const fs::path& path) {
+    std::error_code error;
+    return fs::is_regular_file(path,error);
+}
+static bool readPrefix(const fs::path& path,
+                       std::vector<unsigned char>& bytes,
+                       size_t maximum=1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(file,&size) || size.QuadPart<0) {
+        CloseHandle(file);return false;
+    }
+    size_t count=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(size.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    bytes.resize(count);
+    DWORD got=0;
+    BOOL ok=count==0 || ReadFile(file,bytes.data(),
+        static_cast<DWORD>(count),&got,nullptr);
+    CloseHandle(file);
+    if(!ok)return false;
+    bytes.resize(got);
+    return true;
+}
+static bool bounds(size_t offset,size_t count,size_t total) {
+    return offset<=total && count<=total-offset;
+}
+static bool getPESections(const std::vector<unsigned char>& bytes,
+                          std::vector<IMAGE_SECTION_HEADER>& sections,
+                          IMAGE_FILE_HEADER& file) {
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return false;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+        return false;
+    const size_t pe=static_cast<size_t>(dos.e_lfanew);
+    if(!bounds(pe,sizeof(DWORD)+sizeof(file),bytes.size()))
+        return false;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+pe,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE)return false;
+    memcpy(&file,bytes.data()+pe+sizeof(DWORD),sizeof(file));
+    if(file.NumberOfSections>96)return false;
+    const size_t table=pe+sizeof(DWORD)+sizeof(file)+
+                       file.SizeOfOptionalHeader;
+    if(!bounds(table,static_cast<size_t>(file.NumberOfSections)*
+        sizeof(IMAGE_SECTION_HEADER),bytes.size()))return false;
+    sections.resize(file.NumberOfSections);
+    if(!sections.empty())
+        memcpy(sections.data(),bytes.data()+table,
+            sections.size()*sizeof(IMAGE_SECTION_HEADER));
+    return true;
+}
+
+static void inspectPELayout(State& out,const std::wstring& path) {
+    if(out.stopped() || !regularFile(path))return;
+    std::vector<unsigned char> bytes;
+    if(!readPrefix(path,bytes,4*1024*1024))return;
+    IMAGE_FILE_HEADER file{};
+    std::vector<IMAGE_SECTION_HEADER> sections;
+    if(!getPESections(bytes,sections,file))return;
+    size_t executableWritable=0;
+    size_t overlaps=0;
+    size_t zeroRawExecutable=0;
+    size_t virtualOverflow=0;
+    size_t invalidOffsets=0;
+    for(size_t i=0;i<sections.size();++i) {
+        const auto& section=sections[i];
+        const bool execute=(section.Characteristics&
+            IMAGE_SCN_MEM_EXECUTE)!=0;
+        const bool writable=(section.Characteristics&
+            IMAGE_SCN_MEM_WRITE)!=0;
+        if(execute && writable)++executableWritable;
+        if(execute && section.SizeOfRawData==0)++zeroRawExecutable;
+        if(section.Misc.VirtualSize>0x40000000U)
+            ++virtualOverflow;
+        if(section.SizeOfRawData &&
+           !bounds(section.PointerToRawData,
+                   section.SizeOfRawData,bytes.size())) {
+            // Large PE files may exceed the read prefix. Check the
+            // actual file length before deciding this is malformed.
+            WIN32_FILE_ATTRIBUTE_DATA data{};
+            if(GetFileAttributesExW(path.c_str(),
+                GetFileExInfoStandard,&data)) {
+                ULARGE_INTEGER length{};
+                length.LowPart=data.nFileSizeLow;
+                length.HighPart=data.nFileSizeHigh;
+                if(static_cast<ULONGLONG>(section.PointerToRawData)+
+                   section.SizeOfRawData>length.QuadPart)
+                    ++invalidOffsets;
+            }
+        }
+        for(size_t j=0;j<i;++j) {
+            const auto& earlier=sections[j];
+            const ULONGLONG a=section.PointerToRawData;
+            const ULONGLONG b=earlier.PointerToRawData;
+            const ULONGLONG ae=a+section.SizeOfRawData;
+            const ULONGLONG be=b+earlier.SizeOfRawData;
+            if(section.SizeOfRawData && earlier.SizeOfRawData &&
+               a<be && b<ae)++overlaps;
+        }
+    }
+    if(executableWritable)
+        out.report("PE Writable Executable Sections",path,
+            std::to_string(executableWritable)+
+            " section(s) have both write and execute flags");
+    if(overlaps)
+        out.report("PE Overlapping Raw Sections",path,
+            std::to_string(overlaps)+
+            " overlapping raw section pair(s)");
+    if(zeroRawExecutable)
+        out.report("PE Zero Raw Executable Section",path,
+            std::to_string(zeroRawExecutable)+
+            " executable section(s) have no raw file data");
+    if(virtualOverflow)
+        out.report("PE Unusual Virtual Section",path,
+            std::to_string(virtualOverflow)+
+            " section(s) declare virtual size over 1 GiB");
+    if(invalidOffsets)
+        out.report("PE Invalid Section Offset",path,
+            std::to_string(invalidOffsets)+
+            " section(s) extend past the end of the file");
+}
+static void inspectProcessImages(State& out,
+                                 const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0;
+    for(const auto& proc:processes) {
+        if(out.stopped() || checked>=220)break;
+        if(!userPath(proc.path) || proc.path.empty())continue;
+        if(!seen.insert(lower(proc.path)).second)continue;
+        ++checked;
+        inspectPELayout(out,proc.path);
+    }
+}
+
+// The collector reads service metadata without opening the service binary.
+// An unquoted path is only relevant if it includes whitespace and is
+// associated with a non-system location. It is not proof of exploitation.
+static void inspectServicePaths(State& out) {
+    HKEY services=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,
+        &services)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(services,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(services);return;
+    }
+    count=(std::min)(count,DWORD(3500));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(services,i,names.data(),&length,
+            nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(services,names.data(),0,KEY_READ,
+            &service)!=ERROR_SUCCESS)continue;
+        std::wstring image;
+        DWORD start=0,type=0;
+        bool hasImage=readRegistryText(service,L"ImagePath",image);
+        bool hasStart=readRegistryNumber(service,L"Start",start);
+        bool hasType=readRegistryNumber(service,L"Type",type);
+        std::wstring serviceName(names.data(),length);
+        if(hasImage) {
+            auto executable=executableFromCommand(image);
+            auto normalized=lower(executable);
+            if(userPath(normalized))
+                out.report("Service Executable Context",executable,
+                    "Service "+utf8(serviceName)+
+                    " references a user-writable directory");
+            const auto trimmed=image.find_first_not_of(L" \t");
+            if(trimmed!=std::wstring::npos &&
+               image[trimmed]!=L'"' &&
+               executable.find(L' ')!=std::wstring::npos &&
+               userPath(normalized))
+                out.report("Service Command Quoting Review",serviceName,
+                    "Service image command has an unquoted executable path with spaces");
+            if(hasStart && start==0 && userPath(normalized))
+                out.report("Boot Service Path Review",serviceName,
+                    "Boot-start service references a user-writable directory");
+            if(hasType && (type&1) && userPath(normalized))
+                out.report("Kernel Driver Service Context",serviceName,
+                    "Driver-type service references a user-writable directory");
+        }
+        HKEY params=nullptr;
+        if(RegOpenKeyExW(service,L"Parameters",0,KEY_READ,
+            &params)==ERROR_SUCCESS) {
+            std::wstring dll;
+            if(readRegistryText(params,L"ServiceDll",dll) &&
+               userPath(dll))
+                out.report("Service DLL Context",dll,
+                    "Service "+utf8(serviceName)+
+                    " references a user-writable DLL");
+            RegCloseKey(params);
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(services);
+}
+// Inspect browser native-messaging host registrations. Native hosts can
+// legitimately integrate password managers, accessibility and enterprise apps.
+static void inspectNativeMessagingHive(State& out,HKEY hive,
+                                       const wchar_t* path,
+                                       const char* browser) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,path,0,KEY_READ,&root)
+       !=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(500));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
+            &child)!=ERROR_SUCCESS)continue;
+        std::wstring manifest;
+        if(readRegistryText(child,nullptr,manifest)) {
+            const auto expanded=expand(manifest);
+            if(userPath(expanded))
+                out.report("Browser Native Messaging Context",expanded,
+                    std::string(browser)+
+                    " native messaging manifest is under a user-writable directory");
+        }
+        RegCloseKey(child);
+    }
+    RegCloseKey(root);
+}
+static void inspectNativeMessaging(State& out) {
+    const struct {
+        HKEY hive;
+        const wchar_t* key;
+        const char* browser;
+    } entries[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Google\\Chrome\\NativeMessagingHosts","Chrome user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts","Chrome machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Edge\\NativeMessagingHosts","Edge user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts","Edge machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Mozilla\\NativeMessagingHosts","Firefox user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Mozilla\\NativeMessagingHosts","Firefox machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Chromium\\NativeMessagingHosts","Chromium user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Chromium\\NativeMessagingHosts","Chromium machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
+         "Brave user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
+         "Brave machine"}
+    };
+    for(const auto& entry:entries) {
+        if(out.stopped())break;
+        inspectNativeMessagingHive(out,entry.hive,
+            entry.key,entry.browser);
+    }
+}
+// AppCertDlls and AppInit_DLLs are Windows process extension points.
+// They are examined as configuration, never executed by this scanner.
+static void inspectAppCert(State& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCertDlls",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(256));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        DWORD bytes=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&n,nullptr,
+            &type,data.data(),&bytes)!=ERROR_SUCCESS ||
+            (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+            bytes<sizeof(wchar_t) || bytes%sizeof(wchar_t))continue;
+        const auto* raw=reinterpret_cast<const wchar_t*>(data.data());
+        size_t chars=0;
+        while(chars<bytes/sizeof(wchar_t) && raw[chars])++chars;
+        std::wstring dll(raw,chars);
+        if(userPath(dll))
+            out.report("AppCert DLL Context",dll,
+                "AppCertDlls registry entry references a user-writable path");
+    }
+    RegCloseKey(key);
+}
+// IFEO debugger settings and SilentProcessExit monitor programs are
+// documented diagnostic mechanisms. They may be configured legitimately.
+static void inspectImageOptions(State& out) {
+    const struct {
+        const wchar_t* path;
+        const wchar_t* value;
+        const char* category;
+    } roots[]={
+        {L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+         L"Debugger","IFEO Debugger Context"},
+        {L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+         L"MonitorProcess","Silent Exit Monitor Context"}
+    };
+    for(const auto& root:roots) {
+        if(out.stopped())break;
+        HKEY parent=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,root.path,0,
+            KEY_READ,&parent)!=ERROR_SUCCESS)continue;
+        DWORD count=0,maxName=0;
+        if(RegQueryInfoKeyW(parent,nullptr,nullptr,nullptr,
+            &count,&maxName,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+            RegCloseKey(parent);continue;
+        }
+        count=(std::min)(count,DWORD(1500));
+        maxName=(std::min)(maxName,DWORD(16384));
+        std::vector<wchar_t> names(maxName+2);
+        for(DWORD i=0;i<count && !out.stopped();++i) {
+            DWORD n=static_cast<DWORD>(names.size()-1);
+            if(RegEnumKeyExW(parent,i,names.data(),&n,
+                nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            HKEY child=nullptr;
+            if(RegOpenKeyExW(parent,names.data(),0,KEY_READ,
+                &child)!=ERROR_SUCCESS)continue;
+            std::wstring value;
+            if(readRegistryText(child,root.value,value)) {
+                const auto image=executableFromCommand(value);
+                if(userPath(image))
+                    out.report(root.category,image,
+                        "Image "+utf8(std::wstring(names.data(),n))+
+                        " has a diagnostic command in a user-writable directory");
+            }
+            RegCloseKey(child);
+        }
+        RegCloseKey(parent);
+    }
+}
+
+// Windows App Paths entries can redirect application lookup. The review
+// checks only executable targets stored in the registry.
+static void inspectAppPathsHive(State& out,HKEY hive,
+                                const wchar_t* subkey,
+                                const char* source) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&root)
+       !=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(1000));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
+            &child)!=ERROR_SUCCESS)continue;
+        std::wstring target;
+        if(readRegistryText(child,nullptr,target) &&
+           userPath(target))
+            out.report("App Paths Executable Review",target,
+                std::string(source)+" | App Paths registration "+
+                utf8(std::wstring(name.data(),n)));
+        std::wstring searchPath;
+        if(readRegistryText(child,L"Path",searchPath) &&
+           has(lower(searchPath),L"\\temp\\"))
+            out.report("App Paths Search Path Review",searchPath,
+                std::string(source)+
+                " | Additional DLL search path contains Temp");
+        RegCloseKey(child);
+    }
+    RegCloseKey(root);
+}
+static void inspectAppPaths(State& out) {
+    inspectAppPathsHive(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+        "Current user");
+    inspectAppPathsHive(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+        "Local machine");
+}
+// The Uninstall registry lists installed programs and their associated
+// paths. A user-writable executable in a registered uninstall command
+// is context only and can be a legitimate per-user installation.
+static void inspectUninstallHive(State& out,HKEY hive,
+                                 const wchar_t* path,
+                                 const char* source,REGSAM view=0) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,path,0,KEY_READ|view,
+        &root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(1800));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
+            &child)!=ERROR_SUCCESS)continue;
+        std::wstring uninstall;
+        if(readRegistryText(child,L"UninstallString",uninstall)) {
+            const auto image=executableFromCommand(uninstall);
+            if(has(lower(image),L"\\temp\\") ||
+               has(lower(image),L"\\recycle.bin\\"))
+                out.report("Uninstall Command Context",image,
+                    std::string(source)+
+                    " | Registered uninstall command points to a temporary location");
+        }
+        std::wstring icon;
+        if(readRegistryText(child,L"DisplayIcon",icon)) {
+            const auto image=executableFromCommand(icon);
+            if(has(lower(image),L"\\recycle.bin\\"))
+                out.report("Installed App Icon Context",image,
+                    std::string(source)+
+                    " | Installed application icon references Recycle Bin");
+        }
+        RegCloseKey(child);
+    }
+    RegCloseKey(root);
+}
+static void inspectUninstallRegistrations(State& out) {
+    inspectUninstallHive(out,HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "User-installed programs");
+    inspectUninstallHive(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "Machine 64-bit programs",KEY_WOW64_64KEY);
+    inspectUninstallHive(out,HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "Machine 32-bit programs",KEY_WOW64_32KEY);
+}
+// Windows Security Center policy keys are configuration observations.
+// A disabled policy can be intentional on managed computers.
+static void inspectSecurityPolicies(State& out) {
+    const struct {
+        HKEY hive;
+        const wchar_t* key;
+        const wchar_t* value;
+        DWORD observed;
+        const char* description;
+    } policies[]={
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+         L"DisableRealtimeMonitoring",1,
+         "Defender real-time protection policy disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+         L"DisableBehaviorMonitoring",1,
+         "Defender behavior monitoring policy disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+         L"DisableOnAccessProtection",1,
+         "Defender on-access protection policy disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+         L"EnableSmartScreen",0,
+         "SmartScreen policy disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+         L"EnableLUA",0,
+         "User Account Control disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+         L"UserAuthentication",0,
+         "RDP Network Level Authentication disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+         L"EnableScriptBlockLogging",0,
+         "PowerShell script block logging disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",
+         L"EnableModuleLogging",0,
+         "PowerShell module logging disabled"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service",
+         L"AllowUnencryptedTraffic",1,
+         "WinRM service allows unencrypted traffic"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service",
+         L"AllowBasic",1,
+         "WinRM service permits Basic authentication"}
+    };
+    for(const auto& policy:policies) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(policy.hive,policy.key,0,
+            KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        DWORD actual=0;
+        const bool matched=readRegistryNumber(key,
+            policy.value,actual) && actual==policy.observed;
+        RegCloseKey(key);
+        if(!matched)continue;
+        out.report("Windows Security Configuration",
+            std::wstring(policy.key)+L"\\"+policy.value,
+            std::string(policy.description)+
+            " | Configuration may be managed or intentional");
+    }
+}
+// Inspect process images for alternate data stream names using the
+// documented stream enumeration APIs, without reading stream contents.
+static void inspectStreams(State& out,
+                           const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(out.stopped() || checked>=120)break;
+        if(!userPath(proc.path) || !regularFile(proc.path))continue;
+        if(!seen.insert(lower(proc.path)).second)continue;
+        ++checked;
+        WIN32_FIND_STREAM_DATA data{};
+        HANDLE handle=FindFirstStreamW(proc.path.c_str(),
+            FindStreamInfoStandard,&data,0);
+        if(handle==INVALID_HANDLE_VALUE)continue;
+        size_t streams=0;
+        do {
+            if(out.stopped() || ++streams>32)break;
+            const auto name=lower(data.cStreamName);
+            if(name==L"::$data")continue;
+            if(has(name,L".exe") || has(name,L".dll") ||
+               has(name,L".ps1") || has(name,L".cmd"))
+                out.report("Alternate Stream Name Context",
+                    proc.path+data.cStreamName,
+                    "Executable-like stream name; content not accessed");
+        }while(FindNextStreamW(handle,&data));
+        FindClose(handle);
+    }
+}
+
+// A correlation only links observations already collected by independent
+// Windows sources. It does not upgrade a heuristic into a confirmed verdict.
+static std::wstring canonicalSubject(const std::string& input) {
+    if(input.empty())return {};
+    int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+        input.c_str(),static_cast<int>(input.size()),nullptr,0);
+    if(length<=0 || length>32768)return {};
+    std::wstring result(length,L'\0');
+    if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+        input.c_str(),static_cast<int>(input.size()),
+        result.data(),length)!=length)return {};
+    result=lower(result);
+    std::replace(result.begin(),result.end(),L'/',L'\\');
+    return result;
+}
+static std::vector<Record> correlate(const std::vector<Record>& evidence) {
+    struct Aggregate {
+        std::unordered_set<std::string> categories;
+        std::string display;
+    };
+    std::unordered_map<std::wstring,Aggregate> subjects;
+    size_t inspected=0;
+    for(const auto& record:evidence) {
+        if(cancelRequested || inspected++>=12000)break;
+        auto path=canonicalSubject(record.name);
+        if(path.empty() || !userPath(path) ||
+           path.find(L":\\")==std::wstring::npos)continue;
+        auto& aggregate=subjects[path];
+        aggregate.categories.insert(record.category);
+        if(aggregate.display.empty())aggregate.display=record.name;
+    }
+    std::vector<Record> result;
+    for(const auto& item:subjects) {
+        if(cancelRequested || result.size()>=100)break;
+        if(item.second.categories.size()<3)continue;
+        std::string list;
+        size_t shown=0;
+        for(const auto& category:item.second.categories) {
+            if(shown++>=5)break;
+            if(!list.empty())list+=", ";
+            list+=category;
+        }
+        result.push_back({
+            "Cross-Source Evidence Correlation",
+            item.second.display,
+            "REVIEW ONLY | "+std::to_string(
+                item.second.categories.size())+
+            " different evidence categories reference this path: "+
+            list+" | Correlation is not a verdict"
+        });
+    }
+    return result;
+}
+// File metadata checks use Win32 attributes and do not open executables
+// with write access or change timestamps.
+static void inspectImageMetadata(State& out,
+                                 const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER current{};
+    current.LowPart=now.dwLowDateTime;
+    current.HighPart=now.dwHighDateTime;
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    for(const auto& proc:processes) {
+        if(out.stopped() || checked>=250)break;
+        if(!userPath(proc.path))continue;
+        if(!seen.insert(lower(proc.path)).second)continue;
+        ++checked;
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if(!GetFileAttributesExW(proc.path.c_str(),
+            GetFileExInfoStandard,&data))continue;
+        const DWORD flags=data.dwFileAttributes;
+        if(flags&FILE_ATTRIBUTE_REPARSE_POINT)
+            out.report("Executable Reparse Point Context",proc.path,
+                "Process image path has a reparse-point attribute");
+        if((flags&FILE_ATTRIBUTE_HIDDEN) &&
+           (flags&FILE_ATTRIBUTE_SYSTEM))
+            out.report("Executable Hidden System Context",proc.path,
+                "Process image has both hidden and system attributes");
+        ULARGE_INTEGER creation{},modified{},size{};
+        creation.LowPart=data.ftCreationTime.dwLowDateTime;
+        creation.HighPart=data.ftCreationTime.dwHighDateTime;
+        modified.LowPart=data.ftLastWriteTime.dwLowDateTime;
+        modified.HighPart=data.ftLastWriteTime.dwHighDateTime;
+        size.LowPart=data.nFileSizeLow;
+        size.HighPart=data.nFileSizeHigh;
+        if(creation.QuadPart>current.QuadPart+day)
+            out.report("Future File Creation Context",proc.path,
+                "File creation time is more than 24 hours in the future");
+        if(modified.QuadPart>current.QuadPart+day)
+            out.report("Future File Modification Context",proc.path,
+                "File modification time is more than 24 hours in the future");
+        if(size.QuadPart==0)
+            out.report("Zero Length Executable Context",proc.path,
+                "Process image is now a zero-byte file");
+    }
+}
+// Network endpoint ownership is collected from the system's TCP table.
+// A connection is only highlighted when the executable is in a transient
+// directory; ordinary connections are not labeled suspicious.
+static void inspectTemporaryNetworkProcesses(State& out,
+                                              const std::vector<Process>& processes) {
+    if(out.stopped())return;
+    std::unordered_map<DWORD,const Process*> lookup;
+    for(const auto& proc:processes)lookup[proc.pid]=&proc;
+    DWORD bytes=0;
+    DWORD status=GetExtendedTcpTable(nullptr,&bytes,TRUE,AF_INET,
+                                     TCP_TABLE_OWNER_PID_ALL,0);
+    if(status!=ERROR_INSUFFICIENT_BUFFER || bytes==0 ||
+       bytes>32*1024*1024)return;
+    std::vector<BYTE> buffer(bytes);
+    if(GetExtendedTcpTable(buffer.data(),&bytes,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=NO_ERROR)return;
+    const auto table=reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(
+        buffer.data());
+    DWORD count=(std::min)(table->dwNumEntries,DWORD(16384));
+    std::unordered_set<DWORD> emitted;
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        const auto& row=table->table[i];
+        if(row.dwState!=MIB_TCP_STATE_ESTAB)continue;
+        auto it=lookup.find(row.dwOwningPid);
+        if(it==lookup.end() ||
+           !emitted.insert(row.dwOwningPid).second)continue;
+        const auto path=lower(it->second->path);
+        if(!has(path,L"\\temp\\") &&
+           !has(path,L"\\recycle.bin\\"))continue;
+        out.report("Temporary Executable TCP Context",
+            it->second->path,
+            "PID "+std::to_string(row.dwOwningPid)+
+            " has an established TCP endpoint");
+    }
+}
+// All collectors are bounded and cancellation-aware. No action is taken
+// against the files, processes, drivers, or settings being reviewed.
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    State out;
+    inspectProcessImages(out,processes);
+    if(!out.stopped())inspectServicePaths(out);
+    if(!out.stopped())inspectNativeMessaging(out);
+    if(!out.stopped())inspectAppCert(out);
+    if(!out.stopped())inspectImageOptions(out);
+    if(!out.stopped())inspectAppPaths(out);
+    if(!out.stopped())inspectUninstallRegistrations(out);
+    if(!out.stopped())inspectSecurityPolicies(out);
+    if(!out.stopped())inspectStreams(out,processes);
+    if(!out.stopped())inspectImageMetadata(out,processes);
+    if(!out.stopped())inspectTemporaryNetworkProcesses(out,processes);
+    return std::move(out.rows);
+}
+} // namespace artifact_correlation
+
+// Sync PC Checker 8.4 — additional read-only evidence sources.
+// Results describe observations, not verified cheating or malicious behavior.
+namespace evidence_plus {
+struct Collector {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> keys;
+    size_t maxRows=1100;
+    bool stopped() const {return cancelRequested || rows.size()>=maxRows;}
+    void report(const char* category,const std::wstring& subject,
+                const std::string& note) {
+        if(stopped())return;
+        std::wstring key=subject+L"::";
+        for(const char* p=category;*p;++p)
+            key.push_back(static_cast<unsigned char>(*p));
+        if(!keys.insert(key).second)return;
+        rows.push_back({category,utf8(subject),"REVIEW ONLY | "+note});
+    }
+};
+static std::wstring lower(std::wstring s) {
+    std::transform(s.begin(),s.end(),s.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return s;
+}
+static bool has(const std::wstring& s,const wchar_t* part) {
+    return s.find(part)!=std::wstring::npos;
+}
+static bool writable(const std::wstring& p) {
+    auto s=lower(p);
+    return has(s,L"\\appdata\\") || has(s,L"\\temp\\") ||
+           has(s,L"\\downloads\\") || has(s,L"\\users\\public\\") ||
+           has(s,L"\\recycle.bin\\");
+}
+static std::wstring env(const wchar_t* name) {
+    DWORD length=GetEnvironmentVariableW(name,nullptr,0);
+    if(!length || length>32768)return {};
+    std::wstring result(length,L'\0');
+    DWORD count=GetEnvironmentVariableW(name,result.data(),length);
+    if(!count || count>=length)return {};
+    result.resize(count);
+    return result;
+}
+static std::wstring expand(const std::wstring& input) {
+    DWORD length=ExpandEnvironmentStringsW(input.c_str(),nullptr,0);
+    if(!length || length>32768)return input;
+    std::wstring result(length,L'\0');
+    DWORD count=ExpandEnvironmentStringsW(input.c_str(),
+        result.data(),length);
+    if(!count || count>length)return input;
+    if(!result.empty() && result.back()==L'\0')result.pop_back();
+    return result;
+}
+static bool regString(HKEY key,const wchar_t* name,std::wstring& result) {
+    DWORD type=0,bytes=0;
+    if(RegQueryValueExW(key,name,nullptr,&type,nullptr,&bytes)!=ERROR_SUCCESS ||
+       (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+       bytes<sizeof(wchar_t) || bytes>65536)return false;
+    std::vector<wchar_t> buffer(bytes/sizeof(wchar_t)+1,L'\0');
+    if(RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(buffer.data()),&bytes)!=ERROR_SUCCESS)
+        return false;
+    result=buffer.data();
+    return !result.empty();
+}
+static bool regNumber(HKEY key,const wchar_t* name,DWORD& result) {
+    DWORD type=0,bytes=sizeof(result);
+    return RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(&result),&bytes)==ERROR_SUCCESS &&
+        type==REG_DWORD && bytes==sizeof(result);
+}
+static std::wstring commandPath(const std::wstring& input) {
+    auto text=expand(input);
+    auto first=text.find_first_not_of(L" \t\r\n");
+    if(first==std::wstring::npos)return {};
+    text.erase(0,first);
+    if(text.front()==L'"') {
+        auto end=text.find(L'"',1);
+        return end==std::wstring::npos?std::wstring{}:
+            text.substr(1,end-1);
+    }
+    auto normalized=lower(text);
+    for(const wchar_t* extension:{
+        L".exe",L".dll",L".sys",L".com",L".cmd",L".bat",L".ps1"}) {
+        auto pos=normalized.find(extension);
+        if(pos!=std::wstring::npos && pos<4096)
+            return text.substr(0,pos+wcslen(extension));
+    }
+    return {};
+}
+static bool readFile(const fs::path& path,
+                     std::vector<unsigned char>& output,
+                     size_t maximum=2*1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(file,&size) || size.QuadPart<0 ||
+       static_cast<ULONGLONG>(size.QuadPart)>maximum) {
+        CloseHandle(file);return false;
+    }
+    output.resize(static_cast<size_t>(size.QuadPart));
+    DWORD read=0;
+    BOOL ok=output.empty() || ReadFile(file,output.data(),
+        static_cast<DWORD>(output.size()),&read,nullptr);
+    CloseHandle(file);
+    if(!ok)return false;
+    output.resize(read);
+    return true;
+}
+static bool bounds(size_t offset,size_t length,size_t total) {
+    return offset<=total && length<=total-offset;
+}
+static std::wstring decodeText(const std::vector<unsigned char>& data) {
+    if(data.size()>=2 && data[0]==0xff && data[1]==0xfe) {
+        const size_t count=(data.size()-2)/sizeof(wchar_t);
+        std::wstring text(count,L'\0');
+        if(count)memcpy(text.data(),data.data()+2,
+                        count*sizeof(wchar_t));
+        return text;
+    }
+    size_t start=(data.size()>=3 && data[0]==0xef &&
+        data[1]==0xbb && data[2]==0xbf)?3:0;
+    if(start==data.size())return {};
+    int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+        reinterpret_cast<const char*>(data.data()+start),
+        static_cast<int>(data.size()-start),nullptr,0);
+    UINT encoding=CP_UTF8;
+    if(count<=0) {
+        encoding=CP_ACP;
+        count=MultiByteToWideChar(encoding,0,
+            reinterpret_cast<const char*>(data.data()+start),
+            static_cast<int>(data.size()-start),nullptr,0);
+    }
+    if(count<=0 || count>1024*1024)return {};
+    std::wstring result(count,L'\0');
+    MultiByteToWideChar(encoding,0,
+        reinterpret_cast<const char*>(data.data()+start),
+        static_cast<int>(data.size()-start),result.data(),count);
+    return result;
+}
+static std::wstring xmlField(const std::wstring& xml,
+                             const wchar_t* field) {
+    const std::wstring start=L"<"+std::wstring(field)+L">";
+    const std::wstring end=L"</"+std::wstring(field)+L">";
+    auto begin=xml.find(start);
+    if(begin==std::wstring::npos)return {};
+    begin+=start.size();
+    auto stop=xml.find(end,begin);
+    if(stop==std::wstring::npos || stop-begin>16384)return {};
+    return xml.substr(begin,stop-begin);
+}
+
+// Inspect task definitions using the Windows Task Scheduler file store.
+// This does not execute tasks, query credentials, or alter schedules.
+static void inspectTaskFiles(Collector& out) {
+    auto windows=env(L"WINDIR");
+    if(windows.empty())return;
+    const auto root=fs::path(windows)/L"System32"/L"Tasks";
+    std::error_code error;
+    if(!fs::is_directory(root,error))return;
+    fs::recursive_directory_iterator it(root,
+        fs::directory_options::skip_permission_denied,error),end;
+    size_t scanned=0;
+    while(!error && it!=end && scanned<1800 && !out.stopped()) {
+        if(it.depth()>12)it.disable_recursion_pending();
+        std::error_code fileError;
+        if(it->is_regular_file(fileError)) {
+            ++scanned;
+            std::vector<unsigned char> data;
+            if(readFile(it->path(),data,512*1024)) {
+                auto xml=decodeText(data);
+                auto action=xmlField(xml,L"Command");
+                auto arguments=xmlField(xml,L"Arguments");
+                auto working=xmlField(xml,L"WorkingDirectory");
+                if(writable(action))
+                    out.report("Task Executable Context",it->path().wstring(),
+                        "Scheduled task references a user-writable executable: "+
+                        utf8(action));
+                if(has(lower(action),L"powershell") &&
+                   (has(lower(arguments),L"-encodedcommand") ||
+                    has(lower(arguments),L" -enc ")))
+                    out.report("Task Encoded Script Context",
+                        it->path().wstring(),
+                        "PowerShell task uses encoded command arguments");
+                if(has(lower(working),L"\\temp\\"))
+                    out.report("Task Working Directory Context",
+                        it->path().wstring(),
+                        "Task working directory is under Temp");
+                if(has(lower(action),L"\\recycle.bin\\"))
+                    out.report("Task Recycle Path Context",
+                        it->path().wstring(),
+                        "Task executable references Recycle Bin");
+            }
+        }
+        it.increment(error);
+    }
+}
+// Event IDs are read as operational context. Event logs are not a
+// cheat-detection oracle and may be disabled or inaccessible.
+struct EventSpec {
+    const wchar_t* channel;
+    const wchar_t* xpath;
+    const char* category;
+    const char* context;
+    size_t maximum;
+};
+static void inspectEventSpec(Collector& out,const EventSpec& spec) {
+    if(out.stopped())return;
+    EVT_HANDLE query=EvtQuery(nullptr,spec.channel,spec.xpath,
+        EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!query)return;
+    size_t inspected=0;
+    while(!out.stopped() && inspected<spec.maximum) {
+        EVT_HANDLE handles[8]{};
+        DWORD returned=0;
+        if(!EvtNext(query,8,handles,100,&returned,0))break;
+        for(DWORD i=0;i<returned;++i) {
+            ++inspected;
+            DWORD bytes=0,used=0;
+            EvtRender(nullptr,handles[i],EvtRenderEventXml,
+                0,nullptr,&bytes,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+               bytes>=sizeof(wchar_t) && bytes<=128*1024) {
+                std::vector<wchar_t> xml(bytes/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,handles[i],EvtRenderEventXml,
+                    bytes,xml.data(),&bytes,&used)) {
+                    std::wstring content(xml.data());
+                    auto id=xmlField(content,L"EventID");
+                    auto computer=xmlField(content,L"Computer");
+                    if(!id.empty()) {
+                        out.report(spec.category,
+                            std::wstring(spec.channel)+L"#"+id,
+                            std::string(spec.context)+
+                            " | Event ID "+utf8(id)+
+                            (computer.empty()?"":" | Host "+utf8(computer)));
+                    }
+                }
+            }
+            EvtClose(handles[i]);
+        }
+        if(returned==0)break;
+    }
+    EvtClose(query);
+}
+static void inspectOperationalEvents(Collector& out) {
+    static const EventSpec specs[]={
+        {L"System",L"*[System[(EventID=7045)]]",
+         "Service Installation Event","Service installation event",32},
+        {L"System",L"*[System[(EventID=7036)]]",
+         "Service State Event","Service state transition",32},
+        {L"System",L"*[System[(EventID=7000 or EventID=7009)]]",
+         "Service Startup Error Event","Service startup error",24},
+        {L"Microsoft-Windows-Windows Defender/Operational",
+         L"*[System[(EventID=1116 or EventID=1117)]]",
+         "Defender Detection Event","Defender detection or remediation event",32},
+        {L"Microsoft-Windows-Windows Defender/Operational",
+         L"*[System[(EventID=5007)]]",
+         "Defender Configuration Event","Defender configuration change",32},
+        {L"Microsoft-Windows-PowerShell/Operational",
+         L"*[System[(EventID=4104)]]",
+         "PowerShell Script Event","PowerShell script block event",24},
+        {L"Microsoft-Windows-TaskScheduler/Operational",
+         L"*[System[(EventID=106 or EventID=140 or EventID=141)]]",
+         "Task Registration Event","Task registration or modification event",32},
+        {L"Microsoft-Windows-CodeIntegrity/Operational",
+         L"*[System[(EventID=3033 or EventID=3063)]]",
+         "Code Integrity Event","Code integrity operational event",24},
+        {L"Microsoft-Windows-WMI-Activity/Operational",
+         L"*[System[(EventID=5857 or EventID=5858)]]",
+         "WMI Activity Event","WMI activity or error event",24},
+        {L"Microsoft-Windows-Kernel-PnP/Configuration",
+         L"*[System[(EventID=400 or EventID=410)]]",
+         "Device Configuration Event","Device configuration event",24}
+    };
+    for(const auto& spec:specs) {
+        if(out.stopped())break;
+        inspectEventSpec(out,spec);
+    }
+}
+// Scan actual per-user browser native-messaging registrations.
+// The manifest is not executed; only the configured path is reviewed.
+static void inspectBrowserHostsHive(Collector& out,HKEY hive,
+                                    const wchar_t* path,
+                                    const char* browser) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(hive,path,0,KEY_READ,&root)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(500));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&length,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
+            &child)!=ERROR_SUCCESS)continue;
+        std::wstring manifest;
+        if(regString(child,nullptr,manifest) && writable(manifest))
+            out.report("Browser Native Host Context",expand(manifest),
+                std::string(browser)+
+                " | Native messaging manifest in a user-writable location");
+        RegCloseKey(child);
+    }
+    RegCloseKey(root);
+}
+static void inspectBrowserHosts(Collector& out) {
+    struct Root {HKEY hive;const wchar_t* key;const char* browser;};
+    static const Root roots[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Google\\Chrome\\NativeMessagingHosts","Chrome user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Google\\Chrome\\NativeMessagingHosts","Chrome machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Edge\\NativeMessagingHosts","Edge user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts","Edge machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Mozilla\\NativeMessagingHosts","Firefox user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Mozilla\\NativeMessagingHosts","Firefox machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Chromium\\NativeMessagingHosts","Chromium user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Chromium\\NativeMessagingHosts","Chromium machine"},
+        {HKEY_CURRENT_USER,
+         L"Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
+         "Brave user"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts",
+         "Brave machine"}
+    };
+    for(const auto& root:roots) {
+        if(out.stopped())break;
+        inspectBrowserHostsHive(out,root.hive,root.key,root.browser);
+    }
+}
+
+// The following collectors inspect registry configuration. They do not
+// modify keys, load DLLs, or execute commands.
+struct RegistryLocation {
+    HKEY hive;
+    const wchar_t* subkey;
+    const wchar_t* value;
+    const char* category;
+    const char* context;
+    bool enumerateValues;
+    bool enumerateChildren;
+};
+static void inspectRegistryTarget(Collector& out,
+                                  const std::wstring& target,
+                                  const RegistryLocation& rule,
+                                  const std::wstring& valueName) {
+    if(out.stopped() || target.empty())return;
+    const auto path=commandPath(target);
+    const auto subject=path.empty()?expand(target):path;
+    if(!writable(subject))return;
+    out.report(rule.category,subject,
+        std::string(rule.context)+" | "+
+        utf8(valueName)+
+        " | Target references a user-writable directory");
+}
+static void inspectRegistryLocation(Collector& out,
+                                    const RegistryLocation& rule) {
+    if(out.stopped())return;
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(rule.hive,rule.subkey,0,KEY_READ,&root)
+       !=ERROR_SUCCESS)return;
+    if(rule.value) {
+        std::wstring target;
+        if(regString(root,rule.value,target))
+            inspectRegistryTarget(out,target,rule,rule.value);
+    }
+    if(rule.enumerateValues) {
+        DWORD count=0,maxName=0,maxData=0;
+        if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+            nullptr,nullptr)==ERROR_SUCCESS) {
+            count=(std::min)(count,DWORD(512));
+            maxName=(std::min)(maxName,DWORD(16384));
+            maxData=(std::min)(maxData,DWORD(65536));
+            std::vector<wchar_t> name(maxName+2);
+            std::vector<BYTE> bytes(maxData+sizeof(wchar_t)*2);
+            for(DWORD i=0;i<count && !out.stopped();++i) {
+                DWORD length=static_cast<DWORD>(name.size()-1);
+                DWORD size=static_cast<DWORD>(bytes.size());
+                DWORD type=0;
+                if(RegEnumValueW(root,i,name.data(),&length,
+                    nullptr,&type,bytes.data(),&size)!=ERROR_SUCCESS ||
+                    (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+                    size<sizeof(wchar_t) || size%sizeof(wchar_t))continue;
+                const wchar_t* data=
+                    reinterpret_cast<const wchar_t*>(bytes.data());
+                size_t chars=0;
+                while(chars<size/sizeof(wchar_t) && data[chars])++chars;
+                inspectRegistryTarget(out,std::wstring(data,chars),
+                    rule,std::wstring(name.data(),length));
+            }
+        }
+    }
+    if(rule.enumerateChildren) {
+        DWORD count=0,maxName=0;
+        if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+            &count,&maxName,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr)==ERROR_SUCCESS) {
+            count=(std::min)(count,DWORD(1200));
+            maxName=(std::min)(maxName,DWORD(16384));
+            std::vector<wchar_t> names(maxName+2);
+            for(DWORD i=0;i<count && !out.stopped();++i) {
+                DWORD length=static_cast<DWORD>(names.size()-1);
+                if(RegEnumKeyExW(root,i,names.data(),&length,
+                    nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+                HKEY child=nullptr;
+                if(RegOpenKeyExW(root,names.data(),0,KEY_READ,
+                    &child)!=ERROR_SUCCESS)continue;
+                std::wstring value;
+                if(regString(child,rule.value,value))
+                    inspectRegistryTarget(out,value,rule,
+                        std::wstring(names.data(),length));
+                RegCloseKey(child);
+            }
+        }
+    }
+    RegCloseKey(root);
+}
+
+static const RegistryLocation kRegistryLocations[]={
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",nullptr,
+      "Registry Executable Context","HKCU Run: run",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",nullptr,
+      "Registry Executable Context","HKCU RunOnce: runonce",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",nullptr,
+      "Registry Executable Context","HKLM Run: run",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",nullptr,
+      "Registry Executable Context","HKLM RunOnce: runonce",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",nullptr,
+      "Registry Executable Context","HKCU Policies Run: policy run",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",nullptr,
+      "Registry Executable Context","HKLM Policies Run: policy run",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServices",nullptr,
+      "Registry Executable Context","HKCU RunServices: legacy run services",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServices",nullptr,
+      "Registry Executable Context","HKLM RunServices: legacy run services",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce",nullptr,
+      "Registry Executable Context","HKCU RunServicesOnce: legacy run services once",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce",nullptr,
+      "Registry Executable Context","HKLM RunServicesOnce: legacy run services once",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Shell",
+      "Registry Executable Context","HKCU Winlogon Shell: winlogon shell",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Shell",
+      "Registry Executable Context","HKLM Winlogon Shell: winlogon shell",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Userinit",
+      "Registry Executable Context","HKLM Winlogon Userinit: winlogon userinit",
+      false,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",L"Userinit",
+      "Registry Executable Context","HKCU Winlogon Userinit: winlogon userinit",
+      false,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"Load",
+      "Registry Executable Context","HKCU Windows Load: Windows load",
+      false,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"Run",
+      "Registry Executable Context","HKCU Windows Run: Windows run",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",L"AppInit_DLLs",
+      "Registry Executable Context","HKLM AppInit: AppInit DLLs",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCertDlls",nullptr,
+      "Registry Executable Context","HKLM AppCert: AppCert DLLs",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",L"Debugger",
+      "Registry Executable Context","HKLM IFEO: IFEO debugger",
+      false,
+      true},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",L"MonitorProcess",
+      "Registry Executable Context","HKLM SilentProcessExit: silent exit monitor",
+      false,
+      true},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Active Setup\\Installed Components",L"StubPath",
+      "Registry Executable Context","HKLM Active Setup: Active Setup",
+      false,
+      true},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Active Setup\\Installed Components",L"StubPath",
+      "Registry Executable Context","HKCU Active Setup: Active Setup",
+      false,
+      true},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",nullptr,
+      "Registry Executable Context","HKLM App Paths: App Paths",
+      false,
+      true},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",nullptr,
+      "Registry Executable Context","HKCU App Paths: App Paths",
+      false,
+      true},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Command Processor",L"AutoRun",
+      "Registry Executable Context","HKCU Command Processor: command processor autorun",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Command Processor",L"AutoRun",
+      "Registry Executable Context","HKLM Command Processor: command processor autorun",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors",L"Driver",
+      "Registry Executable Context","HKLM Print Monitors: print monitor DLL",
+      false,
+      true},
+
+    {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Print\\Environments\\Windows x64\\Print Processors",L"Driver",
+      "Registry Executable Context","HKLM Print Processors: print processor DLL",
+      false,
+      true},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32",nullptr,
+      "Registry Executable Context","HKLM Drivers32: multimedia driver",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32",nullptr,
+      "Registry Executable Context","HKCU Drivers32: multimedia driver",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",nullptr,
+      "Registry Executable Context","HKLM ShellExecuteHooks: shell execute hooks",
+      true,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",nullptr,
+      "Registry Executable Context","HKCU ShellExecuteHooks: shell execute hooks",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\ShellServiceObjectDelayLoad",nullptr,
+      "Registry Executable Context","HKLM ShellServiceObjectDelayLoad: shell service object",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SharedTaskScheduler",nullptr,
+      "Registry Executable Context","HKLM SharedTaskScheduler: shared task scheduler",
+      true,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager",L"BootExecute",
+      "Registry Executable Context","HKLM Session Manager BootExecute: boot execute",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SYSTEM\\Setup",L"CmdLine",
+      "Registry Executable Context","HKLM Setup CmdLine: setup command line",
+      false,
+      false},
+
+    {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"Shell",
+      "Registry Executable Context","HKCU Policies Shell: shell policy",
+      false,
+      false},
+
+    {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"Shell",
+      "Registry Executable Context","HKLM Policies Shell: shell policy",
+      false,
+      false},
+
+};
+static void inspectRegistryLocations(Collector& out) {
+    for(const auto& location:kRegistryLocations) {
+        if(out.stopped())break;
+        inspectRegistryLocation(out,location);
+    }
+}
+
+// Enumerate the file-system startup directories with a bounded iterator.
+// Script files are identified by extension, not executed or interpreted.
+static void inspectStartupFolder(Collector& out,const fs::path& folder,
+                                 const char* context) {
+    if(out.stopped())return;
+    std::error_code error;
+    if(!fs::is_directory(folder,error))return;
+    size_t scanned=0;
+    for(fs::directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+        !error && it!=end && scanned<400 && !out.stopped();
+        it.increment(error),++scanned) {
+        std::error_code fileError;
+        if(!it->is_regular_file(fileError))continue;
+        const auto extension=lower(it->path().extension().wstring());
+        const bool executable=extension==L".exe" ||
+            extension==L".com" || extension==L".scr";
+        const bool script=extension==L".bat" ||
+            extension==L".cmd" || extension==L".ps1" ||
+            extension==L".vbs" || extension==L".js" ||
+            extension==L".wsf";
+        if(executable || script)
+            out.report("Startup File Context",it->path().wstring(),
+                std::string(context)+
+                (executable?" | Executable in startup folder":
+                            " | Script in startup folder"));
+    }
+}
+static void inspectStartupLocations(Collector& out) {
+    auto roaming=env(L"APPDATA");
+    auto program=env(L"PROGRAMDATA");
+    if(!roaming.empty())
+        inspectStartupFolder(out,fs::path(roaming)/
+            L"Microsoft"/L"Windows"/L"Start Menu"/L"Programs"/L"Startup",
+            "Current user");
+    if(!program.empty())
+        inspectStartupFolder(out,fs::path(program)/
+            L"Microsoft"/L"Windows"/L"Start Menu"/L"Programs"/L"Startup",
+            "All users");
+}
+// The Prefetch inventory can provide execution context, but it is not
+// an authoritative execution log. Filenames are not attributed to users.
+static void inspectPrefetch(Collector& out) {
+    auto windows=env(L"WINDIR");
+    if(windows.empty())return;
+    const auto folder=fs::path(windows)/L"Prefetch";
+    std::error_code error;
+    if(!fs::is_directory(folder,error))return;
+    size_t inspected=0;
+    for(fs::directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+        !error && it!=end && inspected<1600 && !out.stopped();
+        it.increment(error)) {
+        if(!it->is_regular_file(error) ||
+           lower(it->path().extension().wstring())!=L".pf")continue;
+        ++inspected;
+        const auto filename=lower(it->path().filename().wstring());
+        if(has(filename,L"powershell") ||
+           has(filename,L"wscript") ||
+           has(filename,L"cscript") ||
+           has(filename,L"mshta"))
+            out.report("Prefetch Script Host Context",
+                it->path().wstring(),
+                "Prefetch file refers to a script interpreter; "
+                "execution and purpose require independent verification");
+    }
+}
+// Read metadata of Windows forensic stores without attempting to
+// interpret locked or proprietary database contents.
+static void inspectForensicStores(Collector& out) {
+    const auto windows=env(L"WINDIR");
+    if(windows.empty())return;
+    const std::vector<fs::path> stores={
+        fs::path(windows)/L"AppCompat"/L"Programs"/L"Amcache.hve",
+        fs::path(windows)/L"System32"/L"sru"/L"SRUDB.dat",
+        fs::path(windows)/L"System32"/L"config"/L"SYSTEM",
+        fs::path(windows)/L"System32"/L"config"/L"SOFTWARE",
+        fs::path(windows)/L"System32"/L"config"/L"SAM",
+        fs::path(windows)/L"System32"/L"config"/L"SECURITY"
+    };
+    for(const auto& path:stores) {
+        if(out.stopped())break;
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if(!GetFileAttributesExW(path.c_str(),
+            GetFileExInfoStandard,&data))continue;
+        ULARGE_INTEGER length{};
+        length.LowPart=data.nFileSizeLow;
+        length.HighPart=data.nFileSizeHigh;
+        // Presence alone is normal; only implausible zero-length stores
+        // produce a review finding.
+        if(length.QuadPart==0)
+            out.report("Forensic Store Integrity Context",
+                path.wstring(),"Windows forensic/configuration store is zero bytes");
+    }
+}
+// Enumerate crash reports without parsing or executing crash payloads.
+static void inspectCrashReports(Collector& out) {
+    std::vector<fs::path> roots;
+    auto local=env(L"LOCALAPPDATA");
+    auto program=env(L"PROGRAMDATA");
+    if(!local.empty()) {
+        roots.push_back(fs::path(local)/L"Microsoft"/L"Windows"/
+                        L"WER"/L"ReportArchive");
+        roots.push_back(fs::path(local)/L"Microsoft"/L"Windows"/
+                        L"WER"/L"ReportQueue");
+    }
+    if(!program.empty())
+        roots.push_back(fs::path(program)/L"Microsoft"/L"Windows"/
+                        L"WER"/L"ReportArchive");
+    size_t checked=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || checked>=240)break;
+        std::error_code error;
+        if(!fs::is_directory(root,error))continue;
+        for(fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && checked<240 && !out.stopped();
+            it.increment(error)) {
+            if(!it->is_directory(error))continue;
+            ++checked;
+            std::vector<unsigned char> bytes;
+            if(!readFile(it->path()/L"Report.wer",bytes,256*1024))
+                continue;
+            auto text=decodeText(bytes);
+            std::wistringstream stream(text);
+            std::wstring line;
+            size_t lines=0;
+            while(std::getline(stream,line) && lines++<2048) {
+                if(line.rfind(L"AppPath=",0)!=0)continue;
+                auto path=line.substr(8);
+                if(writable(path))
+                    out.report("WER Process Context",path,
+                        "Crash report references an executable in a user-writable directory");
+                break;
+            }
+        }
+    }
+}
+// Verify local executable Authenticode status without network retrieval.
+// Lack of signature is common for independently developed software.
+static void inspectAuthenticode(Collector& out,
+                                const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=180)break;
+        if(!writable(process.path))continue;
+        if(!seen.insert(lower(process.path)).second)continue;
+        ++checked;
+        WINTRUST_FILE_INFO file{};
+        file.cbStruct=sizeof(file);
+        file.pcwszFilePath=process.path.c_str();
+        WINTRUST_DATA data{};
+        data.cbStruct=sizeof(data);
+        data.dwUIChoice=WTD_UI_NONE;
+        data.fdwRevocationChecks=WTD_REVOKE_NONE;
+        data.dwUnionChoice=WTD_CHOICE_FILE;
+        data.pFile=&file;
+        data.dwStateAction=WTD_STATEACTION_IGNORE;
+        data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+        GUID policy=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        LONG status=WinVerifyTrust(nullptr,&policy,&data);
+        if(status==TRUST_E_BAD_DIGEST)
+            out.report("Signature Digest Mismatch",
+                process.path,"Local signature digest verification failed");
+        else if(status==TRUST_E_NOSIGNATURE)
+            out.report("Unsigned Executable Context",
+                process.path,"No Authenticode signature; unsigned software may be legitimate");
+    }
+}
+// Query the owning process of TCP and UDP endpoints. Network activity
+// is normal and only highlighted in conjunction with a transient image path.
+static void inspectNetworkOwners(Collector& out,
+                                 const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& process:processes)byPid[process.pid]=&process;
+    DWORD size=0;
+    if(GetExtendedTcpTable(nullptr,&size,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)==ERROR_INSUFFICIENT_BUFFER &&
+        size && size<=32*1024*1024) {
+        std::vector<BYTE> bytes(size);
+        if(GetExtendedTcpTable(bytes.data(),&size,TRUE,AF_INET,
+            TCP_TABLE_OWNER_PID_ALL,0)==NO_ERROR) {
+            const auto table=reinterpret_cast<
+                const MIB_TCPTABLE_OWNER_PID*>(bytes.data());
+            size_t count=(std::min)(size_t(table->dwNumEntries),
+                                    size_t(16384));
+            std::unordered_set<DWORD> emitted;
+            for(size_t i=0;i<count && !out.stopped();++i) {
+                const auto& row=table->table[i];
+                if(row.dwState!=MIB_TCP_STATE_ESTAB)continue;
+                auto it=byPid.find(row.dwOwningPid);
+                if(it==byPid.end() ||
+                   !emitted.insert(row.dwOwningPid).second)continue;
+                auto path=lower(it->second->path);
+                if(!has(path,L"\\temp\\") &&
+                   !has(path,L"\\recycle.bin\\"))continue;
+                out.report("Temporary Executable TCP Context",
+                    it->second->path,
+                    "PID "+std::to_string(row.dwOwningPid)+
+                    " has an established TCP endpoint");
+            }
+        }
+    }
+    size=0;
+    if(GetExtendedUdpTable(nullptr,&size,TRUE,AF_INET,
+        UDP_TABLE_OWNER_PID,0)==ERROR_INSUFFICIENT_BUFFER &&
+        size && size<=32*1024*1024) {
+        std::vector<BYTE> bytes(size);
+        if(GetExtendedUdpTable(bytes.data(),&size,TRUE,AF_INET,
+            UDP_TABLE_OWNER_PID,0)==NO_ERROR) {
+            const auto table=reinterpret_cast<
+                const MIB_UDPTABLE_OWNER_PID*>(bytes.data());
+            size_t count=(std::min)(size_t(table->dwNumEntries),
+                                    size_t(16384));
+            std::unordered_set<DWORD> emitted;
+            for(size_t i=0;i<count && !out.stopped();++i) {
+                const auto& row=table->table[i];
+                auto it=byPid.find(row.dwOwningPid);
+                if(it==byPid.end() ||
+                   !emitted.insert(row.dwOwningPid).second)continue;
+                auto path=lower(it->second->path);
+                if(!has(path,L"\\temp\\") &&
+                   !has(path,L"\\recycle.bin\\"))continue;
+                out.report("Temporary Executable UDP Context",
+                    it->second->path,
+                    "PID "+std::to_string(row.dwOwningPid)+
+                    " owns a UDP endpoint");
+            }
+        }
+    }
+}
+
+// Inspect executable image file attributes and dates through Win32.
+// A reparse point or unusual timestamp may be legitimate.
+static void inspectImageAttributes(Collector& out,
+                                   const std::vector<Process>& processes) {
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER current{};
+    current.LowPart=now.dwLowDateTime;
+    current.HighPart=now.dwHighDateTime;
+    constexpr ULONGLONG oneDay=86400ULL*10000000ULL;
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=400)break;
+        if(!writable(process.path))continue;
+        if(!seen.insert(lower(process.path)).second)continue;
+        ++checked;
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if(!GetFileAttributesExW(process.path.c_str(),
+            GetFileExInfoStandard,&data))continue;
+        DWORD attributes=data.dwFileAttributes;
+        if(attributes&FILE_ATTRIBUTE_REPARSE_POINT)
+            out.report("Process Image Reparse Point",
+                process.path,"Process image is a reparse point");
+        if((attributes&FILE_ATTRIBUTE_HIDDEN) &&
+           (attributes&FILE_ATTRIBUTE_SYSTEM))
+            out.report("Hidden System Executable",
+                process.path,"Image has both hidden and system attributes");
+        ULARGE_INTEGER creation{},modified{},length{};
+        creation.LowPart=data.ftCreationTime.dwLowDateTime;
+        creation.HighPart=data.ftCreationTime.dwHighDateTime;
+        modified.LowPart=data.ftLastWriteTime.dwLowDateTime;
+        modified.HighPart=data.ftLastWriteTime.dwHighDateTime;
+        length.LowPart=data.nFileSizeLow;
+        length.HighPart=data.nFileSizeHigh;
+        if(creation.QuadPart>current.QuadPart+oneDay)
+            out.report("Future Creation Timestamp",
+                process.path,"File creation timestamp is more than 24 hours in the future");
+        if(modified.QuadPart>current.QuadPart+oneDay)
+            out.report("Future Modification Timestamp",
+                process.path,"File modification timestamp is more than 24 hours in the future");
+        if(length.QuadPart==0)
+            out.report("Empty Process Image",
+                process.path,"Process image is currently zero bytes");
+    }
+}
+// Inspect accessible alternate data stream names only; never read or
+// execute the contents of those streams.
+static void inspectAlternateStreamNames(Collector& out,
+                                        const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=160)break;
+        if(!writable(process.path))continue;
+        if(!seen.insert(lower(process.path)).second)continue;
+        ++checked;
+        WIN32_FIND_STREAM_DATA data{};
+        HANDLE finder=FindFirstStreamW(process.path.c_str(),
+            FindStreamInfoStandard,&data,0);
+        if(finder==INVALID_HANDLE_VALUE)continue;
+        size_t streams=0;
+        do {
+            if(out.stopped() || ++streams>32)break;
+            const auto name=lower(data.cStreamName);
+            if(name==L"::$data")continue;
+            if(has(name,L".exe") || has(name,L".dll") ||
+               has(name,L".ps1") || has(name,L".cmd"))
+                out.report("Executable Stream Name",
+                    process.path+data.cStreamName,
+                    "Alternate data stream has an executable-like name");
+        }while(FindNextStreamW(finder,&data));
+        FindClose(finder);
+    }
+}
+// Inspect PE section metadata with strict bounds and the actual file size.
+// This parser intentionally avoids running or mapping the target as code.
+static void inspectPEFile(Collector& out,const std::wstring& path) {
+    if(out.stopped())return;
+    std::vector<unsigned char> bytes;
+    if(!readFile(path,bytes,8*1024*1024))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+        return;
+    const size_t pe=static_cast<size_t>(dos.e_lfanew);
+    if(!bounds(pe,sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),
+               bytes.size()))return;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+pe,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE)return;
+    IMAGE_FILE_HEADER file{};
+    memcpy(&file,bytes.data()+pe+sizeof(DWORD),sizeof(file));
+    if(file.NumberOfSections>96)return;
+    const size_t sectionStart=pe+sizeof(DWORD)+sizeof(file)+
+                              file.SizeOfOptionalHeader;
+    const size_t tableBytes=static_cast<size_t>(
+        file.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+    if(!bounds(sectionStart,tableBytes,bytes.size()))return;
+    size_t wx=0,overlaps=0,zeroRaw=0;
+    std::vector<IMAGE_SECTION_HEADER> sections(file.NumberOfSections);
+    if(!sections.empty())
+        memcpy(sections.data(),bytes.data()+sectionStart,tableBytes);
+    for(size_t i=0;i<sections.size();++i) {
+        const auto& section=sections[i];
+        if((section.Characteristics&IMAGE_SCN_MEM_WRITE) &&
+           (section.Characteristics&IMAGE_SCN_MEM_EXECUTE))++wx;
+        if((section.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           section.SizeOfRawData==0)++zeroRaw;
+        for(size_t j=0;j<i;++j) {
+            const auto& previous=sections[j];
+            ULONGLONG start=section.PointerToRawData;
+            ULONGLONG end=start+section.SizeOfRawData;
+            ULONGLONG prior=previous.PointerToRawData;
+            ULONGLONG priorEnd=prior+previous.SizeOfRawData;
+            if(section.SizeOfRawData && previous.SizeOfRawData &&
+               start<priorEnd && prior<end)++overlaps;
+        }
+    }
+    if(wx)
+        out.report("PE Writable Executable Sections",path,
+            std::to_string(wx)+" section(s) are writable and executable");
+    if(overlaps)
+        out.report("PE Overlapping Sections",path,
+            std::to_string(overlaps)+" overlapping raw section pair(s)");
+    if(zeroRaw)
+        out.report("PE Zero Raw Executable Section",path,
+            std::to_string(zeroRaw)+
+            " executable section(s) have zero raw bytes");
+}
+static void inspectPEImages(Collector& out,
+                            const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> seen;
+    size_t checked=0;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=180)break;
+        if(!writable(process.path))continue;
+        if(!seen.insert(lower(process.path)).second)continue;
+        ++checked;
+        inspectPEFile(out,process.path);
+    }
+}
+// The scan is bounded and may skip inaccessible protected objects.
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    Collector out;
+    inspectTaskFiles(out);
+    if(!out.stopped())inspectOperationalEvents(out);
+    if(!out.stopped())inspectBrowserHosts(out);
+    if(!out.stopped())inspectRegistryLocations(out);
+    if(!out.stopped())inspectStartupLocations(out);
+    if(!out.stopped())inspectPrefetch(out);
+    if(!out.stopped())inspectForensicStores(out);
+    if(!out.stopped())inspectCrashReports(out);
+    if(!out.stopped())inspectAuthenticode(out,processes);
+    if(!out.stopped())inspectNetworkOwners(out,processes);
+    if(!out.stopped())inspectImageAttributes(out,processes);
+    if(!out.stopped())inspectAlternateStreamNames(out,processes);
+    if(!out.stopped())inspectPEImages(out,processes);
+    return std::move(out.rows);
+}
+} // namespace evidence_plus
+
+
+// FiveM evidence review: read-only and bounded. No filename alone proves
+// a cheat, bypass, injection, malware or unauthorized modification.
+namespace fivem_evidence {
+struct ResultSink {
+    std::vector<Record> records;
+    std::unordered_set<std::wstring> dedup;
+    size_t maxResults=500;
+    bool stop() const {
+        return cancelRequested || records.size()>=maxResults;
+    }
+    void add(const char* category,const std::wstring& subject,
+             const std::string& reason) {
+        if(stop() || subject.empty())return;
+        std::wstring key=subject;
+        key+=L"|";
+        for(const char* c=category;*c;++c)
+            key.push_back(static_cast<unsigned char>(*c));
+        if(!dedup.insert(key).second)return;
+        records.push_back({category,utf8(subject),
+            "REVIEW ONLY | "+reason});
+    }
+};
+static std::wstring lower(std::wstring text) {
+    std::transform(text.begin(),text.end(),text.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return text;
+}
+static bool contains(const std::wstring& text,const wchar_t* part) {
+    return text.find(part)!=std::wstring::npos;
+}
+static bool ends(const std::wstring& text,const wchar_t* suffix) {
+    size_t n=wcslen(suffix);
+    return text.size()>=n && text.compare(text.size()-n,n,suffix)==0;
+}
+static std::wstring env(const wchar_t* name) {
+    DWORD length=GetEnvironmentVariableW(name,nullptr,0);
+    if(!length || length>32768)return {};
+    std::wstring value(length,L'\0');
+    DWORD read=GetEnvironmentVariableW(name,value.data(),length);
+    if(!read || read>=length)return {};
+    value.resize(read);
+    return value;
+}
+static bool isRegular(const fs::path& path) {
+    std::error_code error;
+    return fs::is_regular_file(path,error);
+}
+static bool isDirectory(const fs::path& path) {
+    std::error_code error;
+    return fs::is_directory(path,error);
+}
+static bool within(const fs::path& child,const fs::path& parent) {
+    auto a=lower(child.lexically_normal().wstring());
+    auto b=lower(parent.lexically_normal().wstring());
+    if(a==b)return true;
+    if(b.empty())return false;
+    if(b.back()!=L'\\' && b.back()!=L'/')b+=L'\\';
+    return a.rfind(b,0)==0;
+}
+static bool isBinary(const fs::path& path) {
+    const auto ext=lower(path.extension().wstring());
+    return ext==L".exe" || ext==L".dll" || ext==L".sys" ||
+           ext==L".com" || ext==L".scr" || ext==L".asi";
+}
+static bool isScript(const fs::path& path) {
+    const auto ext=lower(path.extension().wstring());
+    return ext==L".bat" || ext==L".cmd" || ext==L".ps1" ||
+           ext==L".vbs" || ext==L".js" || ext==L".wsf";
+}
+static bool isFiveMName(const std::wstring& path) {
+    auto name=lower(fs::path(path).filename().wstring());
+    return name==L"fivem.exe" ||
+           name==L"fivem_gtaprocess.exe" ||
+           (name.rfind(L"fivem_",0)==0 && ends(name,L".exe"));
+}
+static bool getAttributes(const fs::path& path,
+                          WIN32_FILE_ATTRIBUTE_DATA& data) {
+    return GetFileAttributesExW(path.c_str(),
+        GetFileExInfoStandard,&data)!=FALSE;
+}
+static ULONGLONG fileLength(const WIN32_FILE_ATTRIBUTE_DATA& data) {
+    ULARGE_INTEGER length{};
+    length.LowPart=data.nFileSizeLow;
+    length.HighPart=data.nFileSizeHigh;
+    return length.QuadPart;
+}
+static ULONGLONG filetimeNumber(FILETIME time) {
+    ULARGE_INTEGER value{};
+    value.LowPart=time.dwLowDateTime;
+    value.HighPart=time.dwHighDateTime;
+    return value.QuadPart;
+}
+static std::vector<fs::path> installationRoots(
+    const std::vector<Process>& processes) {
+    std::vector<fs::path> roots;
+    std::unordered_set<std::wstring> seen;
+    auto add=[&](const fs::path& root) {
+        if(root.empty() || !isDirectory(root))return;
+        auto key=lower(root.lexically_normal().wstring());
+        if(seen.insert(key).second)roots.push_back(root);
+    };
+    const auto local=env(L"LOCALAPPDATA");
+    const auto roaming=env(L"APPDATA");
+    if(!local.empty()) {
+        add(fs::path(local)/L"FiveM");
+        add(fs::path(local)/L"FiveM"/L"FiveM.app");
+    }
+    if(!roaming.empty())add(fs::path(roaming)/L"CitizenFX");
+    for(const auto& proc:processes) {
+        if(!isFiveMName(proc.path) || proc.path.empty())continue;
+        fs::path folder=fs::path(proc.path).parent_path();
+        if(lower(folder.filename().wstring())==L"fivem.app")
+            add(folder);
+        else if(lower(folder.filename().wstring())==L"fivem")
+            add(folder);
+        else {
+            // A running FiveM executable may be installed in a custom
+            // directory. Limit discovery to the immediate parent.
+            add(folder);
+        }
+    }
+    return roots;
+}
+static std::vector<fs::path> dataRoots(
+    const std::vector<fs::path>& installations) {
+    std::vector<fs::path> roots;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:installations) {
+        for(const auto& candidate:{
+            root,root/L"FiveM.app",
+            root/L"FiveM.app"/L"data",
+            root/L"data"
+        }) {
+            if(!isDirectory(candidate))continue;
+            auto key=lower(candidate.lexically_normal().wstring());
+            if(seen.insert(key).second)roots.push_back(candidate);
+        }
+    }
+    return roots;
+}
+static bool transientArea(const fs::path& path) {
+    auto value=lower(path.wstring());
+    return contains(value,L"\\cache\\") ||
+           contains(value,L"\\server-cache\\") ||
+           contains(value,L"\\server-cache-priv\\") ||
+           contains(value,L"\\crashes\\") ||
+           contains(value,L"\\logs\\") ||
+           contains(value,L"\\nui-storage\\");
+}
+static bool nonstandardExtension(const fs::path& path) {
+    auto name=lower(path.filename().wstring());
+    return contains(name,L".png.exe") ||
+           contains(name,L".jpg.exe") ||
+           contains(name,L".pdf.exe") ||
+           contains(name,L".txt.exe") ||
+           contains(name,L".log.exe") ||
+           contains(name,L".json.exe") ||
+           contains(name,L".zip.exe");
+}
+// File tree walking is restricted to known FiveM locations, 4,000
+// entries per root, at most 10 levels, and cancellation between entries.
+static void inspectFiveMTree(ResultSink& out,const fs::path& root) {
+    if(out.stop() || !isDirectory(root))return;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(root,
+        fs::directory_options::skip_permission_denied,ec),end;
+    size_t examined=0;
+    while(!ec && it!=end && examined<4000 && !out.stop()) {
+        if(it.depth()>10)it.disable_recursion_pending();
+        std::error_code entryError;
+        const auto path=it->path();
+        const bool regular=it->is_regular_file(entryError);
+        const bool directory=it->is_directory(entryError);
+        if(directory && it->is_symlink(entryError))
+            it.disable_recursion_pending();
+        if(regular) {
+            ++examined;
+            WIN32_FILE_ATTRIBUTE_DATA data{};
+            if(getAttributes(path,data)) {
+                const auto size=fileLength(data);
+                const auto filename=lower(path.filename().wstring());
+                if(nonstandardExtension(path))
+                    out.add("FiveM Double Extension",path.wstring(),
+                        "Executable-like double extension in FiveM tree");
+                if(transientArea(path) && isBinary(path))
+                    out.add("FiveM Cache Executable Context",path.wstring(),
+                        "Executable file in FiveM transient data; "
+                        "verify whether it belongs to a legitimate resource");
+                if(transientArea(path) && isScript(path))
+                    out.add("FiveM Cache Script Context",path.wstring(),
+                        "Script in FiveM transient data; "
+                        "scripts may be part of legitimate server resources");
+                if(isBinary(path) && size==0)
+                    out.add("FiveM Zero-Byte Binary",path.wstring(),
+                        "Executable extension with zero-byte file size");
+                if(isBinary(path) &&
+                   (data.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN) &&
+                   (data.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM))
+                    out.add("FiveM Hidden System Binary",path.wstring(),
+                        "Binary has both hidden and system attributes");
+                if(contains(filename,L".exe.") ||
+                   contains(filename,L".dll."))
+                    out.add("FiveM Embedded Executable Extension",
+                        path.wstring(),
+                        "Filename contains an embedded executable extension");
+                FILETIME now{};
+                GetSystemTimeAsFileTime(&now);
+                constexpr ULONGLONG day=86400ULL*10000000ULL;
+                const auto current=filetimeNumber(now);
+                if(isBinary(path) &&
+                   filetimeNumber(data.ftLastWriteTime)>current+day)
+                    out.add("FiveM Future File Timestamp",path.wstring(),
+                        "Binary modification timestamp is more than 24 hours ahead");
+                if(isBinary(path) &&
+                   (data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+                    out.add("FiveM Binary Reparse Point",path.wstring(),
+                        "Executable file has reparse-point attribute");
+            }
+        }
+        it.increment(ec);
+    }
+}
+
+// Parse only a bounded prefix of local FiveM logs. We deliberately do
+// not extract server addresses, identifiers, tokens, or chat messages.
+static bool readPrefix(const fs::path& path,
+                       std::vector<unsigned char>& bytes,
+                       size_t maximum=256*1024) {
+    HANDLE handle=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(handle==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER length{};
+    if(!GetFileSizeEx(handle,&length) || length.QuadPart<0) {
+        CloseHandle(handle);return false;
+    }
+    const size_t amount=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(length.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    bytes.resize(amount);
+    DWORD received=0;
+    BOOL ok=amount==0 || ReadFile(handle,bytes.data(),
+        static_cast<DWORD>(amount),&received,nullptr);
+    CloseHandle(handle);
+    if(!ok)return false;
+    bytes.resize(received);
+    return true;
+}
+static std::string asciiLower(const std::vector<unsigned char>& data) {
+    std::string result;
+    result.reserve(data.size());
+    for(auto byte:data) {
+        if(byte==0)continue;
+        result.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(byte))));
+    }
+    return result;
+}
+static size_t countSubstring(const std::string& text,
+                             const char* needle,size_t cap=100) {
+    size_t found=0,position=0;
+    while(found<cap) {
+        position=text.find(needle,position);
+        if(position==std::string::npos)break;
+        ++found;
+        position+=strlen(needle);
+    }
+    return found;
+}
+// Crash and integrity log messages are useful context, but never
+// automatically confirm an injection or cheat.
+static void inspectLogFile(ResultSink& out,const fs::path& path) {
+    if(out.stop())return;
+    std::vector<unsigned char> data;
+    if(!readPrefix(path,data))return;
+    auto text=asciiLower(data);
+    if(text.empty())return;
+    const struct {
+        const char* marker;
+        const char* category;
+        const char* description;
+    } patterns[]={
+        {"unhandled exception","FiveM Crash Log Context",
+         "Unhandled exception mentioned in local log"},
+        {"access violation","FiveM Access Violation Context",
+         "Access violation mentioned in local log"},
+        {"failed to load","FiveM Module Load Error",
+         "Module or resource load failure mentioned"},
+        {"could not load","FiveM Module Load Error",
+         "Module or resource could not load"},
+        {"signature verification failed","FiveM Signature Failure Context",
+         "Signature verification failure mentioned"},
+        {"integrity check failed","FiveM Integrity Failure Context",
+         "Integrity check failure mentioned"},
+        {"resource failed to start","FiveM Resource Failure Context",
+         "Resource startup failure mentioned"},
+        {"failed to start resource","FiveM Resource Failure Context",
+         "Resource startup failure mentioned"},
+        {"failed to initialize","FiveM Initialization Failure",
+         "Initialization failure mentioned"},
+        {"corrupt cache","FiveM Cache Integrity Context",
+         "Cache corruption mentioned"},
+        {"cache corruption","FiveM Cache Integrity Context",
+         "Cache corruption mentioned"},
+        {"fatal error","FiveM Fatal Error Context",
+         "Fatal error mentioned in local log"}
+    };
+    for(const auto& pattern:patterns) {
+        if(out.stop())break;
+        const auto count=countSubstring(text,pattern.marker,100);
+        if(count)
+            out.add(pattern.category,path.wstring(),
+                std::string(pattern.description)+
+                " | Mentions in bounded log prefix: "+
+                std::to_string(count)+
+                " | Log messages are not cheat verdicts");
+    }
+}
+static void inspectFiveMLogs(ResultSink& out,
+                             const std::vector<fs::path>& roots) {
+    size_t examined=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stop() || examined>=120)break;
+        std::vector<fs::path> folders={
+            root/L"logs",root/L"data"/L"logs",
+            root/L"FiveM.app"/L"logs",
+            root/L"FiveM.app"/L"data"/L"logs",
+            root/L"crashes",root/L"data"/L"crashes"
+        };
+        for(const auto& folder:folders) {
+            if(out.stop() || examined>=120)break;
+            std::error_code ec;
+            if(!fs::is_directory(folder,ec))continue;
+            for(fs::directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && examined<120 && !out.stop();
+                it.increment(ec)) {
+                if(!it->is_regular_file(ec))continue;
+                auto ext=lower(it->path().extension().wstring());
+                if(ext!=L".log" && ext!=L".txt")continue;
+                auto key=lower(it->path().lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                ++examined;
+                inspectLogFile(out,it->path());
+            }
+        }
+    }
+}
+// Review loaded modules in the FiveM process. Windows API access can be
+// denied for protected or cross-architecture processes; skipped modules
+// do not indicate that the machine is clean.
+static void inspectFiveMModules(ResultSink& out,
+                                const std::vector<Process>& processes,
+                                const std::vector<fs::path>& roots) {
+    size_t processCount=0;
+    for(const auto& process:processes) {
+        if(out.stop() || processCount>=12)break;
+        if(!isFiveMName(process.path))continue;
+        ++processCount;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,process.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W module{};
+        module.dwSize=sizeof(module);
+        if(Module32FirstW(snapshot,&module)) {
+            size_t inspected=0;
+            do {
+                if(out.stop() || inspected++>=2048)break;
+                const fs::path path(module.szExePath);
+                const auto text=lower(path.wstring());
+                if(contains(text,L"\\temp\\") ||
+                   contains(text,L"\\recycle.bin\\"))
+                    out.add("FiveM Loaded Module Context",path.wstring(),
+                        "PID "+std::to_string(process.pid)+
+                        " loaded a module from a temporary location");
+                if(contains(text,L"\\downloads\\"))
+                    out.add("FiveM Downloaded Module Context",path.wstring(),
+                        "PID "+std::to_string(process.pid)+
+                        " loaded a module from Downloads");
+                if(ends(text,L".asi"))
+                    out.add("FiveM ASI Module Context",path.wstring(),
+                        "PID "+std::to_string(process.pid)+
+                        " loaded an ASI extension; review origin and purpose");
+            }while(Module32NextW(snapshot,&module));
+        }
+        CloseHandle(snapshot);
+    }
+}
+// Inspect actual process image location, not only the executable name.
+// FiveM can be installed in custom folders; a nondefault location alone
+// is informational and is not reported as suspicious.
+static void inspectFiveMProcesses(ResultSink& out,
+                                  const std::vector<Process>& processes) {
+    for(const auto& process:processes) {
+        if(out.stop())break;
+        if(!isFiveMName(process.path))continue;
+        const auto path=lower(process.path);
+        if(contains(path,L"\\temp\\") ||
+           contains(path,L"\\recycle.bin\\"))
+            out.add("FiveM Executable Location Review",process.path,
+                "FiveM-named process runs from a temporary location | PID "+
+                std::to_string(process.pid));
+        if(contains(path,L"\\downloads\\"))
+            out.add("FiveM Download Executable Context",process.path,
+                "FiveM-named process runs from Downloads | PID "+
+                std::to_string(process.pid));
+        if(!isRegular(process.path))
+            out.add("FiveM Image Availability",process.path,
+                "FiveM-named process image is not accessible as a regular file");
+    }
+}
+// Check only the metadata of files inside the user's FiveM installation.
+// Signed status is a context indicator, not an authoritative trust verdict.
+static void inspectFiveMSignatures(ResultSink& out,
+                                   const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& process:processes) {
+        if(out.stop() || checked>=24)break;
+        if(!isFiveMName(process.path) || !isRegular(process.path))
+            continue;
+        auto key=lower(process.path);
+        if(!seen.insert(key).second)continue;
+        ++checked;
+        WINTRUST_FILE_INFO file{};
+        file.cbStruct=sizeof(file);
+        file.pcwszFilePath=process.path.c_str();
+        WINTRUST_DATA trust{};
+        trust.cbStruct=sizeof(trust);
+        trust.dwUIChoice=WTD_UI_NONE;
+        trust.fdwRevocationChecks=WTD_REVOKE_NONE;
+        trust.dwUnionChoice=WTD_CHOICE_FILE;
+        trust.pFile=&file;
+        trust.dwStateAction=WTD_STATEACTION_IGNORE;
+        trust.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+        GUID action=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        LONG status=WinVerifyTrust(nullptr,&action,&trust);
+        if(status==TRUST_E_BAD_DIGEST)
+            out.add("FiveM Signature Digest Error",process.path,
+                "Local Authenticode signature digest check failed");
+        else if(status==TRUST_E_NOSIGNATURE)
+            out.add("FiveM Unsigned Image Context",process.path,
+                "No local Authenticode signature; this alone is not proof of tampering");
+    }
+}
+
+// Search a bounded number of Windows Application crash events for FiveM.
+// Only the event ID is retained, not potentially sensitive event payloads.
+static void inspectApplicationCrashes(ResultSink& out) {
+    if(out.stop())return;
+    EVT_HANDLE query=EvtQuery(nullptr,L"Application",
+        L"*[System[(EventID=1000 or EventID=1001)]]",
+        EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!query)return;
+    size_t inspected=0,matched=0;
+    while(!out.stop() && inspected<200) {
+        EVT_HANDLE events[8]{};
+        DWORD count=0;
+        if(!EvtNext(query,8,events,100,&count,0))break;
+        for(DWORD i=0;i<count;++i) {
+            ++inspected;
+            DWORD bytes=0,used=0;
+            EvtRender(nullptr,events[i],EvtRenderEventXml,
+                0,nullptr,&bytes,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+               bytes>=sizeof(wchar_t) && bytes<=128*1024) {
+                std::vector<wchar_t> xml(bytes/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,events[i],EvtRenderEventXml,
+                    bytes,xml.data(),&bytes,&used)) {
+                    const std::wstring text=lower(xml.data());
+                    if(contains(text,L"fivem") ||
+                       contains(text,L"citizenfx"))++matched;
+                }
+            }
+            EvtClose(events[i]);
+        }
+        if(!count)break;
+    }
+    EvtClose(query);
+    if(matched)
+        out.add("FiveM Application Crash Events",
+            L"Windows Application Event Log",
+            std::to_string(matched)+
+            " recent crash/report events mention FiveM or CitizenFX");
+}
+// A file with an executable header but a non-executable extension can be
+// normal in game caches. Only inspect the header and record the context.
+static bool hasPEHeader(const fs::path& path) {
+    std::vector<unsigned char> bytes;
+    if(!readPrefix(path,bytes,4096))return false;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return false;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+        return false;
+    size_t offset=static_cast<size_t>(dos.e_lfanew);
+    if(offset>bytes.size() || bytes.size()-offset<sizeof(DWORD))
+        return false;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+offset,sizeof(signature));
+    return signature==IMAGE_NT_SIGNATURE;
+}
+static void inspectDisguisedPEFiles(ResultSink& out,
+                                   const std::vector<fs::path>& roots) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stop() || inspected>=300)break;
+        const std::vector<fs::path> folders={
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        };
+        for(const auto& folder:folders) {
+            if(out.stop() || inspected>=300)break;
+            std::error_code ec;
+            if(!fs::is_directory(folder,ec))continue;
+            for(fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && inspected<300 && !out.stop();
+                it.increment(ec)) {
+                if(it.depth()>5)it.disable_recursion_pending();
+                if(!it->is_regular_file(ec))continue;
+                ++inspected;
+                const auto path=it->path();
+                const auto ext=lower(path.extension().wstring());
+                if(isBinary(path))continue;
+                if(ext!=L".dat" && ext!=L".bin" &&
+                   ext!=L".txt" && ext!=L".json")continue;
+                const auto key=lower(path.lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                if(hasPEHeader(path))
+                    out.add("FiveM PE Header Extension Mismatch",
+                        path.wstring(),
+                        "File in FiveM plugin/mod folder has PE header "
+                        "but a data/text extension; review manually");
+            }
+        }
+    }
+}
+// Inspect optional plugin/mod directories separately from downloaded
+// server resource caches. Their presence is not inherently suspicious.
+static void inspectPluginFolders(ResultSink& out,
+                                 const std::vector<fs::path>& roots) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stop() || inspected>=600)break;
+        const std::vector<fs::path> folders={
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        };
+        for(const auto& folder:folders) {
+            if(out.stop() || inspected>=600)break;
+            std::error_code ec;
+            if(!fs::is_directory(folder,ec))continue;
+            for(fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && inspected<600 && !out.stop();
+                it.increment(ec)) {
+                if(it.depth()>5)it.disable_recursion_pending();
+                if(!it->is_regular_file(ec))continue;
+                ++inspected;
+                const auto path=it->path();
+                if(!isBinary(path))continue;
+                const auto key=lower(path.lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                if(!getAttributes(path,data))continue;
+                if(fileLength(data)==0)
+                    out.add("FiveM Plugin Zero-Byte Binary",path.wstring(),
+                        "Binary in plugin/mod folder has zero-byte size");
+                if(nonstandardExtension(path))
+                    out.add("FiveM Plugin Double Extension",path.wstring(),
+                        "Plugin/mod filename contains a misleading double extension");
+                if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
+                    out.add("FiveM Plugin Reparse Point",path.wstring(),
+                        "Plugin/mod binary is a reparse point");
+            }
+        }
+    }
+}
+// Cross-reference modules observed in a FiveM process with its actual
+// installation directory. A DLL outside the installation may be a
+// legitimate graphics overlay, accessibility or security component.
+static void inspectModuleOrigins(ResultSink& out,
+                                 const std::vector<Process>& processes,
+                                 const std::vector<fs::path>& roots) {
+    size_t processCount=0;
+    for(const auto& process:processes) {
+        if(out.stop() || processCount>=8)break;
+        if(!isFiveMName(process.path))continue;
+        ++processCount;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,process.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W entry{};
+        entry.dwSize=sizeof(entry);
+        if(Module32FirstW(snapshot,&entry)) {
+            size_t count=0;
+            do {
+                if(out.stop() || count++>=2048)break;
+                const fs::path path(entry.szExePath);
+                const auto text=lower(path.wstring());
+                bool inside=false;
+                for(const auto& root:roots)
+                    if(within(path,root)){inside=true;break;}
+                const bool system=contains(text,L"\\windows\\") ||
+                    contains(text,L"\\program files\\") ||
+                    contains(text,L"\\program files (x86)\\");
+                if(!inside && !system &&
+                   (contains(text,L"\\appdata\\") ||
+                    contains(text,L"\\users\\public\\")))
+                    out.add("FiveM External User Module",path.wstring(),
+                        "PID "+std::to_string(process.pid)+
+                        " loaded a module outside its installation "
+                        "from a user-writable directory");
+            }while(Module32NextW(snapshot,&entry));
+        }
+        CloseHandle(snapshot);
+    }
+}
+
+// Inspect only Windows Firewall rules whose configured application path
+// refers to FiveM. A firewall rule is an administrative configuration,
+// not a sign of malicious behavior.
+static void inspectFiveMFirewall(ResultSink& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(6000));
+    maxName=(std::min)(maxName,DWORD(16384));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> bytes(maxData+sizeof(wchar_t)*2);
+    size_t matched=0;
+    for(DWORD i=0;i<count && !out.stop();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        DWORD size=static_cast<DWORD>(bytes.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&n,nullptr,
+            &type,bytes.data(),&size)!=ERROR_SUCCESS ||
+            (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+            size<sizeof(wchar_t) || size%sizeof(wchar_t))continue;
+        const auto* raw=reinterpret_cast<const wchar_t*>(bytes.data());
+        size_t length=0;
+        while(length<size/sizeof(wchar_t) && raw[length])++length;
+        const std::wstring rule(raw,length);
+        const auto lowered=lower(rule);
+        if(!contains(lowered,L"fivem") &&
+           !contains(lowered,L"citizenfx"))continue;
+        ++matched;
+        const auto app=lowered.find(L"app=");
+        if(app==std::wstring::npos)continue;
+        const auto start=app+4;
+        const auto end=lowered.find(L'|',start);
+        const auto target=rule.substr(start,
+            end==std::wstring::npos?std::wstring::npos:end-start);
+        if(contains(lower(target),L"\\temp\\") ||
+           contains(lower(target),L"\\recycle.bin\\"))
+            out.add("FiveM Firewall Path Context",target,
+                "Firewall application rule references a transient path");
+    }
+    RegCloseKey(key);
+}
+// Read user and machine Run entries, but report only commands that
+// explicitly mention FiveM and also point into a temporary directory.
+static void inspectFiveMAutorunsHive(ResultSink& out,HKEY hive,
+                                     const wchar_t* subkey,
+                                     const char* source) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stop();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        DWORD bytes=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&n,nullptr,
+            &type,data.data(),&bytes)!=ERROR_SUCCESS ||
+            (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+            bytes<sizeof(wchar_t) || bytes%sizeof(wchar_t))continue;
+        const auto* value=reinterpret_cast<const wchar_t*>(data.data());
+        size_t length=0;
+        while(length<bytes/sizeof(wchar_t) && value[length])++length;
+        const std::wstring command(value,length);
+        const auto normalized=lower(command);
+        if((contains(normalized,L"fivem") ||
+            contains(normalized,L"citizenfx")) &&
+           (contains(normalized,L"\\temp\\") ||
+            contains(normalized,L"\\recycle.bin\\")))
+            out.add("FiveM Autorun Context",
+                std::wstring(names.data(),n),
+                std::string(source)+
+                " | Startup command mentions FiveM and a transient directory");
+    }
+    RegCloseKey(key);
+}
+static void inspectFiveMAutoruns(ResultSink& out) {
+    struct Entry {HKEY hive;const wchar_t* key;const char* source;};
+    const Entry entries[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "User Run"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "User RunOnce"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "Machine Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "Machine RunOnce"}
+    };
+    for(const auto& entry:entries) {
+        if(out.stop())break;
+        inspectFiveMAutorunsHive(out,entry.hive,entry.key,entry.source);
+    }
+}
+// Enumerate configured services and select only image paths explicitly
+// associated with FiveM or CitizenFX. Legitimate launchers may register
+// services; the finding requires an additional temporary-location signal.
+static void inspectFiveMServiceImages(ResultSink& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,
+        &root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(5000));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !out.stop();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(root,i,names.data(),&n,nullptr,
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(root,names.data(),0,KEY_READ,
+            &service)!=ERROR_SUCCESS)continue;
+        DWORD type=0,size=0;
+        if(RegQueryValueExW(service,L"ImagePath",nullptr,
+            &type,nullptr,&size)==ERROR_SUCCESS &&
+           (type==REG_SZ || type==REG_EXPAND_SZ) &&
+           size>=sizeof(wchar_t) && size<=32768) {
+            std::vector<wchar_t> value(size/sizeof(wchar_t)+1,L'\0');
+            if(RegQueryValueExW(service,L"ImagePath",nullptr,
+                &type,reinterpret_cast<BYTE*>(value.data()),
+                &size)==ERROR_SUCCESS) {
+                const auto path=lower(value.data());
+                if((contains(path,L"fivem") ||
+                    contains(path,L"citizenfx")) &&
+                   (contains(path,L"\\temp\\") ||
+                    contains(path,L"\\recycle.bin\\")))
+                    out.add("FiveM Service Image Context",
+                        std::wstring(names.data(),n),
+                        "Service command mentions FiveM and a transient directory");
+            }
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(root);
+}
+
+// Parse PE section headers of selected FiveM plugin binaries. The parser
+// uses bounded reads and does not load or execute the image.
+static bool withinBytes(size_t offset,size_t length,size_t total) {
+    return offset<=total && length<=total-offset;
+}
+static void inspectFiveMPE(ResultSink& out,const fs::path& path) {
+    if(out.stop())return;
+    std::vector<unsigned char> bytes;
+    if(!readPrefix(path,bytes,1024*1024))return;
+    if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return;
+    IMAGE_DOS_HEADER dos{};
+    memcpy(&dos,bytes.data(),sizeof(dos));
+    if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)return;
+    const size_t pe=static_cast<size_t>(dos.e_lfanew);
+    if(!withinBytes(pe,sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER),
+                    bytes.size()))return;
+    DWORD signature=0;
+    memcpy(&signature,bytes.data()+pe,sizeof(signature));
+    if(signature!=IMAGE_NT_SIGNATURE)return;
+    IMAGE_FILE_HEADER header{};
+    memcpy(&header,bytes.data()+pe+sizeof(DWORD),sizeof(header));
+    if(header.NumberOfSections>96)return;
+    const size_t start=pe+sizeof(DWORD)+sizeof(header)+
+                       header.SizeOfOptionalHeader;
+    const size_t length=static_cast<size_t>(
+        header.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+    if(!withinBytes(start,length,bytes.size()))return;
+    std::vector<IMAGE_SECTION_HEADER> sections(header.NumberOfSections);
+    if(length)memcpy(sections.data(),bytes.data()+start,length);
+    size_t writableExecutable=0;
+    size_t overlapping=0;
+    size_t noRawData=0;
+    for(size_t i=0;i<sections.size();++i) {
+        const auto& current=sections[i];
+        if((current.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           (current.Characteristics&IMAGE_SCN_MEM_WRITE))
+            ++writableExecutable;
+        if((current.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           current.SizeOfRawData==0)++noRawData;
+        for(size_t j=0;j<i;++j) {
+            const auto& previous=sections[j];
+            ULONGLONG a=current.PointerToRawData;
+            ULONGLONG b=previous.PointerToRawData;
+            ULONGLONG ae=a+current.SizeOfRawData;
+            ULONGLONG be=b+previous.SizeOfRawData;
+            if(current.SizeOfRawData && previous.SizeOfRawData &&
+               a<be && b<ae)++overlapping;
+        }
+    }
+    if(writableExecutable)
+        out.add("FiveM Plugin Writable Executable Section",
+            path.wstring(),
+            std::to_string(writableExecutable)+
+            " section(s) permit both write and execute");
+    if(overlapping)
+        out.add("FiveM Plugin Overlapping PE Sections",
+            path.wstring(),
+            std::to_string(overlapping)+
+            " raw section overlap(s)");
+    if(noRawData)
+        out.add("FiveM Plugin Zero-Raw Executable Section",
+            path.wstring(),
+            std::to_string(noRawData)+
+            " executable section(s) have no raw data");
+}
+static void inspectPluginPEFiles(ResultSink& out,
+                                 const std::vector<fs::path>& roots) {
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stop() || inspected>=150)break;
+        const std::vector<fs::path> folders={
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        };
+        for(const auto& folder:folders) {
+            if(out.stop() || inspected>=150)break;
+            std::error_code ec;
+            if(!fs::is_directory(folder,ec))continue;
+            for(fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && inspected<150 && !out.stop();
+                it.increment(ec)) {
+                if(it.depth()>5)it.disable_recursion_pending();
+                if(!it->is_regular_file(ec))continue;
+                if(!isBinary(it->path()))continue;
+                const auto key=lower(it->path().lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                ++inspected;
+                inspectFiveMPE(out,it->path());
+            }
+        }
+    }
+}
+// Identify executable names impersonating a FiveM binary but located
+// outside any discovered installation. Names alone remain weak evidence.
+static void inspectFiveMNameLocation(ResultSink& out,
+                                     const std::vector<Process>& processes,
+                                     const std::vector<fs::path>& roots) {
+    for(const auto& process:processes) {
+        if(out.stop())break;
+        if(!isFiveMName(process.path))continue;
+        bool installed=false;
+        for(const auto& root:roots)
+            if(within(process.path,root)){installed=true;break;}
+        if(installed)continue;
+        const auto path=lower(process.path);
+        if(contains(path,L"\\temp\\") ||
+           contains(path,L"\\recycle.bin\\"))
+            out.add("FiveM Process Name Location Context",process.path,
+                "FiveM-named process runs outside discovered installation "
+                "and inside a temporary directory");
+    }
+}
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    ResultSink out;
+    const auto roots=installationRoots(processes);
+    const auto folders=dataRoots(roots);
+    inspectFiveMProcesses(out,processes);
+    if(!out.stop())inspectFiveMSignatures(out,processes);
+    if(!out.stop())inspectFiveMModules(out,processes,roots);
+    if(!out.stop())inspectModuleOrigins(out,processes,roots);
+    if(!out.stop())inspectApplicationCrashes(out);
+    if(!out.stop())inspectFiveMFirewall(out);
+    if(!out.stop())inspectFiveMAutoruns(out);
+    if(!out.stop())inspectFiveMServiceImages(out);
+    if(!out.stop())inspectFiveMLogs(out,folders);
+    if(!out.stop())inspectPluginFolders(out,roots);
+    if(!out.stop())inspectPluginPEFiles(out,roots);
+    if(!out.stop())inspectFiveMNameLocation(out,processes,roots);
+    if(!out.stop())inspectDisguisedPEFiles(out,roots);
+    // Avoid traversing nested roots twice. The file tree inspection
+    // deduplicates observations but may encounter the same file again.
+    for(const auto& root:roots) {
+        if(out.stop())break;
+        inspectFiveMTree(out,root);
+    }
+    return std::move(out.records);
+}
+} // namespace fivem_evidence
+
+// Sync PC Checker 8.6: independent deep FiveM evidence collector.
+// All checks are read-only, bounded and intended for manual review.
+namespace fivem_deep {
+struct Evidence {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> dedup;
+    size_t maxRows=600;
+    bool stopped() const {
+        return cancelRequested || rows.size()>=maxRows;
+    }
+    void report(const char* category,const std::wstring& subject,
+                const std::string& explanation) {
+        if(stopped() || subject.empty())return;
+        std::wstring key=subject+L"|";
+        for(const char* c=category;*c;++c)
+            key.push_back(static_cast<unsigned char>(*c));
+        if(!dedup.insert(key).second)return;
+        rows.push_back({category,utf8(subject),
+            "REVIEW ONLY | "+explanation});
+    }
+};
+static std::wstring lower(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return value;
+}
+static bool has(const std::wstring& value,const wchar_t* fragment) {
+    return value.find(fragment)!=std::wstring::npos;
+}
+static bool ends(const std::wstring& value,const wchar_t* suffix) {
+    const size_t length=wcslen(suffix);
+    return value.size()>=length &&
+           value.compare(value.size()-length,length,suffix)==0;
+}
+static std::wstring env(const wchar_t* name) {
+    DWORD required=GetEnvironmentVariableW(name,nullptr,0);
+    if(!required || required>32768)return {};
+    std::wstring value(required,L'\0');
+    DWORD written=GetEnvironmentVariableW(name,value.data(),required);
+    if(!written || written>=required)return {};
+    value.resize(written);
+    return value;
+}
+static bool regular(const fs::path& path) {
+    std::error_code error;
+    return fs::is_regular_file(path,error);
+}
+static bool directory(const fs::path& path) {
+    std::error_code error;
+    return fs::is_directory(path,error);
+}
+static bool fivemProcess(const Process& proc) {
+    const auto name=lower(fs::path(proc.path).filename().wstring());
+    return name==L"fivem.exe" || name==L"fivem_gtaprocess.exe" ||
+           (name.rfind(L"fivem_",0)==0 && ends(name,L".exe"));
+}
+static bool inUserWritableArea(const fs::path& path) {
+    const auto text=lower(path.wstring());
+    return has(text,L"\\temp\\") ||
+           has(text,L"\\downloads\\") ||
+           has(text,L"\\users\\public\\") ||
+           has(text,L"\\recycle.bin\\") ||
+           has(text,L"\\appdata\\");
+}
+static bool transient(const fs::path& path) {
+    const auto text=lower(path.wstring());
+    return has(text,L"\\temp\\") ||
+           has(text,L"\\recycle.bin\\") ||
+           has(text,L"\\server-cache\\") ||
+           has(text,L"\\server-cache-priv\\");
+}
+static bool binary(const fs::path& path) {
+    const auto ext=lower(path.extension().wstring());
+    return ext==L".exe" || ext==L".dll" || ext==L".asi" ||
+           ext==L".sys" || ext==L".scr";
+}
+static bool bounds(size_t offset,size_t count,size_t total) {
+    return offset<=total && count<=total-offset;
+}
+static bool readPrefix(const fs::path& path,
+                       std::vector<unsigned char>& bytes,
+                       size_t maximum=4*1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER length{};
+    if(!GetFileSizeEx(file,&length) || length.QuadPart<0) {
+        CloseHandle(file);return false;
+    }
+    const size_t size=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(length.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    bytes.resize(size);
+    DWORD received=0;
+    const BOOL ok=size==0 || ReadFile(file,bytes.data(),
+        static_cast<DWORD>(size),&received,nullptr);
+    CloseHandle(file);
+    if(!ok)return false;
+    bytes.resize(received);
+    return true;
+}
+static bool fileInfo(const fs::path& path,
+                     WIN32_FILE_ATTRIBUTE_DATA& data) {
+    return GetFileAttributesExW(path.c_str(),
+        GetFileExInfoStandard,&data)!=FALSE;
+}
+static ULONGLONG fileSize(const WIN32_FILE_ATTRIBUTE_DATA& data) {
+    ULARGE_INTEGER value{};
+    value.LowPart=data.nFileSizeLow;
+    value.HighPart=data.nFileSizeHigh;
+    return value.QuadPart;
+}
+static ULONGLONG timeNumber(const FILETIME& time) {
+    ULARGE_INTEGER value{};
+    value.LowPart=time.dwLowDateTime;
+    value.HighPart=time.dwHighDateTime;
+    return value.QuadPart;
+}
+static std::vector<fs::path> roots(
+    const std::vector<Process>& processes) {
+    std::vector<fs::path> result;
+    std::unordered_set<std::wstring> seen;
+    auto insert=[&](const fs::path& path) {
+        if(!directory(path))return;
+        const auto key=lower(path.lexically_normal().wstring());
+        if(seen.insert(key).second)result.push_back(path);
+    };
+    auto local=env(L"LOCALAPPDATA");
+    if(!local.empty()) {
+        insert(fs::path(local)/L"FiveM");
+        insert(fs::path(local)/L"FiveM"/L"FiveM.app");
+    }
+    for(const auto& process:processes) {
+        if(!fivemProcess(process) || process.path.empty())continue;
+        insert(fs::path(process.path).parent_path());
+    }
+    return result;
+}
+static std::vector<fs::path> pluginFolders(
+    const std::vector<fs::path>& installations) {
+    std::vector<fs::path> result;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:installations) {
+        for(const auto& folder:{
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        }) {
+            if(!directory(folder))continue;
+            auto key=lower(folder.lexically_normal().wstring());
+            if(seen.insert(key).second)result.push_back(folder);
+        }
+    }
+    return result;
+}
+
+struct PEView {
+    std::vector<unsigned char> bytes;
+    IMAGE_FILE_HEADER header{};
+    std::vector<IMAGE_SECTION_HEADER> sections;
+    DWORD importRva=0;
+    DWORD importSize=0;
+    DWORD entryRva=0;
+    bool is64=false;
+    bool valid=false;
+    bool parse(const fs::path& path) {
+        if(!readPrefix(path,bytes,8*1024*1024))return false;
+        if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return false;
+        IMAGE_DOS_HEADER dos{};
+        memcpy(&dos,bytes.data(),sizeof(dos));
+        if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+            return false;
+        const size_t nt=static_cast<size_t>(dos.e_lfanew);
+        if(!bounds(nt,sizeof(DWORD)+sizeof(header)+sizeof(WORD),
+                   bytes.size()))return false;
+        DWORD signature=0;
+        memcpy(&signature,bytes.data()+nt,sizeof(signature));
+        if(signature!=IMAGE_NT_SIGNATURE)return false;
+        memcpy(&header,bytes.data()+nt+sizeof(DWORD),sizeof(header));
+        if(header.NumberOfSections>96)return false;
+        const size_t opt=nt+sizeof(DWORD)+sizeof(header);
+        if(!bounds(opt,header.SizeOfOptionalHeader,bytes.size()))
+            return false;
+        WORD magic=0;
+        memcpy(&magic,bytes.data()+opt,sizeof(magic));
+        if(magic==IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+            if(header.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER64))return false;
+            IMAGE_OPTIONAL_HEADER64 options{};
+            memcpy(&options,bytes.data()+opt,sizeof(options));
+            entryRva=options.AddressOfEntryPoint;
+            importRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+            importSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+            is64=true;
+        }else if(magic==IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+            if(header.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER32))return false;
+            IMAGE_OPTIONAL_HEADER32 options{};
+            memcpy(&options,bytes.data()+opt,sizeof(options));
+            entryRva=options.AddressOfEntryPoint;
+            importRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+            importSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+            is64=false;
+        }else return false;
+        const size_t sectionOffset=opt+header.SizeOfOptionalHeader;
+        const size_t sectionBytes=static_cast<size_t>(
+            header.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+        if(!bounds(sectionOffset,sectionBytes,bytes.size()))
+            return false;
+        sections.resize(header.NumberOfSections);
+        if(sectionBytes)
+            memcpy(sections.data(),bytes.data()+sectionOffset,
+                   sectionBytes);
+        valid=true;
+        return true;
+    }
+    bool rvaOffset(DWORD rva,size_t& offset) const {
+        if(!valid)return false;
+        for(const auto& section:sections) {
+            const DWORD extent=(std::max)(
+                section.Misc.VirtualSize,section.SizeOfRawData);
+            if(rva<section.VirtualAddress ||
+               static_cast<ULONGLONG>(rva)>=
+               static_cast<ULONGLONG>(section.VirtualAddress)+extent)
+                continue;
+            const DWORD relative=rva-section.VirtualAddress;
+            if(relative>=section.SizeOfRawData)return false;
+            const ULONGLONG fileOffset=
+                static_cast<ULONGLONG>(section.PointerToRawData)+relative;
+            if(fileOffset>=bytes.size())return false;
+            offset=static_cast<size_t>(fileOffset);
+            return true;
+        }
+        return false;
+    }
+    std::string asciiAt(size_t offset,size_t maxLength=256) const {
+        if(offset>=bytes.size())return {};
+        std::string text;
+        for(size_t i=offset;i<bytes.size() &&
+            text.size()<maxLength;++i) {
+            const unsigned char c=bytes[i];
+            if(c==0)break;
+            if(c<32 || c>126)return {};
+            text.push_back(static_cast<char>(c));
+        }
+        return text;
+    }
+};
+static double entropy(const unsigned char* bytes,size_t length) {
+    if(!length)return 0;
+    std::array<size_t,256> counts{};
+    for(size_t i=0;i<length;++i)++counts[bytes[i]];
+    double result=0;
+    for(size_t n:counts) {
+        if(!n)continue;
+        const double probability=static_cast<double>(n)/length;
+        result-=probability*std::log2(probability);
+    }
+    return result;
+}
+static void inspectPESections(Evidence& out,const fs::path& path,
+                              const PEView& pe) {
+    size_t wx=0,overlaps=0,invalid=0,highEntropy=0;
+    size_t noEntry=0;
+    for(size_t i=0;i<pe.sections.size();++i) {
+        const auto& section=pe.sections[i];
+        if((section.Characteristics&IMAGE_SCN_MEM_WRITE) &&
+           (section.Characteristics&IMAGE_SCN_MEM_EXECUTE))++wx;
+        if(section.SizeOfRawData) {
+            const auto start=static_cast<size_t>(
+                section.PointerToRawData);
+            if(!bounds(start,section.SizeOfRawData,
+                       pe.bytes.size())) {
+                WIN32_FILE_ATTRIBUTE_DATA metadata{};
+                if(fileInfo(path,metadata) &&
+                   static_cast<ULONGLONG>(start)+
+                   section.SizeOfRawData>fileSize(metadata))
+                    ++invalid;
+            }else if(section.SizeOfRawData>=4096 &&
+                     section.SizeOfRawData<=2*1024*1024) {
+                const auto value=entropy(pe.bytes.data()+start,
+                                         section.SizeOfRawData);
+                if(value>=7.85)++highEntropy;
+            }
+        }
+        for(size_t j=0;j<i;++j) {
+            const auto& previous=pe.sections[j];
+            const ULONGLONG a=section.PointerToRawData;
+            const ULONGLONG ae=a+section.SizeOfRawData;
+            const ULONGLONG b=previous.PointerToRawData;
+            const ULONGLONG be=b+previous.SizeOfRawData;
+            if(section.SizeOfRawData && previous.SizeOfRawData &&
+               a<be && b<ae)++overlaps;
+        }
+    }
+    if(pe.entryRva) {
+        size_t offset=0;
+        if(!pe.rvaOffset(pe.entryRva,offset))++noEntry;
+    }
+    if(wx)
+        out.report("FiveM Deep PE Writable Executable",path.wstring(),
+            std::to_string(wx)+" writable/executable PE section(s)");
+    if(overlaps)
+        out.report("FiveM Deep PE Section Overlap",path.wstring(),
+            std::to_string(overlaps)+" overlapping raw section pair(s)");
+    if(invalid)
+        out.report("FiveM Deep PE Invalid Section",path.wstring(),
+            std::to_string(invalid)+" section(s) exceed actual file size");
+    if(highEntropy)
+        out.report("FiveM Deep PE High Entropy",path.wstring(),
+            std::to_string(highEntropy)+
+            " high-entropy section(s); compression and packing can be legitimate");
+    if(noEntry)
+        out.report("FiveM Deep PE Entry Point",path.wstring(),
+            "Entry point RVA does not resolve to available raw section bytes");
+}
+static void inspectPEImports(Evidence& out,const fs::path& path,
+                             const PEView& pe) {
+    if(!pe.importRva || !pe.importSize)return;
+    size_t offset=0;
+    if(!pe.rvaOffset(pe.importRva,offset)) {
+        out.report("FiveM Deep PE Import Directory",path.wstring(),
+            "Import directory RVA cannot be resolved");
+        return;
+    }
+    size_t descriptors=0;
+    size_t malformed=0;
+    size_t loaded=0;
+    for(size_t i=0;i<256 && !out.stopped();++i) {
+        const size_t pos=offset+i*sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        if(!bounds(pos,sizeof(IMAGE_IMPORT_DESCRIPTOR),
+                   pe.bytes.size())) {
+            ++malformed;break;
+        }
+        IMAGE_IMPORT_DESCRIPTOR descriptor{};
+        memcpy(&descriptor,pe.bytes.data()+pos,sizeof(descriptor));
+        if(!descriptor.Name && !descriptor.FirstThunk &&
+           !descriptor.OriginalFirstThunk)break;
+        ++descriptors;
+        size_t nameOffset=0;
+        if(!pe.rvaOffset(descriptor.Name,nameOffset)) {
+            ++malformed;continue;
+        }
+        const auto dll=pe.asciiAt(nameOffset,128);
+        if(dll.empty()) {
+            ++malformed;continue;
+        }
+        ++loaded;
+    }
+    if(malformed)
+        out.report("FiveM Deep PE Malformed Imports",path.wstring(),
+            std::to_string(malformed)+
+            " import descriptor(s) could not be resolved");
+    if(descriptors>=256)
+        out.report("FiveM Deep PE Import Count",path.wstring(),
+            "Import descriptor list reached the bounded review limit");
+    if(descriptors && !loaded)
+        out.report("FiveM Deep PE Unresolved Imports",path.wstring(),
+            "No import DLL names could be resolved from import descriptors");
+}
+static void inspectPEHeader(Evidence& out,const fs::path& path,
+                            const PEView& pe) {
+    if(pe.header.TimeDateStamp==0)
+        out.report("FiveM Deep PE Timestamp Context",path.wstring(),
+            "PE COFF timestamp is zero; reproducible builds may do this");
+    if(pe.header.NumberOfSections==0)
+        out.report("FiveM Deep PE Missing Sections",path.wstring(),
+            "PE image has zero section headers");
+    if(pe.header.Characteristics&IMAGE_FILE_RELOCS_STRIPPED)
+        out.report("FiveM Deep PE Relocation Context",path.wstring(),
+            "PE relocation information is marked stripped");
+}
+
+// Inspect section metadata that can indicate malformed images. These
+// properties can also occur in packers, protectors, and legitimate tools.
+static void inspectPESectionMetadata(Evidence& out,
+                                     const fs::path& path,
+                                     const PEView& pe) {
+    size_t executableWithoutRead=0;
+    size_t oversizedVirtual=0;
+    size_t rawMisalignment=0;
+    size_t emptyName=0;
+    for(const auto& section:pe.sections) {
+        if((section.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           !(section.Characteristics&IMAGE_SCN_MEM_READ))
+            ++executableWithoutRead;
+        if(section.Misc.VirtualSize>0x40000000U)
+            ++oversizedVirtual;
+        if(section.PointerToRawData &&
+           (section.PointerToRawData%512)!=0)
+            ++rawMisalignment;
+        bool named=false;
+        for(unsigned char c:section.Name)
+            if(c){named=true;break;}
+        if(!named)++emptyName;
+    }
+    if(executableWithoutRead)
+        out.report("FiveM Deep Execute-Only PE Section",
+            path.wstring(),
+            std::to_string(executableWithoutRead)+
+            " section(s) have execute permission without read permission");
+    if(oversizedVirtual)
+        out.report("FiveM Deep Large Virtual PE Section",
+            path.wstring(),
+            std::to_string(oversizedVirtual)+
+            " section(s) declare more than 1 GiB virtual size");
+    if(rawMisalignment>=3)
+        out.report("FiveM Deep PE Raw Alignment Review",
+            path.wstring(),
+            std::to_string(rawMisalignment)+
+            " section(s) have non-512-byte-aligned raw offsets");
+    if(emptyName)
+        out.report("FiveM Deep Empty PE Section Name",
+            path.wstring(),
+            std::to_string(emptyName)+
+            " PE section(s) have an empty name");
+}
+// Inspect the declared architecture of plugin images. A mismatch with
+// the current host is contextual, not proof that a file is malicious.
+static void inspectPEArchitecture(Evidence& out,
+                                  const fs::path& path,
+                                  const PEView& pe) {
+    const WORD machine=pe.header.Machine;
+    if(machine!=IMAGE_FILE_MACHINE_I386 &&
+       machine!=IMAGE_FILE_MACHINE_AMD64 &&
+       machine!=IMAGE_FILE_MACHINE_ARM64)
+        out.report("FiveM Deep Uncommon PE Architecture",
+            path.wstring(),
+            "Plugin image declares a machine type outside x86/x64/ARM64");
+    if(pe.is64 && machine==IMAGE_FILE_MACHINE_I386)
+        out.report("FiveM Deep PE Architecture Inconsistency",
+            path.wstring(),
+            "PE32+ optional header conflicts with x86 machine field");
+    if(!pe.is64 && machine==IMAGE_FILE_MACHINE_AMD64)
+        out.report("FiveM Deep PE Header Inconsistency",
+            path.wstring(),
+            "PE32 optional header conflicts with x64 machine field");
+}
+// Check for impossible raw section bounds using the full file size,
+// without requiring the entire image to be loaded into memory.
+static void inspectPEFileBounds(Evidence& out,
+                                const fs::path& path,
+                                const PEView& pe) {
+    WIN32_FILE_ATTRIBUTE_DATA metadata{};
+    if(!fileInfo(path,metadata))return;
+    const ULONGLONG length=fileSize(metadata);
+    size_t invalid=0;
+    for(const auto& section:pe.sections) {
+        if(!section.SizeOfRawData)continue;
+        const ULONGLONG end=
+            static_cast<ULONGLONG>(section.PointerToRawData)+
+            section.SizeOfRawData;
+        if(end>length)++invalid;
+    }
+    if(invalid)
+        out.report("FiveM Deep PE Section Beyond EOF",
+            path.wstring(),
+            std::to_string(invalid)+
+            " raw section(s) point beyond the end of the file");
+}
+
+// Inspect the executable image's DLL flag consistency. Some valid
+// loaders and custom build pipelines intentionally use unusual flags.
+static void inspectPECharacteristics(Evidence& out,
+                                     const fs::path& path,
+                                     const PEView& pe) {
+    const bool dll=(pe.header.Characteristics&IMAGE_FILE_DLL)!=0;
+    const auto extension=lower(path.extension().wstring());
+    if(dll && extension==L".exe")
+        out.report("FiveM Deep DLL Header in EXE",path.wstring(),
+            "PE DLL characteristic is set on an .exe-named plugin");
+    if(!dll && extension==L".dll")
+        out.report("FiveM Deep EXE Header in DLL",path.wstring(),
+            "PE DLL characteristic is absent on a .dll-named plugin");
+    if(pe.header.SizeOfOptionalHeader==0)
+        out.report("FiveM Deep Missing Optional Header",path.wstring(),
+            "PE file header declares no optional header");
+}
+static void inspectPEFile(Evidence& out,const fs::path& path) {
+    if(out.stopped())return;
+    PEView pe;
+    if(!pe.parse(path))return;
+    inspectPEHeader(out,path,pe);
+    inspectPESections(out,path,pe);
+    inspectPEImports(out,path,pe);
+    inspectPESectionMetadata(out,path,pe);
+    inspectPEArchitecture(out,path,pe);
+    inspectPEFileBounds(out,path,pe);
+    inspectPECharacteristics(out,path,pe);
+}
+
+// Compare loaded module file paths to the FiveM installation directory.
+// A third-party overlay, accessibility tool, or antivirus module may be
+// entirely legitimate. Report only modules in transient locations.
+static void inspectLoadedModules(Evidence& out,
+                                 const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& proc:processes) {
+        if(out.stopped() || checked>=10)break;
+        if(!fivemProcess(proc))continue;
+        ++checked;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,proc.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W module{};
+        module.dwSize=sizeof(module);
+        if(Module32FirstW(snapshot,&module)) {
+            size_t count=0;
+            do {
+                if(out.stopped() || count++>=2048)break;
+                const fs::path path(module.szExePath);
+                const auto normalized=lower(path.wstring());
+                if(transient(path))
+                    out.report("FiveM Deep Transient Loaded Module",
+                        path.wstring(),
+                        "PID "+std::to_string(proc.pid)+
+                        " has a module mapped from a transient directory");
+                if(has(normalized,L"\\downloads\\"))
+                    out.report("FiveM Deep Downloaded Module",
+                        path.wstring(),
+                        "PID "+std::to_string(proc.pid)+
+                        " has a module mapped from Downloads");
+                if(has(normalized,L".dll.exe"))
+                    out.report("FiveM Deep Module Double Extension",
+                        path.wstring(),
+                        "Loaded module name contains a double executable extension");
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                if(fileInfo(path,data) &&
+                   (data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+                    out.report("FiveM Deep Module Reparse Point",
+                        path.wstring(),
+                        "Loaded module path has a reparse-point attribute");
+            }while(Module32NextW(snapshot,&module));
+        }
+        CloseHandle(snapshot);
+    }
+}
+// Parent-child associations are observations, not evidence of injection.
+// Windows may reuse PIDs and process parents may have exited.
+static void inspectProcessRelations(Evidence& out,
+                                    const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    for(const auto& proc:processes) {
+        if(out.stopped() || !fivemProcess(proc))continue;
+        auto parent=byPid.find(proc.parent);
+        if(parent==byPid.end())continue;
+        const auto parentPath=lower(parent->second->path);
+        if(transient(parent->second->path))
+            out.report("FiveM Deep Transient Parent",
+                proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " parent PID "+std::to_string(proc.parent)+
+                " runs from a temporary directory");
+        if(has(parentPath,L"\\downloads\\"))
+            out.report("FiveM Deep Download Parent",
+                proc.path,
+                "PID "+std::to_string(proc.pid)+
+                " parent PID "+std::to_string(proc.parent)+
+                " runs from Downloads");
+        if(parent->second->pid==proc.pid)
+            out.report("FiveM Deep Parent PID Anomaly",
+                proc.path,"Reported parent PID equals process PID");
+    }
+}
+// Scan only user-controlled plugin directories, never the whole drive.
+// Reparse directories are not followed.
+static void inspectPluginTree(Evidence& out,
+                              const std::vector<fs::path>& folders) {
+    std::unordered_set<std::wstring> visited;
+    size_t examined=0,peChecked=0;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    const ULONGLONG current=timeNumber(now);
+    for(const auto& folder:folders) {
+        if(out.stopped() || examined>=1400)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && examined<1400 && !out.stopped()) {
+            if(it.depth()>7)it.disable_recursion_pending();
+            std::error_code entryError;
+            if(it->is_symlink(entryError))
+                it.disable_recursion_pending();
+            if(it->is_regular_file(entryError)) {
+                ++examined;
+                const auto path=it->path();
+                const auto key=lower(path.lexically_normal().wstring());
+                if(!visited.insert(key).second) {
+                    it.increment(error);continue;
+                }
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                if(fileInfo(path,data)) {
+                    const auto name=lower(path.filename().wstring());
+                    const auto size=fileSize(data);
+                    if(binary(path) && size==0)
+                        out.report("FiveM Deep Empty Plugin Binary",
+                            path.wstring(),
+                            "Executable file in plugin/mod directory is zero bytes");
+                    if(binary(path) &&
+                       (data.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN) &&
+                       (data.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM))
+                        out.report("FiveM Deep Hidden System Plugin",
+                            path.wstring(),
+                            "Plugin binary has hidden and system attributes");
+                    if(binary(path) &&
+                       timeNumber(data.ftLastWriteTime)>current+day)
+                        out.report("FiveM Deep Future Plugin Timestamp",
+                            path.wstring(),
+                            "Plugin modification timestamp is more than one day in the future");
+                    if(binary(path) && transient(path))
+                        out.report("FiveM Deep Transient Plugin",
+                            path.wstring(),
+                            "Plugin executable is in a transient location");
+                    if(has(name,L".png.exe") ||
+                       has(name,L".jpg.exe") ||
+                       has(name,L".txt.exe") ||
+                       has(name,L".pdf.exe") ||
+                       has(name,L".json.exe"))
+                        out.report("FiveM Deep Plugin Double Extension",
+                            path.wstring(),
+                            "Plugin filename contains a document/image extension before .exe");
+                    if(binary(path) && size<=8*1024*1024 &&
+                       peChecked<200) {
+                        ++peChecked;
+                        inspectPEFile(out,path);
+                    }
+                }
+            }
+            it.increment(error);
+        }
+    }
+}
+// Inspect file origin metadata through the Zone.Identifier alternate
+// data stream. This does not change Mark-of-the-Web state.
+static void inspectFileOrigin(Evidence& out,const fs::path& path) {
+    if(out.stopped() || !regular(path))return;
+    const auto stream=path.wstring()+L":Zone.Identifier";
+    std::vector<unsigned char> bytes;
+    if(!readPrefix(stream,bytes,4096))return;
+    std::string text(bytes.begin(),bytes.end());
+    if(text.find("ZoneId=3")!=std::string::npos ||
+       text.find("ZoneId=4")!=std::string::npos)
+        out.report("FiveM Deep Internet-Origin Plugin",
+            path.wstring(),
+            "Plugin file carries Internet/Restricted zone metadata; "
+            "downloaded plugins can be legitimate");
+}
+static void inspectPluginOrigins(Evidence& out,
+                                 const std::vector<fs::path>& folders) {
+    size_t checked=0;
+    for(const auto& folder:folders) {
+        if(out.stopped() || checked>=220)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && checked<220 && !out.stopped()) {
+            if(it.depth()>6)it.disable_recursion_pending();
+            std::error_code entryError;
+            if(it->is_symlink(entryError))
+                it.disable_recursion_pending();
+            if(it->is_regular_file(entryError) && binary(it->path())) {
+                ++checked;
+                inspectFileOrigin(out,it->path());
+            }
+            it.increment(error);
+        }
+    }
+}
+
+// Review startup commands referencing FiveM, without executing commands
+// or treating normal startup entries as proof of unauthorized changes.
+static void inspectAutorunHive(Evidence& out,HKEY hive,
+                               const wchar_t* subkey,
+                               const char* label) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD nameLength=static_cast<DWORD>(names.size()-1);
+        DWORD bytes=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&nameLength,nullptr,
+            &type,data.data(),&bytes)!=ERROR_SUCCESS ||
+           (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+           bytes<sizeof(wchar_t) || bytes%sizeof(wchar_t))
+            continue;
+        const wchar_t* raw=
+            reinterpret_cast<const wchar_t*>(data.data());
+        size_t length=0;
+        while(length<bytes/sizeof(wchar_t) && raw[length])++length;
+        const std::wstring value(raw,length);
+        const auto normalized=lower(value);
+        if(!has(normalized,L"fivem") &&
+           !has(normalized,L"citizenfx"))continue;
+        if(has(normalized,L"\\temp\\") ||
+           has(normalized,L"\\recycle.bin\\"))
+            out.report("FiveM Deep Startup Command",value,
+                std::string(label)+
+                " references FiveM and a temporary executable location");
+        if(has(normalized,L"-encodedcommand") ||
+           has(normalized,L" -enc "))
+            out.report("FiveM Deep Encoded Startup",value,
+                std::string(label)+
+                " references FiveM and an encoded PowerShell argument");
+    }
+    RegCloseKey(key);
+}
+static void inspectAutoruns(Evidence& out) {
+    struct Entry {HKEY hive;const wchar_t* path;const char* label;};
+    const Entry entries[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "Current-user Run"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "Current-user RunOnce"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "Machine Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "Machine RunOnce"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "User policy Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "Machine policy Run"}
+    };
+    for(const auto& entry:entries) {
+        if(out.stopped())break;
+        inspectAutorunHive(out,entry.hive,entry.path,entry.label);
+    }
+}
+// Read a small prefix of log files only to identify failures. Avoid
+// retaining log payloads, server IPs, usernames, tokens, or chat content.
+static void inspectLog(Evidence& out,const fs::path& path) {
+    std::vector<unsigned char> bytes;
+    if(!readPrefix(path,bytes,256*1024))return;
+    std::string text;
+    text.reserve(bytes.size());
+    for(unsigned char c:bytes) {
+        if(c==0)continue;
+        text.push_back(static_cast<char>(std::tolower(c)));
+    }
+    const struct {
+        const char* term;
+        const char* category;
+        const char* context;
+    } patterns[]={
+        {"signature verification failed",
+         "FiveM Deep Signature Log","Signature verification failed"},
+        {"integrity check failed",
+         "FiveM Deep Integrity Log","Integrity verification failed"},
+        {"access violation",
+         "FiveM Deep Access Violation","Access violation"},
+        {"unhandled exception",
+         "FiveM Deep Unhandled Exception","Unhandled exception"},
+        {"failed to load module",
+         "FiveM Deep Module Load Failure","Module load failure"},
+        {"failed to initialize",
+         "FiveM Deep Initialization Failure","Initialization failure"},
+        {"cache corruption",
+         "FiveM Deep Cache Failure","Cache corruption"},
+        {"fatal error",
+         "FiveM Deep Fatal Error","Fatal error"}
+    };
+    for(const auto& pattern:patterns) {
+        if(out.stopped())break;
+        if(text.find(pattern.term)!=std::string::npos)
+            out.report(pattern.category,path.wstring(),
+                std::string(pattern.context)+
+                " appears in local log prefix; context may be benign");
+    }
+}
+static void inspectLogs(Evidence& out,
+                        const std::vector<fs::path>& installations) {
+    size_t examined=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:installations) {
+        if(out.stopped() || examined>=100)break;
+        for(const auto& folder:{
+            root/L"logs",root/L"data"/L"logs",
+            root/L"FiveM.app"/L"logs",
+            root/L"FiveM.app"/L"data"/L"logs"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code error;
+            for(fs::directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,error),end;
+                !error && it!=end && examined<100 && !out.stopped();
+                it.increment(error)) {
+                std::error_code fileError;
+                if(!it->is_regular_file(fileError))continue;
+                const auto ext=lower(it->path().extension().wstring());
+                if(ext!=L".log" && ext!=L".txt")continue;
+                const auto key=lower(it->path().lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                ++examined;
+                inspectLog(out,it->path());
+            }
+        }
+    }
+}
+// Authenticode verification uses the local trust provider and disables
+// online retrieval. Unsigned third-party software may be legitimate.
+static void inspectPluginSignatures(Evidence& out,
+                                    const std::vector<fs::path>& folders) {
+    size_t checked=0;
+    for(const auto& folder:folders) {
+        if(out.stopped() || checked>=100)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && checked<100 && !out.stopped()) {
+            if(it.depth()>5)it.disable_recursion_pending();
+            std::error_code entryError;
+            if(it->is_symlink(entryError))
+                it.disable_recursion_pending();
+            if(!it->is_regular_file(entryError) ||
+               !binary(it->path())) {
+                it.increment(error);continue;
+            }
+            ++checked;
+            const auto path=it->path().wstring();
+            WINTRUST_FILE_INFO file{};
+            file.cbStruct=sizeof(file);
+            file.pcwszFilePath=path.c_str();
+            WINTRUST_DATA data{};
+            data.cbStruct=sizeof(data);
+            data.dwUIChoice=WTD_UI_NONE;
+            data.fdwRevocationChecks=WTD_REVOKE_NONE;
+            data.dwUnionChoice=WTD_CHOICE_FILE;
+            data.pFile=&file;
+            data.dwStateAction=WTD_STATEACTION_IGNORE;
+            data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+            GUID policy=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+            const LONG status=WinVerifyTrust(nullptr,&policy,&data);
+            if(status==TRUST_E_BAD_DIGEST)
+                out.report("FiveM Deep Plugin Signature Mismatch",path,
+                    "Local Authenticode signature digest verification failed");
+            else if(status==TRUST_E_NOSIGNATURE)
+                out.report("FiveM Deep Unsigned Plugin Context",path,
+                    "No Authenticode signature; unsigned plugins can be legitimate");
+            it.increment(error);
+        }
+    }
+}
+
+// Inspect alternate data stream names on selected plugin binaries.
+// Streams are not read or modified.
+static void inspectPluginStreams(Evidence& out,
+                                 const std::vector<fs::path>& folders) {
+    size_t checked=0;
+    for(const auto& folder:folders) {
+        if(out.stopped() || checked>=120)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && checked<120 && !out.stopped()) {
+            if(it.depth()>5)it.disable_recursion_pending();
+            std::error_code entryError;
+            if(it->is_symlink(entryError))
+                it.disable_recursion_pending();
+            if(!it->is_regular_file(entryError) ||
+               !binary(it->path())) {
+                it.increment(error);continue;
+            }
+            ++checked;
+            WIN32_FIND_STREAM_DATA data{};
+            HANDLE stream=FindFirstStreamW(it->path().c_str(),
+                FindStreamInfoStandard,&data,0);
+            if(stream!=INVALID_HANDLE_VALUE) {
+                size_t streams=0;
+                do {
+                    if(out.stopped() || ++streams>32)break;
+                    const auto name=lower(data.cStreamName);
+                    if(name==L"::$data" ||
+                       name==L":zone.identifier:$data")continue;
+                    if(has(name,L".exe") ||
+                       has(name,L".dll") ||
+                       has(name,L".ps1"))
+                        out.report("FiveM Deep Plugin Stream Name",
+                            it->path().wstring()+data.cStreamName,
+                            "Plugin has an executable-like alternate stream name");
+                }while(FindNextStreamW(stream,&data));
+                FindClose(stream);
+            }
+            it.increment(error);
+        }
+    }
+}
+// Review recent FiveM application crash events without recording
+// sensitive XML payloads or attributing the crash to a cheat.
+static void inspectCrashEvents(Evidence& out) {
+    if(out.stopped())return;
+    EVT_HANDLE query=EvtQuery(nullptr,L"Application",
+        L"*[System[(EventID=1000 or EventID=1001)]]",
+        EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!query)return;
+    size_t examined=0,matched=0;
+    while(!out.stopped() && examined<160) {
+        EVT_HANDLE events[8]{};
+        DWORD count=0;
+        if(!EvtNext(query,8,events,100,&count,0))break;
+        for(DWORD i=0;i<count;++i) {
+            ++examined;
+            DWORD bytes=0,used=0;
+            EvtRender(nullptr,events[i],EvtRenderEventXml,
+                0,nullptr,&bytes,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+               bytes>=sizeof(wchar_t) && bytes<=128*1024) {
+                std::vector<wchar_t> xml(bytes/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,events[i],EvtRenderEventXml,
+                    bytes,xml.data(),&bytes,&used)) {
+                    const auto content=lower(xml.data());
+                    if(has(content,L"fivem") ||
+                       has(content,L"citizenfx"))++matched;
+                }
+            }
+            EvtClose(events[i]);
+        }
+        if(!count)break;
+    }
+    EvtClose(query);
+    if(matched)
+        out.report("FiveM Deep Application Crash Events",
+            L"Windows Application Event Log",
+            std::to_string(matched)+
+            " recent crash/report events mention FiveM or CitizenFX");
+}
+// A TCP endpoint is only context when the owning executable is already
+// associated with FiveM. No payload, remote IP, or port is retained.
+static void inspectFiveMNetwork(Evidence& out,
+                                const std::vector<Process>& processes) {
+    if(out.stopped())return;
+    std::unordered_set<DWORD> ids;
+    for(const auto& proc:processes)
+        if(fivemProcess(proc))ids.insert(proc.pid);
+    if(ids.empty())return;
+    DWORD bytes=0;
+    if(GetExtendedTcpTable(nullptr,&bytes,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=ERROR_INSUFFICIENT_BUFFER ||
+       !bytes || bytes>32*1024*1024)return;
+    std::vector<BYTE> data(bytes);
+    if(GetExtendedTcpTable(data.data(),&bytes,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=NO_ERROR)return;
+    const auto table=reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(
+        data.data());
+    size_t count=(std::min)(size_t(table->dwNumEntries),size_t(16384));
+    size_t established=0;
+    std::unordered_set<DWORD> owners;
+    for(size_t i=0;i<count && !out.stopped();++i) {
+        const auto& row=table->table[i];
+        if(row.dwState!=MIB_TCP_STATE_ESTAB ||
+           !ids.count(row.dwOwningPid))continue;
+        ++established;
+        owners.insert(row.dwOwningPid);
+    }
+    // Normal network connectivity is not a suspicious finding.
+    // This collector is deliberately informational-only.
+    (void)established;
+    (void)owners;
+}
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    Evidence out;
+    const auto installations=roots(processes);
+    const auto plugins=pluginFolders(installations);
+    inspectProcessRelations(out,processes);
+    if(!out.stopped())inspectLoadedModules(out,processes);
+    if(!out.stopped())inspectPluginTree(out,plugins);
+    if(!out.stopped())inspectPluginOrigins(out,plugins);
+    if(!out.stopped())inspectPluginSignatures(out,plugins);
+    if(!out.stopped())inspectPluginStreams(out,plugins);
+    if(!out.stopped())inspectAutoruns(out);
+    if(!out.stopped())inspectLogs(out,installations);
+    if(!out.stopped())inspectCrashEvents(out);
+    if(!out.stopped())inspectFiveMNetwork(out,processes);
+    return std::move(out.rows);
+}
+} // namespace fivem_deep
+
+// 8.7: native Windows Prefetch/BAM/path artifact review.
+// This is not a wrapper around third-party GUI utilities.
+// No tools are launched and no registry values are modified.
+namespace artifact_paths_v87 {
+struct Hit {
+    std::wstring subject;
+    std::string category;
+    std::string explanation;
+};
+struct Sink {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> seen;
+    size_t cap=600;
+    bool stopped() const {
+        return cancelRequested || rows.size()>=cap;
+    }
+    void add(const std::string& category,
+             const std::wstring& subject,
+             const std::string& explanation) {
+        if(stopped() || subject.empty())return;
+        std::wstring key=subject+L"|";
+        for(unsigned char c:category)key.push_back(c);
+        if(!seen.insert(key).second)return;
+        rows.push_back({category,utf8(subject),
+            "REVIEW ONLY | "+explanation});
+    }
+};
+static std::wstring lower(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return value;
+}
+static bool has(const std::wstring& value,const wchar_t* part) {
+    return value.find(part)!=std::wstring::npos;
+}
+static bool ends(const std::wstring& value,const wchar_t* part) {
+    const size_t n=wcslen(part);
+    return value.size()>=n &&
+        value.compare(value.size()-n,n,part)==0;
+}
+static bool starts(const std::wstring& value,const wchar_t* part) {
+    return value.rfind(part,0)==0;
+}
+static std::wstring env(const wchar_t* key) {
+    const DWORD needed=GetEnvironmentVariableW(key,nullptr,0);
+    if(!needed || needed>32768)return {};
+    std::wstring value(needed,L'\0');
+    const DWORD read=GetEnvironmentVariableW(key,value.data(),needed);
+    if(!read || read>=needed)return {};
+    value.resize(read);
+    return value;
+}
+static bool bounds(size_t start,size_t count,size_t total) {
+    return start<=total && count<=total-start;
+}
+static bool readFile(const fs::path& path,
+                     std::vector<unsigned char>& bytes,
+                     size_t limit) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER length{};
+    if(!GetFileSizeEx(file,&length) || length.QuadPart<0 ||
+       static_cast<ULONGLONG>(length.QuadPart)>limit) {
+        CloseHandle(file);return false;
+    }
+    const size_t size=static_cast<size_t>(length.QuadPart);
+    bytes.resize(size);
+    DWORD received=0;
+    BOOL ok=size==0 || ReadFile(file,bytes.data(),
+        static_cast<DWORD>(size),&received,nullptr);
+    CloseHandle(file);
+    if(!ok || received!=size)return false;
+    return true;
+}
+static bool readU32(const std::vector<unsigned char>& data,
+                    size_t offset,uint32_t& value) {
+    if(!bounds(offset,4,data.size()))return false;
+    memcpy(&value,data.data()+offset,4);
+    return true;
+}
+static bool readU64(const std::vector<unsigned char>& data,
+                    size_t offset,uint64_t& value) {
+    if(!bounds(offset,8,data.size()))return false;
+    memcpy(&value,data.data()+offset,8);
+    return true;
+}
+static std::wstring readUtf16(const std::vector<unsigned char>& data,
+                              size_t offset,size_t length) {
+    if(length%2 || !bounds(offset,length,data.size()) ||
+       length>65536)return {};
+    std::wstring result;
+    result.reserve(length/2);
+    for(size_t i=0;i+1<length;i+=2) {
+        uint16_t ch=static_cast<uint16_t>(data[offset+i]) |
+            (static_cast<uint16_t>(data[offset+i+1])<<8);
+        if(ch==0)break;
+        if(ch<32 && ch!=9)return {};
+        result.push_back(static_cast<wchar_t>(ch));
+    }
+    return result;
+}
+static bool binaryExt(const std::wstring& path) {
+    const auto value=lower(path);
+    return ends(value,L".exe") || ends(value,L".dll") ||
+        ends(value,L".sys") || ends(value,L".scr") ||
+        ends(value,L".com") || ends(value,L".asi");
+}
+static bool transient(const std::wstring& path) {
+    const auto value=lower(path);
+    return has(value,L"\\temp\\") ||
+        has(value,L"\\recycle.bin\\") ||
+        has(value,L"\\downloads\\") ||
+        has(value,L"\\server-cache\\") ||
+        has(value,L"\\server-cache-priv\\");
+}
+static bool fiveMRelated(const std::wstring& path) {
+    const auto value=lower(path);
+    return has(value,L"fivem") ||
+        has(value,L"citizenfx") ||
+        has(value,L"\\gta5.exe") ||
+        has(value,L"\\gta_v\\");
+}
+static bool normalFile(const std::wstring& path) {
+    std::error_code error;
+    return fs::is_regular_file(fs::path(path),error);
+}
+static std::wstring removeQuotes(std::wstring value) {
+    while(!value.empty() && (value.front()==L' ' ||
+          value.front()==L'\t'))value.erase(value.begin());
+    while(!value.empty() && (value.back()==L' ' ||
+          value.back()==L'\t'))value.pop_back();
+    if(value.size()>=2 && value.front()==L'"' &&
+       value.back()==L'"')return value.substr(1,value.size()-2);
+    return value;
+}
+static std::wstring expand(const std::wstring& value) {
+    DWORD size=ExpandEnvironmentStringsW(value.c_str(),nullptr,0);
+    if(!size || size>32768)return value;
+    std::wstring result(size,L'\0');
+    DWORD written=ExpandEnvironmentStringsW(
+        value.c_str(),result.data(),size);
+    if(!written || written>size)return value;
+    result.resize(written-1);
+    return result;
+}
+static std::wstring normalizeSeparators(std::wstring value) {
+    std::replace(value.begin(),value.end(),L'/',L'\\');
+    return value;
+}
+static std::wstring normalizePath(const std::wstring& input) {
+    auto path=normalizeSeparators(expand(removeQuotes(input)));
+    if(starts(path,L"\\\\?\\"))path.erase(0,4);
+    if(starts(path,L"\\??\\"))path.erase(0,4);
+    return path;
+}
+static std::wstring filename(const std::wstring& path) {
+    return lower(fs::path(path).filename().wstring());
+}
+static std::wstring pathKey(const std::wstring& path) {
+    return lower(normalizePath(path));
+}
+struct PathObservation {
+    std::wstring raw;
+    std::wstring normalized;
+    std::string source;
+    uint64_t timestamp=0;
+    bool timestampKnown=false;
+};
+struct Context {
+    Sink out;
+    std::vector<PathObservation> observations;
+    std::unordered_set<std::wstring> observationKeys;
+    std::unordered_set<std::wstring> runningPaths;
+    std::unordered_set<std::wstring> runningNames;
+    std::vector<fs::path> roots;
+    size_t maxObservations=4500;
+    void observe(const std::wstring& path,
+                 const std::string& source,
+                 uint64_t timestamp=0) {
+        if(out.stopped() || observations.size()>=maxObservations ||
+           path.empty() || path.size()>32768)return;
+        auto normalized=normalizePath(path);
+        if(normalized.empty())return;
+        auto key=lower(normalized)+L"|";
+        for(unsigned char c:source)key.push_back(c);
+        if(!observationKeys.insert(key).second)return;
+        observations.push_back({path,normalized,source,
+                                timestamp,timestamp!=0});
+    }
+};
+
+// The Windows prefetch file header begins with version and "SCCA".
+// Newer compressed files begin with "MAM" and require a decompressor;
+// unsupported formats are skipped rather than guessed.
+struct PrefetchHeader {
+    uint32_t version=0;
+    uint32_t declaredSize=0;
+    std::wstring executable;
+    uint32_t filenameHash=0;
+    bool compressed=false;
+    bool valid=false;
+};
+static PrefetchHeader parseHeader(
+    const std::vector<unsigned char>& data) {
+    PrefetchHeader result;
+    if(data.size()>=4 && data[0]=='M' && data[1]=='A' &&
+       data[2]=='M') {
+        result.compressed=true;
+        return result;
+    }
+    if(data.size()<84)return result;
+    uint32_t signature=0;
+    if(!readU32(data,0,result.version) ||
+       !readU32(data,4,signature) ||
+       !readU32(data,12,result.declaredSize) ||
+       !readU32(data,76,result.filenameHash))
+        return result;
+    if(signature!=0x41434353U)return result;
+    if(result.version!=17 && result.version!=23 &&
+       result.version!=26 && result.version!=30 &&
+       result.version!=31)return result;
+    if(result.declaredSize!=data.size())return result;
+    result.executable=readUtf16(data,16,60);
+    if(result.executable.empty())return result;
+    result.valid=true;
+    return result;
+}
+struct PrefetchLayout {
+    uint32_t metricsOffset=0;
+    uint32_t metricsCount=0;
+    uint32_t traceOffset=0;
+    uint32_t traceCount=0;
+    uint32_t stringsOffset=0;
+    uint32_t stringsSize=0;
+    uint32_t volumesOffset=0;
+    uint32_t volumesCount=0;
+    bool valid=false;
+};
+static PrefetchLayout parseLayout(
+    const std::vector<unsigned char>& data,
+    const PrefetchHeader& header) {
+    PrefetchLayout layout;
+    if(!header.valid || data.size()<0x78)return layout;
+    // The file information structure is versioned. The initial
+    // offset/count fields are shared by the supported SCCA layouts.
+    if(!readU32(data,0x54,layout.metricsOffset) ||
+       !readU32(data,0x58,layout.metricsCount) ||
+       !readU32(data,0x5C,layout.traceOffset) ||
+       !readU32(data,0x60,layout.traceCount) ||
+       !readU32(data,0x64,layout.stringsOffset) ||
+       !readU32(data,0x68,layout.stringsSize) ||
+       !readU32(data,0x6C,layout.volumesOffset) ||
+       !readU32(data,0x70,layout.volumesCount))
+        return layout;
+    if(layout.metricsCount>100000 ||
+       layout.traceCount>100000 ||
+       layout.volumesCount>1000)return layout;
+    if(!bounds(layout.stringsOffset,layout.stringsSize,
+               data.size()))return layout;
+    if(layout.stringsSize%2)return layout;
+    if(layout.metricsCount && layout.metricsOffset>=data.size())
+        return layout;
+    if(layout.traceCount && layout.traceOffset>=data.size())
+        return layout;
+    if(layout.volumesCount && layout.volumesOffset>=data.size())
+        return layout;
+    layout.valid=true;
+    return layout;
+}
+static std::vector<std::wstring> parseFilenameStrings(
+    const std::vector<unsigned char>& data,
+    const PrefetchLayout& layout) {
+    std::vector<std::wstring> names;
+    if(!layout.valid)return names;
+    const size_t start=layout.stringsOffset;
+    const size_t end=start+layout.stringsSize;
+    size_t cursor=start;
+    while(cursor+1<end && names.size()<4000) {
+        size_t offset=cursor;
+        while(cursor+1<end) {
+            if(data[cursor]==0 && data[cursor+1]==0)break;
+            cursor+=2;
+        }
+        const size_t length=cursor-offset;
+        if(length>=4 && length<=32768) {
+            auto text=readUtf16(data,offset,length);
+            if(!text.empty())names.push_back(std::move(text));
+        }
+        if(cursor+1>=end)break;
+        cursor+=2;
+        while(cursor+1<end && data[cursor]==0 &&
+              data[cursor+1]==0)cursor+=2;
+    }
+    return names;
+}
+static bool plausiblePrefetchName(const fs::path& path) {
+    auto name=lower(path.filename().wstring());
+    return ends(name,L".pf") && name.size()>=8;
+}
+static bool executableNameMatch(const std::wstring& executable,
+                                const std::wstring& prefetchName) {
+    auto name=lower(prefetchName);
+    auto exe=lower(executable);
+    if(exe.empty())return false;
+    return starts(name,(exe+L"-").c_str());
+}
+static void inspectPrefetch(Context& ctx) {
+    const auto windows=env(L"WINDIR");
+    if(windows.empty())return;
+    const fs::path folder=fs::path(windows)/L"Prefetch";
+    std::error_code error;
+    if(!fs::is_directory(folder,error))return;
+    size_t examined=0,compressed=0,parsed=0;
+    for(fs::directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+        !error && it!=end && examined<1800 && !ctx.out.stopped();
+        it.increment(error)) {
+        std::error_code itemError;
+        if(!it->is_regular_file(itemError) ||
+           !plausiblePrefetchName(it->path()))continue;
+        ++examined;
+        std::vector<unsigned char> bytes;
+        if(!readFile(it->path(),bytes,16*1024*1024))continue;
+        const auto header=parseHeader(bytes);
+        if(header.compressed) {
+            ++compressed;
+            continue;
+        }
+        if(!header.valid)continue;
+        ++parsed;
+        const auto pfName=it->path().filename().wstring();
+        if(!executableNameMatch(header.executable,pfName))
+            ctx.out.add("Prefetch Header Filename Mismatch",
+                it->path().wstring(),
+                "Prefetch internal executable name differs from the "
+                "outer .pf name; inspect manually");
+        const auto layout=parseLayout(bytes,header);
+        if(!layout.valid)continue;
+        auto names=parseFilenameStrings(bytes,layout);
+        bool related=fiveMRelated(header.executable);
+        for(const auto& name:names) {
+            if(fiveMRelated(name)){related=true;break;}
+        }
+        if(!related)continue;
+        const std::string source="Prefetch SCCA v"+
+            std::to_string(header.version);
+        const auto exe=lower(header.executable);
+        if(transient(exe))
+            ctx.out.add("Prefetch FiveM Transient Executable",
+                it->path().wstring(),
+                "Prefetch executable name suggests a transient location");
+        size_t relevant=0;
+        for(const auto& name:names) {
+            if(ctx.out.stopped() || relevant>=120)break;
+            if(!fiveMRelated(name) && !transient(name))continue;
+            ++relevant;
+            ctx.observe(name,source);
+            if(fiveMRelated(name) && binaryExt(name) &&
+               transient(name))
+                ctx.out.add("Prefetch FiveM Transient Binary",
+                    name,"Prefetch filename strings include a FiveM-related "
+                    "binary in a transient location");
+        }
+        if(names.empty())
+            ctx.out.add("Prefetch FiveM Empty Filename Strings",
+                it->path().wstring(),
+                "Related Prefetch file has no readable filename strings");
+    }
+    // Compressed MAM Prefetch data is intentionally not parsed as SCCA.
+    // An unsupported format is a coverage gap, not a suspicious finding.
+    (void)compressed;
+    (void)parsed;
+}
+
+// BAM stores per-user execution observations as REG_BINARY values.
+// The first 8 bytes commonly contain a Windows FILETIME. BAM is not
+// exhaustive and can be cleared by normal Windows maintenance.
+struct BamEntry {
+    std::wstring sid;
+    std::wstring valueName;
+    std::wstring normalizedPath;
+    uint64_t lastExecution=0;
+    bool hasTimestamp=false;
+    std::string registrySource;
+};
+static std::wstring bamPath(const std::wstring& name) {
+    auto value=normalizePath(name);
+    const auto lowerValue=lower(value);
+    if(starts(lowerValue,L"\\device\\harddiskvolume"))
+        return value;
+    if(starts(lowerValue,L"\\??\\"))return value.substr(4);
+    return value;
+}
+static bool validFiletime(uint64_t value) {
+    // Approximate Windows FILETIME bounds: years 2000 through 2100.
+    constexpr uint64_t minimum=125911584000000000ULL;
+    constexpr uint64_t maximum=157469184000000000ULL;
+    return value>=minimum && value<=maximum;
+}
+static bool readRegistryBinary(HKEY key,const wchar_t* name,
+                               std::vector<unsigned char>& bytes) {
+    DWORD type=0,size=0;
+    if(RegQueryValueExW(key,name,nullptr,&type,nullptr,
+        &size)!=ERROR_SUCCESS ||
+       type!=REG_BINARY || size<8 || size>65536)return false;
+    bytes.resize(size);
+    return RegQueryValueExW(key,name,nullptr,&type,
+        bytes.data(),&size)==ERROR_SUCCESS;
+}
+static std::vector<BamEntry> bamEntries;
+static void inspectBamUser(Context& ctx,HKEY userKey,
+                           const std::wstring& sid,
+                           const char* source) {
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(userKey,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,nullptr,
+        nullptr,nullptr)!=ERROR_SUCCESS)return;
+    count=(std::min)(count,DWORD(2500));
+    maxName=(std::min)(maxName,DWORD(32767));
+    std::vector<wchar_t> name(maxName+2);
+    size_t examined=0;
+    for(DWORD i=0;i<count && examined<2500 &&
+        !ctx.out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        DWORD type=0,size=0;
+        if(RegEnumValueW(userKey,i,name.data(),&length,
+            nullptr,&type,nullptr,&size)!=ERROR_SUCCESS ||
+           type!=REG_BINARY || size<8 || size>65536)
+            continue;
+        ++examined;
+        const std::wstring raw(name.data(),length);
+        if(raw.empty() || raw[0]!=L'\\')continue;
+        std::vector<unsigned char> bytes;
+        if(!readRegistryBinary(userKey,raw.c_str(),bytes))continue;
+        uint64_t stamp=0;
+        if(!readU64(bytes,0,stamp))continue;
+        const bool timestampKnown=validFiletime(stamp);
+        auto normalized=bamPath(raw);
+        if(normalized.empty())continue;
+        if(bamEntries.size()<9000)
+            bamEntries.push_back({sid,raw,normalized,stamp,
+                                  timestampKnown,source});
+        if(fiveMRelated(normalized) ||
+           (binaryExt(normalized) && transient(normalized)))
+            ctx.observe(normalized,
+                std::string("BAM ")+source,
+                timestampKnown?stamp:0);
+        if(fiveMRelated(normalized) && transient(normalized))
+            ctx.out.add("BAM FiveM Transient Execution",
+                normalized,
+                "BAM contains a FiveM-related executable path in a "
+                "transient directory; SID and timestamp require context");
+        if(fiveMRelated(normalized) && !timestampKnown)
+            ctx.out.add("BAM FiveM Timestamp Review",
+                normalized,
+                "BAM binary value has no plausible FILETIME at offset 0");
+    }
+}
+static void inspectBamRoot(Context& ctx,
+                           const wchar_t* rootName,
+                           const char* source) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,rootName,0,
+        KEY_READ,&root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count && !ctx.out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(root,i,name.data(),&length,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)
+            continue;
+        const std::wstring sid(name.data(),length);
+        if(!starts(sid,L"S-1-"))continue;
+        HKEY userKey=nullptr;
+        if(RegOpenKeyExW(root,sid.c_str(),0,KEY_READ,
+            &userKey)!=ERROR_SUCCESS)continue;
+        inspectBamUser(ctx,userKey,sid,source);
+        RegCloseKey(userKey);
+    }
+    RegCloseKey(root);
+}
+static void inspectBam(Context& ctx) {
+    bamEntries.clear();
+    inspectBamRoot(ctx,
+        L"SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings",
+        "bam State");
+    if(!ctx.out.stopped())
+        inspectBamRoot(ctx,
+            L"SYSTEM\\CurrentControlSet\\Services\\bam\\UserSettings",
+            "bam legacy");
+    if(!ctx.out.stopped())
+        inspectBamRoot(ctx,
+            L"SYSTEM\\CurrentControlSet\\Services\\dam\\State\\UserSettings",
+            "dam State");
+}
+// The device path in BAM may be a native NT path, not a Win32 path.
+// Build a read-only map from QueryDosDeviceW and match the longest prefix.
+struct DeviceMapEntry {
+    std::wstring device;
+    std::wstring drive;
+};
+static std::vector<DeviceMapEntry> driveMappings() {
+    std::vector<DeviceMapEntry> result;
+    wchar_t devices[32768]{};
+    for(wchar_t letter=L'A';letter<=L'Z';++letter) {
+        wchar_t drive[3]={letter,L':',L'\0'};
+        DWORD count=QueryDosDeviceW(drive,devices,32768);
+        if(!count)continue;
+        const std::wstring device(devices);
+        if(device.empty())continue;
+        result.push_back({lower(device),drive});
+    }
+    std::sort(result.begin(),result.end(),
+        [](const auto& a,const auto& b) {
+            return a.device.size()>b.device.size();
+        });
+    return result;
+}
+static std::wstring nativeToDos(const std::wstring& input,
+                                const std::vector<DeviceMapEntry>& maps) {
+    auto path=normalizePath(input);
+    auto normalized=lower(path);
+    for(const auto& mapping:maps) {
+        if(normalized==mapping.device)
+            return mapping.drive;
+        if(starts(normalized,mapping.device.c_str()) &&
+           normalized.size()>mapping.device.size() &&
+           normalized[mapping.device.size()]==L'\\')
+            return mapping.drive+
+                path.substr(mapping.device.size());
+    }
+    return path;
+}
+static void resolveBamPaths(Context& ctx) {
+    const auto mappings=driveMappings();
+    for(const auto& entry:bamEntries) {
+        if(ctx.out.stopped())break;
+        auto resolved=nativeToDos(entry.normalizedPath,mappings);
+        if(fiveMRelated(resolved) ||
+           (transient(resolved) && binaryExt(resolved)))
+            ctx.observe(resolved,
+                entry.registrySource+" (DOS resolved)",
+                entry.hasTimestamp?entry.lastExecution:0);
+        if(fiveMRelated(resolved) && transient(resolved) &&
+           !normalFile(resolved))
+            ctx.out.add("BAM FiveM Missing Transient Image",
+                resolved,
+                "BAM references a FiveM-related transient executable "
+                "not currently accessible on disk; this may be normal");
+    }
+}
+
+// PathsParser: normalize and correlate evidence from BAM, Prefetch,
+// active process images and known FiveM installation directories.
+static std::wstring canonical(const std::wstring& input) {
+    const auto normalized=normalizePath(input);
+    if(normalized.empty())return {};
+    std::error_code error;
+    auto path=fs::path(normalized).lexically_normal();
+    if(path.empty())return {};
+    return lower(path.wstring());
+}
+static bool inside(const std::wstring& child,
+                   const std::wstring& parent) {
+    auto a=canonical(child);
+    auto b=canonical(parent);
+    if(a==b)return true;
+    if(b.empty())return false;
+    if(b.back()!=L'\\')b+=L'\\';
+    return starts(a,b.c_str());
+}
+static std::wstring executableFromCommand(
+    const std::wstring& command) {
+    auto text=removeQuotes(command);
+    if(text.empty())return {};
+    if(command.size()>=2 && command.front()==L'"') {
+        const auto close=command.find(L'"',1);
+        if(close!=std::wstring::npos)
+            return normalizePath(command.substr(1,close-1));
+    }
+    auto lowered=lower(command);
+    for(const auto* extension:{
+        L".exe",L".com",L".scr",L".bat",L".cmd",L".ps1"
+    }) {
+        const auto position=lowered.find(extension);
+        if(position!=std::wstring::npos)
+            return normalizePath(command.substr(
+                0,position+wcslen(extension)));
+    }
+    const auto space=command.find(L' ');
+    return normalizePath(command.substr(0,space));
+}
+static bool suspiciousExtensionChain(const std::wstring& path) {
+    const auto name=lower(fs::path(path).filename().wstring());
+    const wchar_t* chains[]={
+        L".png.exe",L".jpg.exe",L".jpeg.exe",L".pdf.exe",
+        L".txt.exe",L".json.exe",L".log.exe",L".zip.exe",
+        L".rar.exe",L".7z.exe",L".ini.exe",L".cfg.exe"
+    };
+    for(const auto* chain:chains)
+        if(ends(name,chain))return true;
+    return false;
+}
+static bool temporaryDir(const std::wstring& path) {
+    const auto text=lower(path);
+    return has(text,L"\\temp\\") ||
+        has(text,L"\\tmp\\") ||
+        has(text,L"\\recycle.bin\\") ||
+        has(text,L"\\windows\\tasks\\");
+}
+static bool userDataDir(const std::wstring& path) {
+    const auto text=lower(path);
+    return has(text,L"\\appdata\\local\\") ||
+        has(text,L"\\appdata\\roaming\\") ||
+        has(text,L"\\users\\public\\") ||
+        has(text,L"\\downloads\\");
+}
+static void inspectPathMetadata(Context& ctx,
+                                const PathObservation& observation) {
+    if(ctx.out.stopped())return;
+    const auto& path=observation.normalized;
+    if(path.size()<3 || path.size()>32767)return;
+    if(!binaryExt(path))return;
+    const bool related=fiveMRelated(path);
+    const bool temp=temporaryDir(path);
+    const bool user=userDataDir(path);
+    if(related && temp)
+        ctx.out.add("PathsParser FiveM Temporary Binary",path,
+            observation.source+
+            " references a FiveM-related executable in a temporary directory");
+    if(related && suspiciousExtensionChain(path))
+        ctx.out.add("PathsParser FiveM Double Extension",path,
+            observation.source+
+            " references a FiveM-related executable with a double extension");
+    if(related && user && !normalFile(path))
+        ctx.out.add("PathsParser FiveM Missing Image",path,
+            observation.source+
+            " references a user-profile executable that is no longer "
+            "accessible at its recorded path");
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if(GetFileAttributesExW(path.c_str(),
+        GetFileExInfoStandard,&data)) {
+        if((data.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN) &&
+           (data.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM) &&
+           (related || temp))
+            ctx.out.add("PathsParser Hidden System Binary",path,
+                observation.source+
+                " references an executable with hidden and system attributes");
+        if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
+            ctx.out.add("PathsParser Reparse Executable",path,
+                observation.source+
+                " references an executable path with reparse-point attributes");
+        ULARGE_INTEGER size{};
+        size.LowPart=data.nFileSizeLow;
+        size.HighPart=data.nFileSizeHigh;
+        if(size.QuadPart==0 && (related || temp))
+            ctx.out.add("PathsParser Empty Executable",path,
+                observation.source+
+                " references an executable with zero-byte size");
+    }
+}
+static void inspectCrossSource(Context& ctx) {
+    std::unordered_map<std::wstring,std::unordered_set<std::string>> sources;
+    std::unordered_map<std::wstring,std::wstring> display;
+    for(const auto& observation:ctx.observations) {
+        if(ctx.out.stopped())break;
+        const auto key=canonical(observation.normalized);
+        if(key.empty())continue;
+        sources[key].insert(observation.source);
+        display[key]=observation.normalized;
+    }
+    size_t reported=0;
+    for(const auto& item:sources) {
+        if(ctx.out.stopped() || reported>=150)break;
+        if(item.second.size()<2)continue;
+        const auto& path=display[item.first];
+        if(!fiveMRelated(path) && !transient(path))continue;
+        if(!binaryExt(path))continue;
+        if(!temporaryDir(path) && !suspiciousExtensionChain(path))
+            continue;
+        ++reported;
+        ctx.out.add("PathsParser Correlated Artifact",path,
+            "At least two evidence sources reference the same "
+            "transient executable path; correlation does not prove "
+            "execution time or malicious purpose");
+    }
+}
+static void inspectActivePaths(Context& ctx,
+                               const std::vector<Process>& processes) {
+    for(const auto& proc:processes) {
+        if(ctx.out.stopped())break;
+        if(proc.path.empty())continue;
+        const auto key=canonical(proc.path);
+        if(key.empty())continue;
+        ctx.runningPaths.insert(key);
+        ctx.runningNames.insert(lower(proc.name));
+        if(fiveMRelated(proc.path) || transient(proc.path))
+            ctx.observe(proc.path,"Running process");
+        if(fiveMRelated(proc.path) &&
+           suspiciousExtensionChain(proc.path))
+            ctx.out.add("PathsParser Running Double Extension",
+                proc.path,
+                "Running FiveM-related process has a misleading "
+                "double extension");
+    }
+}
+static void inspectObservedPaths(Context& ctx) {
+    size_t checked=0;
+    for(const auto& observation:ctx.observations) {
+        if(ctx.out.stopped() || checked>=3000)break;
+        ++checked;
+        inspectPathMetadata(ctx,observation);
+    }
+    if(!ctx.out.stopped())inspectCrossSource(ctx);
+}
+static void discoverInstallations(Context& ctx,
+                                  const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> seen;
+    auto insert=[&](const fs::path& folder) {
+        std::error_code error;
+        if(!fs::is_directory(folder,error))return;
+        auto key=canonical(folder.wstring());
+        if(!key.empty() && seen.insert(key).second)
+            ctx.roots.push_back(folder);
+    };
+    const auto local=env(L"LOCALAPPDATA");
+    if(!local.empty()) {
+        insert(fs::path(local)/L"FiveM");
+        insert(fs::path(local)/L"FiveM"/L"FiveM.app");
+    }
+    for(const auto& proc:processes) {
+        if(!fiveMRelated(proc.path))continue;
+        auto name=lower(fs::path(proc.path).filename().wstring());
+        if(!ends(name,L".exe"))continue;
+        insert(fs::path(proc.path).parent_path());
+    }
+}
+
+// UserAssist stores ROT13-encoded shell launch labels under HKCU.
+// This is not a complete execution history; not every value is a path.
+static std::wstring rot13(std::wstring value) {
+    for(auto& c:value) {
+        if(c>=L'a' && c<=L'z')
+            c=static_cast<wchar_t>(
+                L'a'+(c-L'a'+13)%26);
+        else if(c>=L'A' && c<=L'Z')
+            c=static_cast<wchar_t>(
+                L'A'+(c-L'A'+13)%26);
+    }
+    return value;
+}
+static bool looksLikePath(const std::wstring& value) {
+    auto text=lower(value);
+    return has(text,L":\\") ||
+        starts(text,L"\\\\") ||
+        starts(text,L"%") ||
+        starts(text,L"\\device\\");
+}
+static void inspectUserAssistCount(Context& ctx,HKEY countKey,
+                                   const std::wstring& guid) {
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(countKey,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,nullptr,
+        nullptr,nullptr)!=ERROR_SUCCESS)return;
+    count=(std::min)(count,DWORD(1500));
+    maxName=(std::min)(maxName,DWORD(32767));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !ctx.out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(names.size()-1);
+        DWORD type=0,size=0;
+        if(RegEnumValueW(countKey,i,names.data(),&length,
+            nullptr,&type,nullptr,&size)!=ERROR_SUCCESS ||
+           type!=REG_BINARY || size<8 || size>4096)
+            continue;
+        auto decoded=rot13(std::wstring(names.data(),length));
+        if(!looksLikePath(decoded))continue;
+        if(!fiveMRelated(decoded) && !transient(decoded))continue;
+        std::vector<unsigned char> bytes(size);
+        if(RegQueryValueExW(countKey,names.data(),nullptr,
+            &type,bytes.data(),&size)!=ERROR_SUCCESS)continue;
+        uint64_t stamp=0;
+        // Windows 7+ UserAssist count data usually places last run
+        // FILETIME at byte offset 60, if the record is long enough.
+        if(size>=68)readU64(bytes,60,stamp);
+        ctx.observe(decoded,"UserAssist "+utf8(guid),
+            validFiletime(stamp)?stamp:0);
+        if(fiveMRelated(decoded) && temporaryDir(decoded))
+            ctx.out.add("UserAssist FiveM Temporary Launch",decoded,
+                "UserAssist shell-launch entry references a FiveM-related "
+                "executable in a temporary directory");
+    }
+}
+static void inspectUserAssist(Context& ctx) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(128));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !ctx.out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(root,i,names.data(),&length,
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)
+            continue;
+        std::wstring guid(names.data(),length);
+        HKEY countKey=nullptr;
+        auto subkey=guid+L"\\Count";
+        if(RegOpenKeyExW(root,subkey.c_str(),0,KEY_READ,
+            &countKey)!=ERROR_SUCCESS)continue;
+        inspectUserAssistCount(ctx,countKey,guid);
+        RegCloseKey(countKey);
+    }
+    RegCloseKey(root);
+}
+// RecentDocs entries can point to legitimate recent files; they are
+// used only to enrich path context when a path is clearly readable.
+static void inspectRecentDocs(Context& ctx) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(400));
+    maxName=(std::min)(maxName,DWORD(16384));
+    maxData=(std::min)(maxData,DWORD(8192));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<unsigned char> bytes(maxData+2);
+    for(DWORD i=0;i<count && !ctx.out.stopped();++i) {
+        DWORD nameSize=static_cast<DWORD>(names.size()-1);
+        DWORD size=static_cast<DWORD>(bytes.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&nameSize,
+            nullptr,&type,bytes.data(),&size)!=ERROR_SUCCESS ||
+           type!=REG_BINARY || size<4 || size%2)
+            continue;
+        auto text=readUtf16(bytes,0,(std::min)(
+            static_cast<size_t>(size),size_t(2048)));
+        if(!fiveMRelated(text) || !looksLikePath(text))continue;
+        ctx.observe(text,"RecentDocs");
+    }
+    RegCloseKey(key);
+}
+// Read-only startup shortcut inspection: the scanner does not resolve
+// .lnk targets via COM or launch their associated programs.
+static void inspectStartupFiles(Context& ctx) {
+    const auto roaming=env(L"APPDATA");
+    const auto program=env(L"PROGRAMDATA");
+    std::vector<fs::path> folders;
+    if(!roaming.empty())
+        folders.push_back(fs::path(roaming)/L"Microsoft"/
+            L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    if(!program.empty())
+        folders.push_back(fs::path(program)/L"Microsoft"/
+            L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    for(const auto& folder:folders) {
+        if(ctx.out.stopped())break;
+        std::error_code error;
+        if(!fs::is_directory(folder,error))continue;
+        size_t checked=0;
+        for(fs::directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && checked<250 && !ctx.out.stopped();
+            it.increment(error)) {
+            std::error_code fileError;
+            if(!it->is_regular_file(fileError))continue;
+            ++checked;
+            auto path=it->path().wstring();
+            if(!fiveMRelated(path))continue;
+            ctx.observe(path,"Startup folder");
+            if(suspiciousExtensionChain(path))
+                ctx.out.add("Startup FiveM Double Extension",path,
+                    "Startup entry name contains an executable double extension");
+        }
+    }
+}
+
+// Correlate observations by executable basename only as supporting
+// context. Identical basenames can refer to unrelated files.
+static void inspectNameCorrelations(Context& ctx) {
+    struct Group {
+        std::unordered_set<std::string> sources;
+        std::unordered_set<std::wstring> paths;
+    };
+    std::unordered_map<std::wstring,Group> groups;
+    for(const auto& observation:ctx.observations) {
+        if(ctx.out.stopped())break;
+        if(!binaryExt(observation.normalized))continue;
+        const auto name=filename(observation.normalized);
+        if(name.empty())continue;
+        auto& group=groups[name];
+        group.sources.insert(observation.source);
+        group.paths.insert(canonical(observation.normalized));
+    }
+    size_t emitted=0;
+    for(const auto& item:groups) {
+        if(ctx.out.stopped() || emitted>=80)break;
+        if(item.second.sources.size()<2 ||
+           item.second.paths.size()<2)continue;
+        if(!fiveMRelated(item.first))continue;
+        bool transientPath=false;
+        for(const auto& path:item.second.paths)
+            if(transient(path)){transientPath=true;break;}
+        if(!transientPath)continue;
+        ++emitted;
+        ctx.out.add("PathsParser FiveM Name Correlation",
+            item.first,
+            "Multiple artifact sources refer to the same "
+            "FiveM-related executable name at different paths, "
+            "including a transient path");
+    }
+}
+static void inspectBamPrefetchOverlap(Context& ctx) {
+    std::unordered_set<std::wstring> prefetch;
+    std::unordered_set<std::wstring> bam;
+    for(const auto& observation:ctx.observations) {
+        if(ctx.out.stopped())break;
+        const auto key=canonical(observation.normalized);
+        if(key.empty())continue;
+        if(observation.source.rfind("Prefetch",0)==0)
+            prefetch.insert(key);
+        if(observation.source.rfind("BAM",0)==0)
+            bam.insert(key);
+    }
+    size_t emitted=0;
+    for(const auto& path:prefetch) {
+        if(ctx.out.stopped() || emitted>=80)break;
+        if(!bam.count(path) || !binaryExt(path) ||
+           !fiveMRelated(path) || !transient(path))continue;
+        ++emitted;
+        ctx.out.add("Prefetch BAM FiveM Path Match",path,
+            "BAM and Prefetch both reference the same FiveM-related "
+            "transient binary path; verify timestamp and provenance");
+    }
+}
+
+// Path spelling anomalies are only reported when combined with a
+// FiveM-related executable and an execution-artifact source.
+static void inspectPathSpelling(Context& ctx) {
+    size_t checked=0;
+    for(const auto& observation:ctx.observations) {
+        if(ctx.out.stopped() || checked>=2500)break;
+        ++checked;
+        const auto path=lower(observation.raw);
+        if(!fiveMRelated(path) || !binaryExt(path))continue;
+        if(has(path,L"\\..\\") && transient(path))
+            ctx.out.add("PathsParser Parent Traversal Context",
+                observation.raw,
+                "Execution artifact contains parent-directory traversal "
+                "in a FiveM-related transient executable path");
+        if(has(path,L"\\.\\" ) && transient(path))
+            ctx.out.add("PathsParser Dot Segment Context",
+                observation.raw,
+                "Execution artifact contains a dot path segment "
+                "in a FiveM-related transient executable path");
+        if(path.size()>260 && transient(path))
+            ctx.out.add("PathsParser Long Executable Path",
+                observation.raw,
+                "FiveM-related transient executable path exceeds "
+                "the traditional MAX_PATH limit");
+    }
+}
+static std::vector<Record> collect(
+    const std::vector<Process>& processes) {
+    Context ctx;
+    discoverInstallations(ctx,processes);
+    inspectActivePaths(ctx,processes);
+    if(!ctx.out.stopped())inspectBam(ctx);
+    if(!ctx.out.stopped())resolveBamPaths(ctx);
+    if(!ctx.out.stopped())inspectPrefetch(ctx);
+    if(!ctx.out.stopped())inspectUserAssist(ctx);
+    if(!ctx.out.stopped())inspectRecentDocs(ctx);
+    if(!ctx.out.stopped())inspectStartupFiles(ctx);
+    if(!ctx.out.stopped())inspectObservedPaths(ctx);
+    if(!ctx.out.stopped())inspectNameCorrelations(ctx);
+    if(!ctx.out.stopped())inspectBamPrefetchOverlap(ctx);
+    if(!ctx.out.stopped())inspectPathSpelling(ctx);
+    return std::move(ctx.out.rows);
+}
+} // namespace artifact_paths_v87
+
+// Sync PC Checker 8.8: read-only Windows artifact review.
+// All observations must be independently corroborated.
+// A missing artifact is not evidence that a program never ran.
+// Observations are not verdicts; all loops are bounded.
+namespace artifact_review_v88 {
+struct Sink {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> keys;
+    size_t limit=700;
+    bool stopped() const {
+        return cancelRequested || rows.size()>=limit;
+    }
+    void emit(const char* category,const std::wstring& subject,
+              const std::string& explanation) {
+        if(stopped() || subject.empty())return;
+        std::wstring key=subject+L"|";
+        for(const char* p=category;*p;++p)
+            key.push_back(static_cast<unsigned char>(*p));
+        if(!keys.insert(key).second)return;
+        rows.push_back({category,utf8(subject),
+            "REVIEW ONLY | "+explanation});
+    }
+};
+static std::wstring lower(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return value;
+}
+static bool has(const std::wstring& text,const wchar_t* token) {
+    return text.find(token)!=std::wstring::npos;
+}
+static bool begins(const std::wstring& text,const wchar_t* token) {
+    return text.rfind(token,0)==0;
+}
+static std::wstring environment(const wchar_t* name) {
+    DWORD length=GetEnvironmentVariableW(name,nullptr,0);
+    if(!length || length>32768)return {};
+    std::wstring result(length,L'\0');
+    DWORD read=GetEnvironmentVariableW(name,result.data(),length);
+    if(!read || read>=length)return {};
+    result.resize(read);
+    return result;
+}
+static bool isFiveM(const std::wstring& value) {
+    const auto s=lower(value);
+    return has(s,L"fivem") || has(s,L"citizenfx");
+}
+static bool transient(const std::wstring& value) {
+    const auto s=lower(value);
+    return has(s,L"\\temp\\") || has(s,L"\\recycle.bin\\") ||
+           has(s,L"\\downloads\\") || has(s,L"\\users\\public\\");
+}
+static bool executable(const std::wstring& value) {
+    const auto s=lower(value);
+    return has(s,L".exe") || has(s,L".dll") ||
+           has(s,L".sys") || has(s,L".asi") ||
+           has(s,L".scr") || has(s,L".ps1");
+}
+static bool relevant(const std::wstring& value) {
+    return isFiveM(value) || (transient(value) && executable(value));
+}
+static bool readBytes(const fs::path& path,
+                      std::vector<unsigned char>& output,
+                      size_t maximum=1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(file,&size) || size.QuadPart<0) {
+        CloseHandle(file);return false;
+    }
+    const size_t amount=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(size.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    output.resize(amount);
+    DWORD received=0;
+    BOOL ok=amount==0 || ReadFile(file,output.data(),
+        static_cast<DWORD>(amount),&received,nullptr);
+    CloseHandle(file);
+    if(!ok)return false;
+    output.resize(received);
+    return true;
+}
+static bool within(size_t offset,size_t length,size_t total) {
+    return offset<=total && length<=total-offset;
+}
+static bool fileAttributes(const fs::path& path,
+                           WIN32_FILE_ATTRIBUTE_DATA& info) {
+    return GetFileAttributesExW(path.c_str(),
+        GetFileExInfoStandard,&info)!=FALSE;
+}
+static ULONGLONG fileSize(const WIN32_FILE_ATTRIBUTE_DATA& info) {
+    ULARGE_INTEGER n{};
+    n.LowPart=info.nFileSizeLow;
+    n.HighPart=info.nFileSizeHigh;
+    return n.QuadPart;
+}
+static ULONGLONG timeValue(const FILETIME& value) {
+    ULARGE_INTEGER n{};
+    n.LowPart=value.dwLowDateTime;
+    n.HighPart=value.dwHighDateTime;
+    return n.QuadPart;
+}
+static bool plausibleFiletime(ULONGLONG value) {
+    constexpr ULONGLONG start=116444736000000000ULL;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG year=365ULL*86400ULL*10000000ULL;
+    return value>=start && value<timeValue(now)+year;
+}
+static std::wstring stringValue(HKEY key,const wchar_t* name) {
+    DWORD type=0,size=0;
+    if(RegQueryValueExW(key,name,nullptr,&type,nullptr,&size)
+       !=ERROR_SUCCESS ||
+       (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+       size<sizeof(wchar_t) || size>65536 ||
+       size%sizeof(wchar_t))return {};
+    std::vector<wchar_t> buffer(size/sizeof(wchar_t)+1,L'\0');
+    if(RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(buffer.data()),&size)
+        !=ERROR_SUCCESS)return {};
+    return std::wstring(buffer.data());
+}
+static std::vector<std::wstring> enumerateValues(HKEY key,
+                                                 size_t maximum=1000) {
+    DWORD count=0,maxName=0;
+    std::vector<std::wstring> result;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,nullptr,
+        nullptr,nullptr)!=ERROR_SUCCESS)return result;
+    count=(std::min)(count,static_cast<DWORD>(maximum));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count;++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumValueW(key,i,name.data(),&length,nullptr,
+            nullptr,nullptr,nullptr)==ERROR_SUCCESS)
+            result.emplace_back(name.data(),length);
+    }
+    return result;
+}
+static std::vector<std::wstring> enumerateSubkeys(HKEY key,
+                                                  size_t maximum=1000) {
+    DWORD count=0,maxName=0;
+    std::vector<std::wstring> result;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS)return result;
+    count=(std::min)(count,static_cast<DWORD>(maximum));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> name(maxName+2);
+    for(DWORD i=0;i<count;++i) {
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(key,i,name.data(),&length,
+            nullptr,nullptr,nullptr,nullptr)==ERROR_SUCCESS)
+            result.emplace_back(name.data(),length);
+    }
+    return result;
+}
+
+// Application Compatibility Assistant stores executable paths under
+// HKCU AppCompatFlags. These are historical context, not execution proof.
+static void inspectPcaStore(Sink& out,HKEY hive,
+                            const wchar_t* subkey,const char* label) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    auto values=enumerateValues(key,2400);
+    size_t examined=0;
+    for(const auto& name:values) {
+        if(out.stopped() || ++examined>2400)break;
+        if(!relevant(name))continue;
+        DWORD type=0,size=0;
+        if(RegQueryValueExW(key,name.c_str(),nullptr,&type,
+            nullptr,&size)!=ERROR_SUCCESS)continue;
+        if(size>65536)continue;
+        std::string reason=std::string(label)+
+            " stores an executable-path reference";
+        if(transient(name))
+            reason+=" | location is user-writable/transient";
+        out.emit("AppCompat Execution Context",name,reason);
+    }
+    RegCloseKey(key);
+}
+static void inspectAppCompat(Sink& out) {
+    struct Source {
+        HKEY hive;
+        const wchar_t* path;
+        const char* label;
+    };
+    const Source sources[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+         "User PCA Store"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Persisted",
+         "User PCA Persisted"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers",
+         "User compatibility layers"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers",
+         "Machine compatibility layers"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+         "User compatibility assistant"}
+    };
+    for(const auto& source:sources) {
+        if(out.stopped())break;
+        inspectPcaStore(out,source.hive,source.path,source.label);
+    }
+}
+// RecentApps and MUI Cache contain program references that may outlive
+// the actual executable. Do not label them as recent execution without
+// corroborating sources.
+static void inspectMuiCache(Sink& out) {
+    const wchar_t* paths[]={
+        L"Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache",
+        L"Software\\Microsoft\\Windows\\ShellNoRoam\\MUICache",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppSwitched",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppLaunch",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\ShowJumpView"
+    };
+    for(const auto* path:paths) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_CURRENT_USER,path,0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        for(const auto& name:enumerateValues(key,1800)) {
+            if(out.stopped())break;
+            if(!relevant(name))continue;
+            out.emit("Explorer Program Reference",name,
+                "Explorer/MUI/FeatureUsage registry entry references a "
+                "program path; the entry may be historical");
+        }
+        RegCloseKey(key);
+    }
+}
+static void inspectRecentApps(Sink& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Search\\RecentApps",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    for(const auto& subkey:enumerateSubkeys(root,600)) {
+        if(out.stopped())break;
+        HKEY app=nullptr;
+        if(RegOpenKeyExW(root,subkey.c_str(),0,KEY_READ,
+            &app)!=ERROR_SUCCESS)continue;
+        const auto path=stringValue(app,L"AppPath");
+        const auto name=stringValue(app,L"AppName");
+        if(relevant(path) || isFiveM(name))
+            out.emit("RecentApps Program Reference",
+                path.empty()?name:path,
+                "Windows Search RecentApps references this application");
+        RegCloseKey(app);
+    }
+    RegCloseKey(root);
+}
+// OpenSavePidlMRU and LastVisitedPidlMRU are binary shell structures.
+// We inspect only metadata and named subkeys, never misinterpret binary
+// PIDLs as UTF-16 paths.
+static void inspectOpenSaveMru(Sink& out) {
+    const wchar_t* roots[]={
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSaveMRU"
+    };
+    for(const auto* path:roots) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_CURRENT_USER,path,0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        for(const auto& name:enumerateSubkeys(key,300)) {
+            if(out.stopped())break;
+            if(!isFiveM(name))continue;
+            out.emit("Shell Dialog MRU Context",name,
+                "Shell dialog MRU contains a FiveM-related subkey name; "
+                "binary PIDLs are not decoded");
+        }
+        RegCloseKey(key);
+    }
+}
+// Enumerate the user's StartupApproved entries. The registry stores
+// enablement state, not an executable image path.
+static void inspectStartupApproved(Sink& out) {
+    const wchar_t* paths[]={
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder"
+    };
+    for(const auto* path:paths) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_CURRENT_USER,path,0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        for(const auto& name:enumerateValues(key,1200)) {
+            if(out.stopped())break;
+            if(!isFiveM(name))continue;
+            out.emit("FiveM Startup Approval Context",name,
+                "StartupApproved contains a FiveM-related entry; "
+                "state alone does not establish execution");
+        }
+        RegCloseKey(key);
+    }
+}
+
+// A Windows shortcut contains a header, link flags and optional ID lists.
+// We validate the fixed header and inspect only its metadata. Parsing
+// arbitrary string payloads as file paths would be unreliable.
+#pragma pack(push,1)
+struct ShortcutHeader {
+    DWORD size;
+    GUID classId;
+    DWORD flags;
+    DWORD attributes;
+    FILETIME created;
+    FILETIME accessed;
+    FILETIME modified;
+    DWORD targetSize;
+    LONG iconIndex;
+    DWORD showCommand;
+    WORD hotkey;
+    WORD reserved1;
+    DWORD reserved2;
+    DWORD reserved3;
+};
+#pragma pack(pop)
+static bool readShortcutHeader(const fs::path& path,
+                               ShortcutHeader& header) {
+    std::vector<unsigned char> data;
+    if(!readBytes(path,data,512))return false;
+    if(data.size()<sizeof(header))return false;
+    memcpy(&header,data.data(),sizeof(header));
+    static const GUID linkGuid={
+        0x00021401,0x0000,0x0000,
+        {0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}
+    };
+    return header.size==0x4C &&
+        IsEqualGUID(header.classId,linkGuid);
+}
+static void inspectShortcut(Sink& out,const fs::path& path,
+                            const char* source) {
+    if(out.stopped())return;
+    ShortcutHeader header{};
+    if(!readShortcutHeader(path,header)) {
+        if(isFiveM(path.wstring()))
+            out.emit("FiveM Shortcut Format Context",path.wstring(),
+                std::string(source)+
+                " | FiveM-named .lnk has an invalid shortcut header");
+        return;
+    }
+    const auto name=path.filename().wstring();
+    if(isFiveM(name)) {
+        out.emit("FiveM Shortcut Reference",path.wstring(),
+            std::string(source)+
+            " | Shell Link file references FiveM by filename");
+    }
+    if(isFiveM(name) && header.targetSize==0)
+        out.emit("FiveM Shortcut Target Size",path.wstring(),
+            "FiveM-named shortcut reports a zero target file size");
+    if(isFiveM(name) && header.modified.dwHighDateTime==0 &&
+       header.modified.dwLowDateTime==0)
+        out.emit("FiveM Shortcut Timestamp Context",path.wstring(),
+            "FiveM-named shortcut has an empty target modification timestamp");
+}
+// Recent shortcuts are scanned without resolving targets or invoking
+// COM shell APIs, which could otherwise access remote resources.
+static void inspectRecentShortcuts(Sink& out) {
+    const auto roaming=environment(L"APPDATA");
+    if(roaming.empty())return;
+    const fs::path folder=fs::path(roaming)/
+        L"Microsoft"/L"Windows"/L"Recent";
+    std::error_code error;
+    if(!fs::is_directory(folder,error))return;
+    size_t count=0;
+    for(fs::directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+        !error && it!=end && count<1400 && !out.stopped();
+        it.increment(error)) {
+        std::error_code itemError;
+        if(!it->is_regular_file(itemError))continue;
+        if(lower(it->path().extension().wstring())!=L".lnk")
+            continue;
+        ++count;
+        inspectShortcut(out,it->path(),"Recent shortcut");
+    }
+}
+// AutomaticDestinations and CustomDestinations are compound and binary
+// structures. Without a dedicated parser we only check file metadata
+// and FiveM-related names, not claim recovered executable paths.
+static void inspectJumpListMetadata(Sink& out) {
+    const auto roaming=environment(L"APPDATA");
+    if(roaming.empty())return;
+    const fs::path root=fs::path(roaming)/
+        L"Microsoft"/L"Windows"/L"Recent";
+    const fs::path folders[]={
+        root/L"AutomaticDestinations",
+        root/L"CustomDestinations"
+    };
+    for(const auto& folder:folders) {
+        if(out.stopped())break;
+        std::error_code error;
+        if(!fs::is_directory(folder,error))continue;
+        size_t examined=0;
+        for(fs::directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && examined<800 && !out.stopped();
+            it.increment(error)) {
+            std::error_code itemError;
+            if(!it->is_regular_file(itemError))continue;
+            ++examined;
+            const auto path=it->path();
+            if(!isFiveM(path.filename().wstring()))continue;
+            WIN32_FILE_ATTRIBUTE_DATA info{};
+            if(!fileAttributes(path,info))continue;
+            if(fileSize(info)==0)
+                out.emit("FiveM JumpList Empty File",path.wstring(),
+                    "FiveM-named JumpList artifact has zero-byte size");
+            else
+                out.emit("FiveM JumpList Filename Context",
+                    path.wstring(),
+                    "FiveM-named JumpList file exists; content is not parsed");
+        }
+    }
+}
+// Startup folder shortcuts can be normal. We do not resolve links
+// because that may cause unintended access to remote targets.
+static void inspectStartupShortcuts(Sink& out) {
+    const auto roaming=environment(L"APPDATA");
+    const auto program=environment(L"PROGRAMDATA");
+    std::vector<fs::path> folders;
+    if(!roaming.empty())
+        folders.push_back(fs::path(roaming)/
+            L"Microsoft"/L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    if(!program.empty())
+        folders.push_back(fs::path(program)/
+            L"Microsoft"/L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    for(const auto& folder:folders) {
+        if(out.stopped())break;
+        std::error_code error;
+        if(!fs::is_directory(folder,error))continue;
+        size_t count=0;
+        for(fs::directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && count<400 && !out.stopped();
+            it.increment(error)) {
+            std::error_code itemError;
+            if(!it->is_regular_file(itemError))continue;
+            ++count;
+            if(lower(it->path().extension().wstring())==L".lnk")
+                inspectShortcut(out,it->path(),"Startup shortcut");
+        }
+    }
+}
+
+// Windows Error Reporting contains report metadata, not a verified
+// record of malicious activity. Only AppPath and application name are
+// considered; report payloads are never retained.
+static void inspectWerFile(Sink& out,const fs::path& path) {
+    std::vector<unsigned char> data;
+    if(!readBytes(path,data,256*1024))return;
+    std::wstring text;
+    if(data.size()>=2 && data[0]==0xFF && data[1]==0xFE) {
+        const size_t count=(data.size()-2)/sizeof(wchar_t);
+        text.resize(count);
+        if(count)memcpy(text.data(),data.data()+2,count*sizeof(wchar_t));
+    }else {
+        // Report.wer may be UTF-8 or ANSI. We only inspect ASCII
+        // key names and FiveM-related values in a bounded prefix.
+        text.reserve(data.size());
+        for(auto byte:data)
+            text.push_back(byte<128?static_cast<wchar_t>(byte):L'?');
+    }
+    std::wistringstream stream(text);
+    std::wstring line;
+    std::wstring appPath,appName,eventName;
+    size_t lines=0;
+    while(std::getline(stream,line) && lines++<4096) {
+        if(line.rfind(L"AppPath=",0)==0)
+            appPath=line.substr(8);
+        else if(line.rfind(L"AppName=",0)==0)
+            appName=line.substr(8);
+        else if(line.rfind(L"EventType=",0)==0)
+            eventName=line.substr(10);
+    }
+    if(isFiveM(appPath) || isFiveM(appName)) {
+        const auto subject=appPath.empty()?path.wstring():appPath;
+        out.emit("FiveM WER Crash Context",subject,
+            "Windows Error Reporting references FiveM; event type: "+
+            utf8(eventName.substr(0,128)));
+        if(transient(appPath))
+            out.emit("FiveM WER Transient Executable",subject,
+                "Crash report references FiveM in a transient directory");
+    }
+}
+static void inspectWerFolders(Sink& out) {
+    const auto local=environment(L"LOCALAPPDATA");
+    const auto program=environment(L"PROGRAMDATA");
+    std::vector<fs::path> roots;
+    if(!local.empty()) {
+        const fs::path base=fs::path(local)/
+            L"Microsoft"/L"Windows"/L"WER";
+        roots.push_back(base/L"ReportArchive");
+        roots.push_back(base/L"ReportQueue");
+    }
+    if(!program.empty()) {
+        const fs::path base=fs::path(program)/
+            L"Microsoft"/L"Windows"/L"WER";
+        roots.push_back(base/L"ReportArchive");
+        roots.push_back(base/L"ReportQueue");
+    }
+    size_t inspected=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || inspected>=300)break;
+        std::error_code error;
+        if(!fs::is_directory(root,error))continue;
+        for(fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && inspected<300 && !out.stopped();
+            it.increment(error)) {
+            std::error_code itemError;
+            if(!it->is_directory(itemError))continue;
+            ++inspected;
+            const auto report=it->path()/L"Report.wer";
+            inspectWerFile(out,report);
+        }
+    }
+}
+// Inspect executable path references in scheduled task XML. The XML
+// parser is deliberately conservative: it does not execute task
+// actions, resolve external entities or evaluate task conditions.
+static std::wstring extractTag(const std::wstring& xml,
+                               const wchar_t* name) {
+    const std::wstring open=L"<"+std::wstring(name)+L">";
+    const std::wstring close=L"</"+std::wstring(name)+L">";
+    const auto start=xml.find(open);
+    if(start==std::wstring::npos)return {};
+    const auto from=start+open.size();
+    const auto end=xml.find(close,from);
+    if(end==std::wstring::npos || end-from>32768)return {};
+    return xml.substr(from,end-from);
+}
+static void inspectTaskXml(Sink& out,const fs::path& path) {
+    std::vector<unsigned char> data;
+    if(!readBytes(path,data,512*1024))return;
+    std::wstring xml;
+    if(data.size()>=2 && data[0]==0xFF && data[1]==0xFE) {
+        const size_t chars=(data.size()-2)/sizeof(wchar_t);
+        xml.resize(chars);
+        if(chars)memcpy(xml.data(),data.data()+2,chars*sizeof(wchar_t));
+    }else {
+        if(data.size()>INT_MAX)return;
+        int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+            reinterpret_cast<const char*>(data.data()),
+            static_cast<int>(data.size()),nullptr,0);
+        if(count<=0)return;
+        xml.resize(count);
+        MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,
+            reinterpret_cast<const char*>(data.data()),
+            static_cast<int>(data.size()),xml.data(),count);
+    }
+    const auto command=extractTag(xml,L"Command");
+    const auto args=extractTag(xml,L"Arguments");
+    const auto work=extractTag(xml,L"WorkingDirectory");
+    if(isFiveM(command)) {
+        out.emit("FiveM Scheduled Task Context",path.wstring(),
+            "Scheduled task XML contains a FiveM-related command");
+        if(transient(command))
+            out.emit("FiveM Transient Scheduled Task",command,
+                "FiveM-related task executable is in a transient directory");
+        if(has(lower(args),L"-encodedcommand") ||
+           has(lower(args),L" -enc "))
+            out.emit("FiveM Encoded Task Argument",path.wstring(),
+                "FiveM-related task uses an encoded PowerShell argument");
+    }
+    if(isFiveM(work) && transient(work))
+        out.emit("FiveM Task Working Directory",work,
+            "Scheduled task working directory mentions FiveM "
+            "and a transient location");
+}
+static void inspectTaskDefinitions(Sink& out) {
+    const auto windows=environment(L"WINDIR");
+    if(windows.empty())return;
+    const fs::path folder=fs::path(windows)/L"System32"/L"Tasks";
+    std::error_code error;
+    if(!fs::is_directory(folder,error))return;
+    fs::recursive_directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,error),end;
+    size_t checked=0;
+    while(!error && it!=end && checked<1500 && !out.stopped()) {
+        if(it.depth()>12)it.disable_recursion_pending();
+        std::error_code itemError;
+        if(it->is_symlink(itemError))
+            it.disable_recursion_pending();
+        if(it->is_regular_file(itemError)) {
+            ++checked;
+            inspectTaskXml(out,it->path());
+        }
+        it.increment(error);
+    }
+}
+
+// MountedDevices and MountPoints2 provide volume/drive context.
+// The binary MountedDevices mapping is not decoded here.
+static void inspectMountPoints(Sink& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateSubkeys(key,1200)) {
+        if(out.stopped())break;
+        if(isFiveM(name))
+            out.emit("FiveM MountPoint Context",name,
+                "Explorer MountPoints2 references a FiveM-related name");
+    }
+    RegCloseKey(key);
+}
+// User's TypedPaths contains explicitly entered paths; this is
+// navigation history, not an executable launch log.
+static void inspectTypedPaths(Sink& out) {
+    const wchar_t* sources[]={
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths",
+        L"Software\\Microsoft\\Internet Explorer\\TypedURLs"
+    };
+    for(const auto* source:sources) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_CURRENT_USER,source,0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        for(const auto& name:enumerateValues(key,400)) {
+            if(out.stopped())break;
+            const auto value=stringValue(key,name.c_str());
+            if(isFiveM(value))
+                out.emit("FiveM Typed Navigation Context",value,
+                    "Typed navigation history mentions FiveM; "
+                    "not an executable execution record");
+        }
+        RegCloseKey(key);
+    }
+}
+// Explorer RunMRU can contain command lines. Treat them as user-entered
+// strings; execution is not established by the registry value alone.
+static void inspectRunMru(Sink& out) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateValues(key,100)) {
+        if(out.stopped() || name==L"MRUList")continue;
+        const auto value=stringValue(key,name.c_str());
+        if(isFiveM(value))
+            out.emit("FiveM Run Dialog Context",value,
+                "Run dialog history contains a FiveM-related command");
+        if(isFiveM(value) && transient(value))
+            out.emit("FiveM Transient Run Dialog Context",value,
+                "Run dialog entry references FiveM in a transient directory");
+    }
+    RegCloseKey(key);
+}
+// The Uninstall registry is an inventory source. UninstallString is
+// never executed, and missing uninstallers are not malware proof.
+static void inspectInstalledAppsHive(Sink& out,HKEY hive,
+                                     const wchar_t* path,
+                                     const char* label) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,path,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    for(const auto& name:enumerateSubkeys(key,1800)) {
+        if(out.stopped())break;
+        HKEY app=nullptr;
+        if(RegOpenKeyExW(key,name.c_str(),0,KEY_READ,
+            &app)!=ERROR_SUCCESS)continue;
+        const auto display=stringValue(app,L"DisplayName");
+        const auto location=stringValue(app,L"InstallLocation");
+        const auto uninstall=stringValue(app,L"UninstallString");
+        if(isFiveM(display) || isFiveM(location)) {
+            if(transient(location))
+                out.emit("FiveM Uninstall Location Context",location,
+                    std::string(label)+
+                    " | FiveM-related installed app uses a transient location");
+            if(isFiveM(uninstall) && transient(uninstall))
+                out.emit("FiveM Uninstaller Context",uninstall,
+                    std::string(label)+
+                    " | Uninstall command references a transient location");
+        }
+        RegCloseKey(app);
+    }
+    RegCloseKey(key);
+}
+static void inspectInstalledApps(Sink& out) {
+    const wchar_t* key=
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+    inspectInstalledAppsHive(out,HKEY_CURRENT_USER,key,"Current user");
+    if(!out.stopped())
+        inspectInstalledAppsHive(out,HKEY_LOCAL_MACHINE,key,"Machine");
+    if(!out.stopped())
+        inspectInstalledAppsHive(out,HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            "Machine 32-bit view");
+}
+// Service configuration is reviewed only when the image path explicitly
+// mentions FiveM and has an additional transient-location signal.
+static void inspectServiceRegistry(Sink& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateSubkeys(root,5000)) {
+        if(out.stopped())break;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(root,name.c_str(),0,KEY_READ,
+            &service)!=ERROR_SUCCESS)continue;
+        const auto image=stringValue(service,L"ImagePath");
+        const auto dll=stringValue(service,L"ServiceDll");
+        if(isFiveM(image) && transient(image))
+            out.emit("FiveM Service Persistence Context",image,
+                "Service image path mentions FiveM and a transient location");
+        if(isFiveM(dll) && transient(dll))
+            out.emit("FiveM Service DLL Context",dll,
+                "Service DLL mentions FiveM and a transient location");
+        HKEY parameters=nullptr;
+        if(RegOpenKeyExW(service,L"Parameters",0,KEY_READ,
+            &parameters)==ERROR_SUCCESS) {
+            const auto serviceDll=stringValue(parameters,L"ServiceDll");
+            if(isFiveM(serviceDll) && transient(serviceDll))
+                out.emit("FiveM Service Parameters DLL",serviceDll,
+                    "Service Parameters\\ServiceDll references "
+                    "FiveM and a transient location");
+            RegCloseKey(parameters);
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(root);
+}
+
+// Cross-source review: compare process paths with references in
+// AppCompat and Explorer. Only exact normalized path matches count.
+static std::wstring normalized(const std::wstring& path) {
+    std::wstring result=lower(path);
+    for(auto& c:result)if(c==L'/')c=L'\\';
+    while(result.size()>3 && result.back()==L'\\')
+        result.pop_back();
+    return result;
+}
+static std::unordered_set<std::wstring> processPaths(
+    const std::vector<Process>& processes) {
+    std::unordered_set<std::wstring> paths;
+    for(const auto& proc:processes) {
+        if(proc.path.empty())continue;
+        paths.insert(normalized(proc.path));
+    }
+    return paths;
+}
+static void inspectActiveAppCompatOverlap(
+    Sink& out,const std::vector<Process>& processes) {
+    const auto active=processPaths(processes);
+    if(active.empty())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store",
+        0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateValues(key,2400)) {
+        if(out.stopped())break;
+        if(!relevant(name) || !active.count(normalized(name)))
+            continue;
+        if(transient(name))
+            out.emit("Active AppCompat Transient Match",name,
+                "Exact executable path appears in AppCompat and "
+                "the active process snapshot; location is transient");
+    }
+    RegCloseKey(key);
+}
+// File system inspection is limited to FiveM plugin directories and
+// does not traverse reparse-point directories.
+static void inspectFiveMPluginFiles(Sink& out) {
+    const auto local=environment(L"LOCALAPPDATA");
+    if(local.empty())return;
+    const fs::path base=fs::path(local)/L"FiveM";
+    const fs::path folders[]={
+        base/L"plugins",base/L"mods",
+        base/L"FiveM.app"/L"plugins",
+        base/L"FiveM.app"/L"mods"
+    };
+    size_t inspected=0;
+    std::unordered_set<std::wstring> seen;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    for(const auto& folder:folders) {
+        if(out.stopped() || inspected>=600)break;
+        std::error_code error;
+        if(!fs::is_directory(folder,error))continue;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && inspected<600 && !out.stopped()) {
+            if(it.depth()>6)it.disable_recursion_pending();
+            std::error_code entryError;
+            if(it->is_symlink(entryError))
+                it.disable_recursion_pending();
+            if(it->is_regular_file(entryError)) {
+                const auto path=it->path();
+                const auto key=normalized(path.wstring());
+                if(!seen.insert(key).second) {
+                    it.increment(error);continue;
+                }
+                ++inspected;
+                WIN32_FILE_ATTRIBUTE_DATA info{};
+                if(fileAttributes(path,info)) {
+                    const auto ext=lower(path.extension().wstring());
+                    const bool bin=ext==L".exe" || ext==L".dll" ||
+                        ext==L".asi" || ext==L".sys";
+                    if(bin && fileSize(info)==0)
+                        out.emit("FiveM Plugin Empty Binary",path.wstring(),
+                            "Plugin executable has zero-byte file size");
+                    if(bin && (info.dwFileAttributes&
+                        FILE_ATTRIBUTE_REPARSE_POINT))
+                        out.emit("FiveM Plugin Reparse File",path.wstring(),
+                            "Plugin executable is a reparse point");
+                    if(bin && (info.dwFileAttributes&
+                        FILE_ATTRIBUTE_HIDDEN) &&
+                       (info.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM))
+                        out.emit("FiveM Plugin Hidden System File",
+                            path.wstring(),
+                            "Plugin executable has hidden and system attributes");
+                    if(bin && timeValue(info.ftLastWriteTime)>
+                       timeValue(now)+day)
+                        out.emit("FiveM Plugin Future Timestamp",
+                            path.wstring(),
+                            "Plugin modification timestamp is "
+                            "more than 24 hours in the future");
+                }
+            }
+            it.increment(error);
+        }
+    }
+}
+// Read-only Windows security-policy context. A Defender exclusion
+// may be legitimate and is reported only when it names FiveM.
+static void inspectDefenderExclusions(Sink& out) {
+    const wchar_t* paths[]={
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths",
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Processes",
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Exclusions\\Paths",
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Exclusions\\Processes"
+    };
+    for(const auto* path:paths) {
+        if(out.stopped())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,path,0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        for(const auto& name:enumerateValues(key,1500)) {
+            if(out.stopped())break;
+            if(isFiveM(name))
+                out.emit("FiveM Defender Exclusion Context",name,
+                    "Defender exclusion references FiveM; "
+                    "exclusions can be administratively legitimate");
+        }
+        RegCloseKey(key);
+    }
+}
+
+// Network ownership is not a cheat signal. We only flag a FiveM-named
+// executable in a transient directory if it also owns a TCP endpoint.
+static void inspectTransientFiveMNetwork(
+    Sink& out,const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,std::wstring> candidates;
+    for(const auto& proc:processes)
+        if(isFiveM(proc.path) && transient(proc.path))
+            candidates[proc.pid]=proc.path;
+    if(candidates.empty())return;
+    DWORD size=0;
+    if(GetExtendedTcpTable(nullptr,&size,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=ERROR_INSUFFICIENT_BUFFER ||
+       size==0 || size>32*1024*1024)return;
+    std::vector<BYTE> bytes(size);
+    if(GetExtendedTcpTable(bytes.data(),&size,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=NO_ERROR)return;
+    const auto* table=reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(
+        bytes.data());
+    const size_t count=(std::min)(
+        static_cast<size_t>(table->dwNumEntries),size_t(16384));
+    for(size_t i=0;i<count && !out.stopped();++i) {
+        const auto& entry=table->table[i];
+        if(entry.dwState!=MIB_TCP_STATE_ESTAB)continue;
+        auto it=candidates.find(entry.dwOwningPid);
+        if(it==candidates.end())continue;
+        out.emit("FiveM Transient Network Process",it->second,
+            "FiveM-named executable in a transient directory "
+            "owns an established TCP connection");
+    }
+}
+// Validate timestamp and size metadata of a process image. This is
+// supplementary evidence and may be affected by file replacement.
+static void inspectProcessImages(Sink& out,
+                                 const std::vector<Process>& processes) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    for(const auto& proc:processes) {
+        if(out.stopped() || checked>=300)break;
+        if(!isFiveM(proc.path) && !transient(proc.path))continue;
+        const auto path=normalized(proc.path);
+        if(!seen.insert(path).second)continue;
+        ++checked;
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        if(!fileAttributes(proc.path,info))continue;
+        if(fileSize(info)==0)
+            out.emit("Active Executable Zero-Byte Image",proc.path,
+                "Active process image path currently has zero-byte file size");
+        if(timeValue(info.ftLastWriteTime)>timeValue(now)+day)
+            out.emit("Active Executable Future Timestamp",proc.path,
+                "Active process image modification time is "
+                "more than 24 hours in the future");
+        if((info.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN) &&
+           (info.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM))
+            out.emit("Active Executable Hidden System",proc.path,
+                "Active executable image has hidden and system attributes");
+    }
+}
+
+// Image File Execution Options can configure debugger redirection.
+// Report only FiveM-related subkeys with a configured debugger.
+static void inspectFiveMImageDebuggers(Sink& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateSubkeys(root,2500)) {
+        if(out.stopped())break;
+        if(!isFiveM(name))continue;
+        HKEY image=nullptr;
+        if(RegOpenKeyExW(root,name.c_str(),0,KEY_READ,
+            &image)!=ERROR_SUCCESS)continue;
+        const auto debugger=stringValue(image,L"Debugger");
+        if(!debugger.empty())
+            out.emit("FiveM IFEO Debugger Context",name,
+                "Image File Execution Options configures a debugger "
+                "for a FiveM-related image; administrative tools can do this");
+        const auto verifier=stringValue(image,L"VerifierDlls");
+        if(!verifier.empty())
+            out.emit("FiveM IFEO Verifier Context",name,
+                "Image File Execution Options configures verifier DLLs");
+        RegCloseKey(image);
+    }
+    RegCloseKey(root);
+}
+// SilentProcessExit may register monitoring actions for an image.
+// The presence of a monitor is not itself evidence of cheating.
+static void inspectFiveMSilentExit(Sink& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    for(const auto& name:enumerateSubkeys(root,1500)) {
+        if(out.stopped())break;
+        if(!isFiveM(name))continue;
+        HKEY image=nullptr;
+        if(RegOpenKeyExW(root,name.c_str(),0,KEY_READ,
+            &image)!=ERROR_SUCCESS)continue;
+        const auto monitor=stringValue(image,L"MonitorProcess");
+        if(!monitor.empty())
+            out.emit("FiveM Silent Exit Monitor",name,
+                "SilentProcessExit configures a monitor process "
+                "for a FiveM-related image");
+        RegCloseKey(image);
+    }
+    RegCloseKey(root);
+}
+static std::vector<Record> collect(
+    const std::vector<Process>& processes) {
+    Sink out;
+    inspectAppCompat(out);
+    if(!out.stopped())inspectMuiCache(out);
+    if(!out.stopped())inspectRecentApps(out);
+    if(!out.stopped())inspectOpenSaveMru(out);
+    if(!out.stopped())inspectStartupApproved(out);
+    if(!out.stopped())inspectRecentShortcuts(out);
+    if(!out.stopped())inspectJumpListMetadata(out);
+    if(!out.stopped())inspectStartupShortcuts(out);
+    if(!out.stopped())inspectWerFolders(out);
+    if(!out.stopped())inspectTaskDefinitions(out);
+    if(!out.stopped())inspectMountPoints(out);
+    if(!out.stopped())inspectTypedPaths(out);
+    if(!out.stopped())inspectRunMru(out);
+    if(!out.stopped())inspectInstalledApps(out);
+    if(!out.stopped())inspectServiceRegistry(out);
+    if(!out.stopped())inspectActiveAppCompatOverlap(out,processes);
+    if(!out.stopped())inspectFiveMPluginFiles(out);
+    if(!out.stopped())inspectDefenderExclusions(out);
+    if(!out.stopped())inspectTransientFiveMNetwork(out,processes);
+    if(!out.stopped())inspectProcessImages(out,processes);
+    if(!out.stopped())inspectFiveMImageDebuggers(out);
+    if(!out.stopped())inspectFiveMSilentExit(out);
+    return std::move(out.rows);
+}
+} // namespace artifact_review_v88
+
+// v8.9: bounded, read-only Windows executable and persistence review.
+// Dedicated to FiveM process context and accessible plugin files.
+// No signatures or malware verdicts are implied by these heuristics.
+// Findings are contextual; they never independently establish cheating.
+namespace specialized_v89 {
+struct Sink {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> keys;
+    size_t limit=700;
+    bool stop() const {return cancelRequested || rows.size()>=limit;}
+    void emit(const char* category,const std::wstring& subject,
+              const std::string& detail) {
+        if(stop() || subject.empty())return;
+        std::wstring key=subject+L"|";
+        for(const char* p=category;*p;++p)key.push_back((unsigned char)*p);
+        if(!keys.insert(key).second)return;
+        rows.push_back({category,utf8(subject),"REVIEW ONLY | "+detail});
+    }
+};
+static std::wstring low(std::wstring s) {
+    std::transform(s.begin(),s.end(),s.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return s;
+}
+static bool has(const std::wstring& s,const wchar_t* part) {
+    return s.find(part)!=std::wstring::npos;
+}
+static bool ends(const std::wstring& s,const wchar_t* end) {
+    size_t n=wcslen(end);
+    return s.size()>=n && s.compare(s.size()-n,n,end)==0;
+}
+static bool bounded(size_t start,size_t size,size_t length) {
+    return start<=length && size<=length-start;
+}
+static std::wstring getenvW(const wchar_t* key) {
+    DWORD n=GetEnvironmentVariableW(key,nullptr,0);
+    if(!n || n>32768)return {};
+    std::wstring out(n,L'\0');
+    DWORD used=GetEnvironmentVariableW(key,out.data(),n);
+    if(!used || used>=n)return {};
+    out.resize(used);
+    return out;
+}
+static bool isFiveM(const Process& process) {
+    auto name=low(fs::path(process.path).filename().wstring());
+    return name==L"fivem.exe" || name==L"fivem_gtaprocess.exe" ||
+           (name.rfind(L"fivem_",0)==0 && ends(name,L".exe"));
+}
+static bool regular(const fs::path& p) {
+    std::error_code e;
+    return fs::is_regular_file(p,e);
+}
+static bool directory(const fs::path& p) {
+    std::error_code e;
+    return fs::is_directory(p,e);
+}
+static bool binary(const fs::path& p) {
+    auto e=low(p.extension().wstring());
+    return e==L".exe" || e==L".dll" || e==L".asi" ||
+           e==L".sys" || e==L".scr";
+}
+static bool tempPath(const fs::path& p) {
+    auto s=low(p.wstring());
+    return has(s,L"\\temp\\") || has(s,L"\\recycle.bin\\") ||
+           has(s,L"\\server-cache\\") || has(s,L"\\server-cache-priv\\");
+}
+static bool userPath(const fs::path& p) {
+    auto s=low(p.wstring());
+    return has(s,L"\\appdata\\") || has(s,L"\\downloads\\") ||
+           has(s,L"\\users\\public\\") || tempPath(p);
+}
+static bool read(const fs::path& p,std::vector<unsigned char>& bytes,
+                 size_t cap=16*1024*1024) {
+    HANDLE f=CreateFileW(p.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(f==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(f,&size) || size.QuadPart<0 ||
+       static_cast<ULONGLONG>(size.QuadPart)>cap) {
+        CloseHandle(f);return false;
+    }
+    bytes.resize(static_cast<size_t>(size.QuadPart));
+    DWORD got=0;
+    BOOL ok=bytes.empty() || ReadFile(f,bytes.data(),
+        static_cast<DWORD>(bytes.size()),&got,nullptr);
+    CloseHandle(f);
+    if(!ok || got!=bytes.size())return false;
+    return true;
+}
+static bool metadata(const fs::path& p,WIN32_FILE_ATTRIBUTE_DATA& data) {
+    return GetFileAttributesExW(p.c_str(),
+        GetFileExInfoStandard,&data)!=FALSE;
+}
+static ULONGLONG fileSize(const WIN32_FILE_ATTRIBUTE_DATA& d) {
+    ULARGE_INTEGER u{};
+    u.LowPart=d.nFileSizeLow;
+    u.HighPart=d.nFileSizeHigh;
+    return u.QuadPart;
+}
+static ULONGLONG timeValue(FILETIME t) {
+    ULARGE_INTEGER u{};
+    u.LowPart=t.dwLowDateTime;
+    u.HighPart=t.dwHighDateTime;
+    return u.QuadPart;
+}
+static std::vector<fs::path> pluginFolders(
+    const std::vector<Process>& processes) {
+    std::vector<fs::path> result;
+    std::unordered_set<std::wstring> seen;
+    auto add=[&](const fs::path& p) {
+        if(!directory(p))return;
+        auto key=low(p.lexically_normal().wstring());
+        if(seen.insert(key).second)result.push_back(p);
+    };
+    auto local=getenvW(L"LOCALAPPDATA");
+    if(!local.empty()) {
+        fs::path f=fs::path(local)/L"FiveM";
+        add(f/L"plugins");
+        add(f/L"mods");
+        add(f/L"FiveM.app"/L"plugins");
+        add(f/L"FiveM.app"/L"mods");
+    }
+    for(const auto& p:processes) {
+        if(!isFiveM(p) || p.path.empty())continue;
+        auto dir=fs::path(p.path).parent_path();
+        add(dir/L"plugins");
+        add(dir/L"mods");
+    }
+    return result;
+}
+static std::vector<fs::path> candidates(
+    const std::vector<Process>& processes) {
+    std::vector<fs::path> files;
+    std::unordered_set<std::wstring> seen;
+    auto push=[&](const fs::path& p) {
+        if(!regular(p) || !binary(p))return;
+        auto key=low(p.lexically_normal().wstring());
+        if(seen.insert(key).second)files.push_back(p);
+    };
+    for(const auto& p:processes) {
+        if(isFiveM(p))push(p.path);
+    }
+    size_t count=0;
+    for(const auto& folder:pluginFolders(processes)) {
+        if(count>=240 || cancelRequested)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && count<240 && !cancelRequested) {
+            if(it.depth()>6)it.disable_recursion_pending();
+            std::error_code ec;
+            if(it->is_symlink(ec))it.disable_recursion_pending();
+            if(it->is_regular_file(ec) && binary(it->path())) {
+                ++count;
+                push(it->path());
+            }
+            it.increment(error);
+        }
+    }
+    return files;
+}
+
+// Strict PE reader: all RVA conversions are bounded by raw section data.
+struct PE {
+    std::vector<unsigned char> bytes;
+    IMAGE_FILE_HEADER file{};
+    std::vector<IMAGE_SECTION_HEADER> sections;
+    IMAGE_DATA_DIRECTORY directories[IMAGE_NUMBEROF_DIRECTORY_ENTRIES]{};
+    DWORD entry=0;
+    DWORD imageSize=0;
+    DWORD headerSize=0;
+    DWORD fileAlignment=0;
+    DWORD sectionAlignment=0;
+    ULONGLONG imageBase=0;
+    WORD dllCharacteristics=0;
+    bool x64=false;
+    bool valid=false;
+    bool parse(const fs::path& path) {
+        if(!read(path,bytes))return false;
+        if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return false;
+        IMAGE_DOS_HEADER dos{};
+        memcpy(&dos,bytes.data(),sizeof(dos));
+        if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+            return false;
+        size_t nt=static_cast<size_t>(dos.e_lfanew);
+        if(!bounded(nt,sizeof(DWORD)+sizeof(file)+sizeof(WORD),
+                    bytes.size()))return false;
+        DWORD magic=0;
+        memcpy(&magic,bytes.data()+nt,sizeof(magic));
+        if(magic!=IMAGE_NT_SIGNATURE)return false;
+        memcpy(&file,bytes.data()+nt+sizeof(DWORD),sizeof(file));
+        if(file.NumberOfSections>96)return false;
+        size_t opt=nt+sizeof(DWORD)+sizeof(file);
+        if(!bounded(opt,file.SizeOfOptionalHeader,bytes.size()))
+            return false;
+        WORD type=0;
+        memcpy(&type,bytes.data()+opt,sizeof(type));
+        if(type==IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+            if(file.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER64))return false;
+            IMAGE_OPTIONAL_HEADER64 o{};
+            memcpy(&o,bytes.data()+opt,sizeof(o));
+            entry=o.AddressOfEntryPoint;
+            imageSize=o.SizeOfImage;
+            headerSize=o.SizeOfHeaders;
+            fileAlignment=o.FileAlignment;
+            sectionAlignment=o.SectionAlignment;
+            imageBase=o.ImageBase;
+            dllCharacteristics=o.DllCharacteristics;
+            if(o.NumberOfRvaAndSizes>=IMAGE_NUMBEROF_DIRECTORY_ENTRIES)
+                memcpy(directories,o.DataDirectory,sizeof(directories));
+            x64=true;
+        }else if(type==IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+            if(file.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER32))return false;
+            IMAGE_OPTIONAL_HEADER32 o{};
+            memcpy(&o,bytes.data()+opt,sizeof(o));
+            entry=o.AddressOfEntryPoint;
+            imageSize=o.SizeOfImage;
+            headerSize=o.SizeOfHeaders;
+            fileAlignment=o.FileAlignment;
+            sectionAlignment=o.SectionAlignment;
+            imageBase=o.ImageBase;
+            dllCharacteristics=o.DllCharacteristics;
+            if(o.NumberOfRvaAndSizes>=IMAGE_NUMBEROF_DIRECTORY_ENTRIES)
+                memcpy(directories,o.DataDirectory,sizeof(directories));
+            x64=false;
+        }else return false;
+        size_t offset=opt+file.SizeOfOptionalHeader;
+        size_t bytesNeeded=static_cast<size_t>(
+            file.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+        if(!bounded(offset,bytesNeeded,bytes.size()))return false;
+        sections.resize(file.NumberOfSections);
+        if(bytesNeeded)
+            memcpy(sections.data(),bytes.data()+offset,bytesNeeded);
+        valid=true;
+        return true;
+    }
+    bool rva(DWORD address,size_t& offset,size_t count=1) const {
+        if(!valid)return false;
+        if(address<headerSize && bounded(address,count,bytes.size())) {
+            offset=address;return true;
+        }
+        for(const auto& s:sections) {
+            ULONGLONG begin=s.VirtualAddress;
+            ULONGLONG end=begin+(std::max)(
+                s.Misc.VirtualSize,s.SizeOfRawData);
+            if(address<begin || address>=end)continue;
+            ULONGLONG delta=address-begin;
+            if(delta>s.SizeOfRawData ||
+               count>s.SizeOfRawData-delta)return false;
+            ULONGLONG raw=static_cast<ULONGLONG>(
+                s.PointerToRawData)+delta;
+            if(raw>bytes.size() ||
+               count>bytes.size()-raw)return false;
+            offset=static_cast<size_t>(raw);
+            return true;
+        }
+        return false;
+    }
+    template<class T> bool readRva(DWORD address,T& value) const {
+        size_t offset=0;
+        if(!rva(address,offset,sizeof(T)))return false;
+        memcpy(&value,bytes.data()+offset,sizeof(T));
+        return true;
+    }
+    std::string text(DWORD address,size_t cap=260) const {
+        size_t offset=0;
+        if(!rva(address,offset))return {};
+        std::string value;
+        for(size_t i=offset;i<bytes.size() &&
+            value.size()<cap;++i) {
+            unsigned char c=bytes[i];
+            if(c==0)return value;
+            if(c<32 || c>126)return {};
+            value.push_back(static_cast<char>(c));
+        }
+        return {};
+    }
+};
+static double shannon(const unsigned char* bytes,size_t size) {
+    if(!size)return 0;
+    std::array<size_t,256> freq{};
+    for(size_t i=0;i<size;++i)++freq[bytes[i]];
+    double result=0;
+    for(size_t n:freq) {
+        if(!n)continue;
+        double p=static_cast<double>(n)/size;
+        result-=p*std::log2(p);
+    }
+    return result;
+}
+static void inspectHeader(Sink& out,const fs::path& path,
+                          const PE& pe) {
+    if(!pe.file.NumberOfSections)
+        out.emit("Deep PE Empty Section Table",path.wstring(),
+            "Image declares zero sections");
+    if(pe.headerSize>pe.bytes.size())
+        out.emit("Deep PE Header Beyond File",path.wstring(),
+            "SizeOfHeaders exceeds the actual file length");
+    if(pe.imageSize==0)
+        out.emit("Deep PE Zero Image Size",path.wstring(),
+            "SizeOfImage is zero");
+    if(pe.fileAlignment==0 ||
+       (pe.fileAlignment&(pe.fileAlignment-1))!=0)
+        out.emit("Deep PE File Alignment",path.wstring(),
+            "FileAlignment is zero or not a power of two");
+    if(pe.sectionAlignment==0 ||
+       (pe.sectionAlignment&(pe.sectionAlignment-1))!=0)
+        out.emit("Deep PE Section Alignment",path.wstring(),
+            "SectionAlignment is zero or not a power of two");
+    if(pe.sectionAlignment && pe.fileAlignment &&
+       pe.sectionAlignment<pe.fileAlignment)
+        out.emit("Deep PE Alignment Order",path.wstring(),
+            "SectionAlignment is smaller than FileAlignment");
+    if(pe.entry) {
+        size_t off=0;
+        if(!pe.rva(pe.entry,off))
+            out.emit("Deep PE Unmapped Entry Point",path.wstring(),
+                "Entry point does not resolve to raw image bytes");
+    }
+    if(pe.file.NumberOfSections>48)
+        out.emit("Deep PE Large Section Count",path.wstring(),
+            "Unusually large section count; may be legitimate");
+    if(pe.file.Machine!=IMAGE_FILE_MACHINE_I386 &&
+       pe.file.Machine!=IMAGE_FILE_MACHINE_AMD64 &&
+       pe.file.Machine!=IMAGE_FILE_MACHINE_ARM64)
+        out.emit("Deep PE Uncommon Machine",path.wstring(),
+            "PE declares an uncommon machine architecture");
+    if(pe.x64 && pe.file.Machine==IMAGE_FILE_MACHINE_I386)
+        out.emit("Deep PE Architecture Conflict",path.wstring(),
+            "PE32+ optional header conflicts with x86 machine type");
+    if(!pe.x64 && pe.file.Machine==IMAGE_FILE_MACHINE_AMD64)
+        out.emit("Deep PE Architecture Conflict",path.wstring(),
+            "PE32 optional header conflicts with x64 machine type");
+    if((pe.file.Characteristics&IMAGE_FILE_DLL) &&
+       low(path.extension().wstring())==L".exe")
+        out.emit("Deep PE DLL Flag in EXE",path.wstring(),
+            "DLL characteristic set on an EXE-named file");
+    if(!(pe.file.Characteristics&IMAGE_FILE_DLL) &&
+       low(path.extension().wstring())==L".dll")
+        out.emit("Deep PE DLL Flag Missing",path.wstring(),
+            "DLL-named file does not declare DLL characteristic");
+}
+static void inspectSections(Sink& out,const fs::path& path,
+                            const PE& pe) {
+    size_t writableExecutable=0,overlap=0;
+    size_t outOfFile=0,highEntropy=0;
+    size_t executeNoRead=0,zeroRawExecutable=0;
+    size_t unusualVirtual=0,unnamed=0;
+    for(size_t i=0;i<pe.sections.size();++i) {
+        const auto& s=pe.sections[i];
+        if((s.Characteristics&IMAGE_SCN_MEM_WRITE) &&
+           (s.Characteristics&IMAGE_SCN_MEM_EXECUTE))
+            ++writableExecutable;
+        if((s.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           !(s.Characteristics&IMAGE_SCN_MEM_READ))
+            ++executeNoRead;
+        if((s.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           !s.SizeOfRawData)++zeroRawExecutable;
+        if(s.Misc.VirtualSize>0x40000000U)++unusualVirtual;
+        if(!s.Name[0])++unnamed;
+        if(s.SizeOfRawData) {
+            size_t start=s.PointerToRawData;
+            if(!bounded(start,s.SizeOfRawData,pe.bytes.size()))
+                ++outOfFile;
+            else if(s.SizeOfRawData>=4096 &&
+                    s.SizeOfRawData<=2*1024*1024) {
+                double value=shannon(pe.bytes.data()+start,
+                                     s.SizeOfRawData);
+                if(value>=7.9)++highEntropy;
+            }
+        }
+        for(size_t j=0;j<i;++j) {
+            const auto& other=pe.sections[j];
+            ULONGLONG a=s.PointerToRawData;
+            ULONGLONG b=other.PointerToRawData;
+            if(s.SizeOfRawData && other.SizeOfRawData &&
+               a<b+other.SizeOfRawData &&
+               b<a+s.SizeOfRawData)++overlap;
+        }
+    }
+    if(writableExecutable)
+        out.emit("Deep PE WX Section",path.wstring(),
+            std::to_string(writableExecutable)+
+            " sections permit writing and executing");
+    if(overlap)
+        out.emit("Deep PE Overlapping Raw Sections",path.wstring(),
+            std::to_string(overlap)+" overlapping section pairs");
+    if(outOfFile)
+        out.emit("Deep PE Section Beyond EOF",path.wstring(),
+            std::to_string(outOfFile)+" section ranges exceed file size");
+    if(highEntropy)
+        out.emit("Deep PE High Entropy Sections",path.wstring(),
+            std::to_string(highEntropy)+
+            " sections have high entropy; packing can be legitimate");
+    if(executeNoRead)
+        out.emit("Deep PE Execute-Only Sections",path.wstring(),
+            std::to_string(executeNoRead)+" sections execute without read");
+    if(zeroRawExecutable)
+        out.emit("Deep PE Empty Executable Section",path.wstring(),
+            std::to_string(zeroRawExecutable)+
+            " executable sections have no raw data");
+    if(unusualVirtual)
+        out.emit("Deep PE Oversized Virtual Section",path.wstring(),
+            std::to_string(unusualVirtual)+
+            " sections exceed 1 GiB virtual size");
+    if(unnamed)
+        out.emit("Deep PE Unnamed Section",path.wstring(),
+            std::to_string(unnamed)+" sections have empty names");
+}
+
+// Data directory validation includes resource, relocation, debug, TLS,
+// import, export, exception, and CLR metadata. It does not execute code.
+static void inspectDirectories(Sink& out,const fs::path& path,
+                               const PE& pe) {
+    static const char* labels[]={
+        "Export","Import","Resource","Exception","Security",
+        "Base relocation","Debug","Architecture","Global pointer",
+        "TLS","Load config","Bound import","Import address table",
+        "Delay import","CLR","Reserved"
+    };
+    size_t invalid=0,zeroSize=0;
+    for(size_t i=0;i<IMAGE_NUMBEROF_DIRECTORY_ENTRIES;++i) {
+        const auto& d=pe.directories[i];
+        if(!d.VirtualAddress && !d.Size)continue;
+        if(!d.VirtualAddress || !d.Size) {
+            ++zeroSize;continue;
+        }
+        if(i==IMAGE_DIRECTORY_ENTRY_SECURITY) {
+            // Certificate table uses a file offset, not an RVA.
+            if(!bounded(d.VirtualAddress,d.Size,pe.bytes.size()))
+                ++invalid;
+            continue;
+        }
+        size_t offset=0;
+        if(!pe.rva(d.VirtualAddress,offset)) {
+            ++invalid;
+            continue;
+        }
+        if(d.Size>32*1024*1024)
+            out.emit("Deep PE Large Data Directory",path.wstring(),
+                std::string(labels[i])+
+                " directory declares more than 32 MiB");
+    }
+    if(invalid)
+        out.emit("Deep PE Invalid Data Directory",path.wstring(),
+            std::to_string(invalid)+" directory pointers are invalid");
+    if(zeroSize)
+        out.emit("Deep PE Partial Data Directory",path.wstring(),
+            std::to_string(zeroSize)+
+            " directory entries have only RVA or only size");
+}
+static void inspectTLS(Sink& out,const fs::path& path,const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_TLS];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    if(pe.x64) {
+        IMAGE_TLS_DIRECTORY64 tls{};
+        if(!pe.readRva(dir.VirtualAddress,tls)) {
+            out.emit("Deep PE TLS Directory",path.wstring(),
+                "TLS directory does not fit available raw data");
+            return;
+        }
+        if(tls.AddressOfCallBacks &&
+           tls.AddressOfCallBacks<pe.imageBase)
+            out.emit("Deep PE TLS Callback Address",path.wstring(),
+                "TLS callback pointer is below the image base");
+    }else {
+        IMAGE_TLS_DIRECTORY32 tls{};
+        if(!pe.readRva(dir.VirtualAddress,tls)) {
+            out.emit("Deep PE TLS Directory",path.wstring(),
+                "TLS directory does not fit available raw data");
+            return;
+        }
+        if(tls.AddressOfCallBacks &&
+           tls.AddressOfCallBacks<pe.imageBase)
+            out.emit("Deep PE TLS Callback Address",path.wstring(),
+                "TLS callback pointer is below the image base");
+    }
+}
+static void inspectCLR(Sink& out,const fs::path& path,const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR];
+    if(!dir.VirtualAddress && !dir.Size)return;
+    if(!dir.VirtualAddress || dir.Size<sizeof(IMAGE_COR20_HEADER)) {
+        out.emit("Deep PE CLR Directory",path.wstring(),
+            "CLR metadata directory is too small or missing");
+        return;
+    }
+    IMAGE_COR20_HEADER clr{};
+    if(!pe.readRva(dir.VirtualAddress,clr)) {
+        out.emit("Deep PE CLR Header",path.wstring(),
+            "CLR header cannot be read from image");
+        return;
+    }
+    if(clr.cb<sizeof(IMAGE_COR20_HEADER))
+        out.emit("Deep PE CLR Header Length",path.wstring(),
+            "CLR header reports a truncated structure");
+    if(!clr.MetaData.VirtualAddress || !clr.MetaData.Size)
+        out.emit("Deep PE CLR Metadata",path.wstring(),
+            "CLR header does not provide a valid metadata directory");
+    else {
+        size_t offset=0;
+        if(!pe.rva(clr.MetaData.VirtualAddress,offset))
+            out.emit("Deep PE CLR Metadata RVA",path.wstring(),
+                "CLR metadata RVA cannot be resolved");
+    }
+}
+static void inspectDebugDirectory(Sink& out,const fs::path& path,
+                                  const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    if(dir.Size%sizeof(IMAGE_DEBUG_DIRECTORY)!=0)
+        out.emit("Deep PE Debug Directory Length",path.wstring(),
+            "Debug directory size is not a whole number of entries");
+    size_t count=(std::min)(
+        size_t(dir.Size/sizeof(IMAGE_DEBUG_DIRECTORY)),size_t(128));
+    size_t invalid=0;
+    for(size_t i=0;i<count;++i) {
+        IMAGE_DEBUG_DIRECTORY entry{};
+        DWORD address=dir.VirtualAddress+
+            static_cast<DWORD>(i*sizeof(IMAGE_DEBUG_DIRECTORY));
+        if(!pe.readRva(address,entry)) {
+            ++invalid;break;
+        }
+        if(entry.SizeOfData &&
+           !bounded(entry.PointerToRawData,entry.SizeOfData,
+                    pe.bytes.size()))
+            ++invalid;
+    }
+    if(invalid)
+        out.emit("Deep PE Debug Entry Bounds",path.wstring(),
+            std::to_string(invalid)+" debug entries have invalid offsets");
+}
+static void inspectRelocations(Sink& out,const fs::path& path,
+                               const PE& pe) {
+    const auto& dir=pe.directories[
+        IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    size_t offset=0;
+    if(!pe.rva(dir.VirtualAddress,offset))return;
+    size_t remaining=(std::min)(size_t(dir.Size),
+        pe.bytes.size()-offset);
+    size_t blocks=0,invalid=0;
+    while(remaining>=sizeof(IMAGE_BASE_RELOCATION) &&
+          blocks<4096) {
+        IMAGE_BASE_RELOCATION block{};
+        memcpy(&block,pe.bytes.data()+offset,sizeof(block));
+        if(block.SizeOfBlock<sizeof(block) ||
+           block.SizeOfBlock>remaining) {
+            ++invalid;break;
+        }
+        if((block.SizeOfBlock-sizeof(block))%sizeof(WORD)!=0)
+            ++invalid;
+        ++blocks;
+        offset+=block.SizeOfBlock;
+        remaining-=block.SizeOfBlock;
+    }
+    if(invalid)
+        out.emit("Deep PE Relocation Blocks",path.wstring(),
+            std::to_string(invalid)+" malformed relocation blocks");
+}
+static void inspectExports(Sink& out,const fs::path& path,
+                           const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    IMAGE_EXPORT_DIRECTORY exports{};
+    if(!pe.readRva(dir.VirtualAddress,exports)) {
+        out.emit("Deep PE Export Directory",path.wstring(),
+            "Export directory cannot be resolved");
+        return;
+    }
+    if(exports.NumberOfFunctions>65536 ||
+       exports.NumberOfNames>65536)
+        out.emit("Deep PE Export Count",path.wstring(),
+            "Export table declares an unusually large count");
+    if(exports.NumberOfNames>exports.NumberOfFunctions)
+        out.emit("Deep PE Export Name Count",path.wstring(),
+            "Named exports exceed total function exports");
+    size_t offset=0;
+    if(exports.NumberOfFunctions &&
+       !pe.rva(exports.AddressOfFunctions,offset,sizeof(DWORD)))
+        out.emit("Deep PE Export Address Table",path.wstring(),
+            "Export address table cannot be resolved");
+    if(exports.NumberOfNames &&
+       !pe.rva(exports.AddressOfNames,offset,sizeof(DWORD)))
+        out.emit("Deep PE Export Name Table",path.wstring(),
+            "Export name table cannot be resolved");
+}
+static void inspectImports(Sink& out,const fs::path& path,
+                           const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    size_t count=0,invalid=0,empty=0;
+    for(size_t i=0;i<512;++i) {
+        IMAGE_IMPORT_DESCRIPTOR item{};
+        DWORD rva=dir.VirtualAddress+
+            static_cast<DWORD>(i*sizeof(item));
+        if(!pe.readRva(rva,item)) {
+            ++invalid;break;
+        }
+        if(!item.Name && !item.FirstThunk &&
+           !item.OriginalFirstThunk)break;
+        ++count;
+        auto name=pe.text(item.Name,256);
+        if(name.empty())++empty;
+        if(item.FirstThunk) {
+            size_t offset=0;
+            if(!pe.rva(item.FirstThunk,offset,
+                       pe.x64?sizeof(ULONGLONG):sizeof(DWORD)))
+                ++invalid;
+        }
+    }
+    if(invalid)
+        out.emit("Deep PE Import Table Bounds",path.wstring(),
+            std::to_string(invalid)+" unresolved import structures");
+    if(empty)
+        out.emit("Deep PE Import Name",path.wstring(),
+            std::to_string(empty)+" import DLL names are unreadable");
+    if(count>=512)
+        out.emit("Deep PE Import Table Limit",path.wstring(),
+            "Import table reached the bounded parser limit");
+}
+static void inspectSecurity(Sink& out,const fs::path& path,
+                            const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_SECURITY];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    if(!bounded(dir.VirtualAddress,dir.Size,pe.bytes.size())) {
+        out.emit("Deep PE Certificate Table Bounds",path.wstring(),
+            "Certificate table points outside the image file");
+        return;
+    }
+    if(dir.Size<sizeof(WIN_CERTIFICATE))
+        out.emit("Deep PE Certificate Table Length",path.wstring(),
+            "Certificate table is smaller than a WIN_CERTIFICATE");
+    if(dir.VirtualAddress%8)
+        out.emit("Deep PE Certificate Alignment",path.wstring(),
+            "Certificate table offset is not eight-byte aligned");
+}
+static void inspectLoadConfig(Sink& out,const fs::path& path,
+                              const PE& pe) {
+    const auto& dir=pe.directories[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
+    if(!dir.VirtualAddress || !dir.Size)return;
+    DWORD declared=0;
+    if(!pe.readRva(dir.VirtualAddress,declared)) {
+        out.emit("Deep PE Load Config Bounds",path.wstring(),
+            "Load config header cannot be resolved");
+        return;
+    }
+    if(declared<sizeof(DWORD))
+        out.emit("Deep PE Load Config Size",path.wstring(),
+            "Load config header declares a truncated structure");
+    if(declared>dir.Size+4096)
+        out.emit("Deep PE Load Config Mismatch",path.wstring(),
+            "Load config structure is much larger than directory size");
+}
+static void inspectPE(Sink& out,const fs::path& path) {
+    if(out.stop())return;
+    PE pe;
+    if(!pe.parse(path))return;
+    inspectHeader(out,path,pe);
+    inspectSections(out,path,pe);
+    inspectDirectories(out,path,pe);
+    inspectTLS(out,path,pe);
+    inspectCLR(out,path,pe);
+    inspectDebugDirectory(out,path,pe);
+    inspectRelocations(out,path,pe);
+    inspectExports(out,path,pe);
+    inspectImports(out,path,pe);
+    inspectSecurity(out,path,pe);
+    inspectLoadConfig(out,path,pe);
+}
+
+// File identity metadata can distinguish a changed file from a mere
+// filename match. The collector does not store file contents.
+struct Identity {
+    DWORD volume=0;
+    ULONGLONG index=0;
+    DWORD links=0;
+    DWORD attributes=0;
+    ULONGLONG size=0;
+    ULONGLONG created=0;
+    ULONGLONG modified=0;
+    bool available=false;
+};
+static Identity identify(const fs::path& path) {
+    Identity result;
+    HANDLE file=CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return result;
+    BY_HANDLE_FILE_INFORMATION data{};
+    if(GetFileInformationByHandle(file,&data)) {
+        result.available=true;
+        result.volume=data.dwVolumeSerialNumber;
+        result.index=(static_cast<ULONGLONG>(
+            data.nFileIndexHigh)<<32)|data.nFileIndexLow;
+        result.links=data.nNumberOfLinks;
+        result.attributes=data.dwFileAttributes;
+        result.size=(static_cast<ULONGLONG>(
+            data.nFileSizeHigh)<<32)|data.nFileSizeLow;
+        result.created=timeValue(data.ftCreationTime);
+        result.modified=timeValue(data.ftLastWriteTime);
+    }
+    CloseHandle(file);
+    return result;
+}
+static void inspectIdentity(Sink& out,const fs::path& path) {
+    auto id=identify(path);
+    if(!id.available)return;
+    if(id.size==0)
+        out.emit("Deep Empty Executable",path.wstring(),
+            "Executable file currently has zero bytes");
+    if(id.attributes&FILE_ATTRIBUTE_REPARSE_POINT)
+        out.emit("Deep Reparse Executable",path.wstring(),
+            "Executable is a reparse point; inspect its resolved target");
+    if((id.attributes&FILE_ATTRIBUTE_HIDDEN) &&
+       (id.attributes&FILE_ATTRIBUTE_SYSTEM))
+        out.emit("Deep Hidden System Executable",path.wstring(),
+            "Executable has both hidden and system attributes");
+    if(id.links>8)
+        out.emit("Deep High Hardlink Count",path.wstring(),
+            "Executable has more than eight hard links");
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    auto current=timeValue(now);
+    if(id.created>current+day)
+        out.emit("Deep Future Creation Time",path.wstring(),
+            "Creation timestamp is more than one day in the future");
+    if(id.modified>current+day)
+        out.emit("Deep Future Modification Time",path.wstring(),
+            "Modification timestamp is more than one day in the future");
+    if(id.created && id.modified &&
+       id.created>id.modified+30*day)
+        out.emit("Deep Creation After Modification",path.wstring(),
+            "Creation timestamp is more than 30 days after modification");
+}
+static void inspectFileNames(Sink& out,const fs::path& path) {
+    const auto name=low(path.filename().wstring());
+    if(has(name,L".png.exe") || has(name,L".jpg.exe") ||
+       has(name,L".pdf.exe") || has(name,L".txt.exe") ||
+       has(name,L".zip.exe") || has(name,L".log.exe"))
+        out.emit("Deep Double Extension",path.wstring(),
+            "Filename contains a document or image extension before EXE");
+    if(has(name,L".dll.exe") || has(name,L".exe.dll"))
+        out.emit("Deep Embedded Executable Extension",path.wstring(),
+            "Filename contains more than one executable extension");
+    if(tempPath(path))
+        out.emit("Deep Transient Executable Context",path.wstring(),
+            "Executable is located in a transient directory");
+}
+static void inspectStreams(Sink& out,const fs::path& path) {
+    WIN32_FIND_STREAM_DATA stream{};
+    HANDLE handle=FindFirstStreamW(path.c_str(),
+        FindStreamInfoStandard,&stream,0);
+    if(handle==INVALID_HANDLE_VALUE)return;
+    size_t count=0;
+    do {
+        if(out.stop() || ++count>32)break;
+        auto name=low(stream.cStreamName);
+        if(name==L"::$data" ||
+           name==L":zone.identifier:$data")continue;
+        if(has(name,L".exe") || has(name,L".dll") ||
+           has(name,L".ps1") || has(name,L".cmd"))
+            out.emit("Deep Executable Stream Name",
+                path.wstring()+stream.cStreamName,
+                "Alternate stream name contains an executable extension");
+    }while(FindNextStreamW(handle,&stream));
+    FindClose(handle);
+}
+static void inspectOrigin(Sink& out,const fs::path& path) {
+    auto stream=path.wstring()+L":Zone.Identifier";
+    HANDLE file=CreateFileW(stream.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return;
+    std::array<char,4096> bytes{};
+    DWORD read=0;
+    BOOL ok=ReadFile(file,bytes.data(),
+        static_cast<DWORD>(bytes.size()-1),&read,nullptr);
+    CloseHandle(file);
+    if(!ok)return;
+    std::string text(bytes.data(),read);
+    if(text.find("ZoneId=3")!=std::string::npos ||
+       text.find("ZoneId=4")!=std::string::npos)
+        out.emit("Deep Internet-Origin Executable",path.wstring(),
+            "File has Mark-of-the-Web Internet or Restricted zone");
+}
+static void inspectAuthenticode(Sink& out,const fs::path& path) {
+    WINTRUST_FILE_INFO info{};
+    info.cbStruct=sizeof(info);
+    const auto text=path.wstring();
+    info.pcwszFilePath=text.c_str();
+    WINTRUST_DATA data{};
+    data.cbStruct=sizeof(data);
+    data.dwUIChoice=WTD_UI_NONE;
+    data.fdwRevocationChecks=WTD_REVOKE_NONE;
+    data.dwUnionChoice=WTD_CHOICE_FILE;
+    data.pFile=&info;
+    data.dwStateAction=WTD_STATEACTION_IGNORE;
+    data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL;
+    GUID action=WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    LONG status=WinVerifyTrust(nullptr,&action,&data);
+    if(status==TRUST_E_BAD_DIGEST)
+        out.emit("Deep Signature Digest Mismatch",path.wstring(),
+            "Local Authenticode signature digest verification failed");
+    else if(status==TRUST_E_NOSIGNATURE)
+        out.emit("Deep Unsigned Executable Context",path.wstring(),
+            "No Authenticode signature; unsigned software may be legitimate");
+}
+static void inspectFiles(Sink& out,
+                         const std::vector<Process>& processes) {
+    auto files=candidates(processes);
+    size_t inspected=0;
+    for(const auto& path:files) {
+        if(out.stop() || inspected>=260)break;
+        ++inspected;
+        inspectFileNames(out,path);
+        inspectIdentity(out,path);
+        inspectStreams(out,path);
+        inspectOrigin(out,path);
+        inspectPE(out,path);
+        if(inspected<=100)inspectAuthenticode(out,path);
+    }
+}
+
+// Process relationship checks use the live snapshot and are only
+// applicable when FiveM is running. PIDs may be reused by Windows.
+static void inspectProcessTree(Sink& out,
+                               const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& p:processes)byPid[p.pid]=&p;
+    for(const auto& p:processes) {
+        if(out.stop() || !isFiveM(p))continue;
+        auto it=byPid.find(p.parent);
+        if(it==byPid.end())continue;
+        const auto& parent=*it->second;
+        if(tempPath(parent.path))
+            out.emit("Deep FiveM Transient Parent",p.path,
+                "FiveM parent process runs from a transient directory");
+        if(has(low(parent.path),L"\\downloads\\"))
+            out.emit("Deep FiveM Downloaded Parent",p.path,
+                "FiveM parent process runs from Downloads");
+        if(parent.pid==p.pid)
+            out.emit("Deep FiveM Parent PID Anomaly",p.path,
+                "Reported parent PID equals the current PID");
+    }
+}
+static void inspectModules(Sink& out,
+                           const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& p:processes) {
+        if(out.stop() || checked>=12)break;
+        if(!isFiveM(p))continue;
+        ++checked;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,p.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W m{};
+        m.dwSize=sizeof(m);
+        if(Module32FirstW(snapshot,&m)) {
+            size_t count=0;
+            do {
+                if(out.stop() || count++>=2048)break;
+                fs::path path(m.szExePath);
+                if(tempPath(path))
+                    out.emit("Deep FiveM Transient Module",path.wstring(),
+                        "Module mapped into FiveM from transient storage");
+                if(has(low(path.wstring()),L"\\downloads\\"))
+                    out.emit("Deep FiveM Downloaded Module",path.wstring(),
+                        "Module mapped into FiveM from Downloads");
+                auto id=identify(path);
+                if(id.available &&
+                   (id.attributes&FILE_ATTRIBUTE_REPARSE_POINT))
+                    out.emit("Deep FiveM Reparse Module",path.wstring(),
+                        "Loaded module path has a reparse attribute");
+                if(id.available && id.size==0)
+                    out.emit("Deep FiveM Empty Module File",path.wstring(),
+                        "Loaded module file currently has zero bytes");
+            }while(Module32NextW(snapshot,&m));
+        }
+        CloseHandle(snapshot);
+    }
+}
+// Query executable memory protections without reading memory contents.
+// Private executable pages are not proof of injection or malicious code.
+static void inspectMemoryRegions(Sink& out,
+                                 const std::vector<Process>& processes) {
+    size_t examined=0;
+    for(const auto& p:processes) {
+        if(out.stop() || examined>=8)break;
+        if(!isFiveM(p))continue;
+        ++examined;
+        HANDLE process=OpenProcess(
+            PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
+            FALSE,p.pid);
+        if(!process)continue;
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        uintptr_t cursor=reinterpret_cast<uintptr_t>(
+            system.lpMinimumApplicationAddress);
+        uintptr_t maximum=reinterpret_cast<uintptr_t>(
+            system.lpMaximumApplicationAddress);
+        size_t inspected=0,privateExecutable=0;
+        size_t writableExecutable=0;
+        while(cursor<maximum && inspected<16384 && !out.stop()) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            SIZE_T got=VirtualQueryEx(process,
+                reinterpret_cast<LPCVOID>(cursor),
+                &mbi,sizeof(mbi));
+            if(!got)break;
+            ++inspected;
+            const bool committed=mbi.State==MEM_COMMIT;
+            const bool executable=mbi.Protect==PAGE_EXECUTE ||
+                mbi.Protect==PAGE_EXECUTE_READ ||
+                mbi.Protect==PAGE_EXECUTE_READWRITE ||
+                mbi.Protect==PAGE_EXECUTE_WRITECOPY;
+            const bool writable=mbi.Protect==PAGE_EXECUTE_READWRITE ||
+                mbi.Protect==PAGE_EXECUTE_WRITECOPY;
+            if(committed && executable && mbi.Type==MEM_PRIVATE) {
+                ++privateExecutable;
+                if(writable)++writableExecutable;
+            }
+            uintptr_t base=reinterpret_cast<uintptr_t>(
+                mbi.BaseAddress);
+            if(mbi.RegionSize>maximum-base)break;
+            uintptr_t next=base+mbi.RegionSize;
+            if(next<=cursor)break;
+            cursor=next;
+        }
+        CloseHandle(process);
+        if(privateExecutable>=32)
+            out.emit("Deep FiveM Private Executable Regions",p.path,
+                std::to_string(privateExecutable)+
+                " private executable memory regions; JITs may be legitimate");
+        if(writableExecutable>=8)
+            out.emit("Deep FiveM Writable Executable Regions",p.path,
+                std::to_string(writableExecutable)+
+                " private writable-executable regions; context is required");
+    }
+}
+// Read a bounded set of persistence registry values. The code never
+// modifies the Registry and never executes the stored command strings.
+static void inspectRegistryValues(Sink& out,HKEY hive,
+                                  const wchar_t* subkey,
+                                  const char* source) {
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(800));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stop();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        DWORD bytes=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&n,nullptr,
+            &type,data.data(),&bytes)!=ERROR_SUCCESS ||
+           (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+           bytes<sizeof(wchar_t) || bytes%sizeof(wchar_t))
+            continue;
+        const wchar_t* raw=
+            reinterpret_cast<const wchar_t*>(data.data());
+        size_t length=0;
+        while(length<bytes/sizeof(wchar_t) && raw[length])++length;
+        std::wstring command(raw,length);
+        auto normalized=low(command);
+        const bool related=has(normalized,L"fivem") ||
+                           has(normalized,L"citizenfx");
+        if(!related)continue;
+        if(has(normalized,L"\\temp\\") ||
+           has(normalized,L"\\recycle.bin\\"))
+            out.emit("Deep FiveM Persistence Path",command,
+                std::string(source)+
+                " references FiveM and a transient path");
+        if(has(normalized,L"-encodedcommand") ||
+           has(normalized,L" -enc "))
+            out.emit("Deep FiveM Encoded Persistence",command,
+                std::string(source)+
+                " references FiveM and encoded PowerShell arguments");
+        if(has(normalized,L"rundll32") &&
+           has(normalized,L"\\appdata\\"))
+            out.emit("Deep FiveM Rundll32 Persistence",command,
+                std::string(source)+
+                " uses rundll32 with a user-profile path");
+    }
+    RegCloseKey(key);
+}
+static void inspectPersistence(Sink& out) {
+    struct Location {
+        HKEY hive;
+        const wchar_t* key;
+        const char* name;
+    };
+    const Location locations[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "HKCU Run"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "HKCU RunOnce"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "HKLM Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "HKLM RunOnce"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "HKCU policy Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "HKLM policy Run"}
+    };
+    for(const auto& location:locations) {
+        if(out.stop())break;
+        inspectRegistryValues(out,location.hive,location.key,
+                              location.name);
+    }
+}
+
+// Task Scheduler XML files are read as inert text. The lightweight
+// extractor handles common tags only and does not claim XML completeness.
+static std::wstring extractTag(const std::wstring& text,
+                               const wchar_t* name) {
+    std::wstring start=L"<";
+    start+=name;
+    start+=L">";
+    std::wstring end=L"</";
+    end+=name;
+    end+=L">";
+    auto a=text.find(start);
+    if(a==std::wstring::npos)return {};
+    a+=start.size();
+    auto b=text.find(end,a);
+    if(b==std::wstring::npos || b-a>8192)return {};
+    return text.substr(a,b-a);
+}
+static std::wstring decodeText(
+    const std::vector<unsigned char>& bytes) {
+    if(bytes.empty())return {};
+    if(bytes.size()>=2 && bytes[0]==0xff && bytes[1]==0xfe) {
+        size_t count=(bytes.size()-2)/sizeof(wchar_t);
+        std::wstring value(count,L'\0');
+        if(count)memcpy(value.data(),bytes.data()+2,
+                        count*sizeof(wchar_t));
+        return value;
+    }
+    int needed=MultiByteToWideChar(CP_UTF8,0,
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<int>(bytes.size()),nullptr,0);
+    if(needed<=0)return {};
+    std::wstring result(needed,L'\0');
+    MultiByteToWideChar(CP_UTF8,0,
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<int>(bytes.size()),result.data(),needed);
+    return result;
+}
+static void inspectTasks(Sink& out) {
+    auto windows=getenvW(L"WINDIR");
+    if(windows.empty())return;
+    fs::path root=fs::path(windows)/L"System32"/L"Tasks";
+    if(!directory(root))return;
+    std::error_code error;
+    fs::recursive_directory_iterator it(root,
+        fs::directory_options::skip_permission_denied,error),end;
+    size_t scanned=0;
+    while(!error && it!=end && scanned<1800 && !out.stop()) {
+        if(it.depth()>12)it.disable_recursion_pending();
+        std::error_code ec;
+        if(it->is_symlink(ec))it.disable_recursion_pending();
+        if(it->is_regular_file(ec)) {
+            ++scanned;
+            std::vector<unsigned char> bytes;
+            if(read(it->path(),bytes,512*1024)) {
+                auto xml=decodeText(bytes);
+                auto command=extractTag(xml,L"Command");
+                auto arguments=extractTag(xml,L"Arguments");
+                auto normalized=low(command+L" "+arguments);
+                if(has(normalized,L"fivem") ||
+                   has(normalized,L"citizenfx")) {
+                    if(has(normalized,L"\\temp\\") ||
+                       has(normalized,L"\\recycle.bin\\"))
+                        out.emit("Deep FiveM Scheduled Task Path",
+                            it->path().wstring(),
+                            "Task references FiveM and a transient directory");
+                    if(has(normalized,L"-encodedcommand") ||
+                       has(normalized,L" -enc "))
+                        out.emit("Deep FiveM Encoded Task",
+                            it->path().wstring(),
+                            "Task references FiveM and encoded PowerShell");
+                }
+            }
+        }
+        it.increment(error);
+    }
+}
+// Windows Error Reporting can retain crash context after the process
+// exits. We only extract the executable path, not the report payload.
+static void inspectWER(Sink& out) {
+    auto program=getenvW(L"PROGRAMDATA");
+    auto local=getenvW(L"LOCALAPPDATA");
+    std::vector<fs::path> roots;
+    if(!program.empty()) {
+        auto base=fs::path(program)/L"Microsoft"/L"Windows"/L"WER";
+        roots.push_back(base/L"ReportArchive");
+        roots.push_back(base/L"ReportQueue");
+    }
+    if(!local.empty()) {
+        auto base=fs::path(local)/L"Microsoft"/L"Windows"/L"WER";
+        roots.push_back(base/L"ReportArchive");
+        roots.push_back(base/L"ReportQueue");
+    }
+    size_t inspected=0;
+    for(const auto& root:roots) {
+        if(out.stop() || inspected>=220 || !directory(root))continue;
+        std::error_code error;
+        for(fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && inspected<220 && !out.stop();
+            it.increment(error)) {
+            std::error_code ec;
+            if(!it->is_directory(ec))continue;
+            ++inspected;
+            std::vector<unsigned char> bytes;
+            if(!read(it->path()/L"Report.wer",bytes,256*1024))
+                continue;
+            auto text=decodeText(bytes);
+            std::wistringstream lines(text);
+            std::wstring line;
+            size_t limit=0;
+            while(std::getline(lines,line) && limit++<2048) {
+                if(line.rfind(L"AppPath=",0)!=0)continue;
+                auto path=line.substr(8);
+                auto normalized=low(path);
+                if((has(normalized,L"fivem") ||
+                    has(normalized,L"citizenfx")) &&
+                   tempPath(path))
+                    out.emit("Deep FiveM WER Transient Path",path,
+                        "Crash report references a FiveM-related transient executable");
+                break;
+            }
+        }
+    }
+}
+// Defender exclusions can be valid administration policy. Only entries
+// mentioning FiveM and a transient location are flagged for review.
+static void inspectDefenderExclusions(Sink& out) {
+    const wchar_t* roots[]={
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths",
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Processes"
+    };
+    for(const auto* root:roots) {
+        if(out.stop())break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,root,0,
+            KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        DWORD count=0,maxName=0;
+        if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+            nullptr,nullptr,nullptr,&count,&maxName,nullptr,
+            nullptr,nullptr)!=ERROR_SUCCESS) {
+            RegCloseKey(key);continue;
+        }
+        count=(std::min)(count,DWORD(1024));
+        maxName=(std::min)(maxName,DWORD(16384));
+        std::vector<wchar_t> names(maxName+2);
+        for(DWORD i=0;i<count && !out.stop();++i) {
+            DWORD n=static_cast<DWORD>(names.size()-1);
+            if(RegEnumValueW(key,i,names.data(),&n,
+                nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)
+                continue;
+            auto name=std::wstring(names.data(),n);
+            auto normalized=low(name);
+            if((has(normalized,L"fivem") ||
+                has(normalized,L"citizenfx")) &&
+               tempPath(name))
+                out.emit("Deep FiveM Defender Exclusion",name,
+                    "Defender exclusion references a transient FiveM-related path");
+        }
+        RegCloseKey(key);
+    }
+}
+// Events are contextual: service installation or PowerShell activity
+// does not by itself demonstrate a bypass or malicious action.
+static void inspectEvents(Sink& out) {
+    struct EventRule {
+        const wchar_t* channel;
+        const wchar_t* query;
+        const char* label;
+    };
+    const EventRule rules[]={
+        {L"System",L"*[System[(EventID=7045)]]",
+         "Service installation"},
+        {L"Microsoft-Windows-TaskScheduler/Operational",
+         L"*[System[(EventID=106 or EventID=140)]]",
+         "Task registration"},
+        {L"Microsoft-Windows-Windows Defender/Operational",
+         L"*[System[(EventID=5007)]]",
+         "Defender configuration"},
+        {L"Microsoft-Windows-PowerShell/Operational",
+         L"*[System[(EventID=4104)]]",
+         "PowerShell script block"}
+    };
+    for(const auto& rule:rules) {
+        if(out.stop())break;
+        EVT_HANDLE query=EvtQuery(nullptr,rule.channel,rule.query,
+            EvtQueryChannelPath|EvtQueryReverseDirection);
+        if(!query)continue;
+        size_t examined=0,matched=0;
+        while(!out.stop() && examined<40) {
+            EVT_HANDLE handles[8]{};
+            DWORD returned=0;
+            if(!EvtNext(query,8,handles,100,&returned,0))break;
+            for(DWORD i=0;i<returned;++i) {
+                ++examined;
+                DWORD bytes=0,used=0;
+                EvtRender(nullptr,handles[i],EvtRenderEventXml,
+                    0,nullptr,&bytes,&used);
+                if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+                   bytes>=sizeof(wchar_t) && bytes<=128*1024) {
+                    std::vector<wchar_t> xml(
+                        bytes/sizeof(wchar_t)+1,L'\0');
+                    if(EvtRender(nullptr,handles[i],
+                        EvtRenderEventXml,bytes,xml.data(),
+                        &bytes,&used)) {
+                        auto text=low(xml.data());
+                        if(has(text,L"fivem") ||
+                           has(text,L"citizenfx"))++matched;
+                    }
+                }
+                EvtClose(handles[i]);
+            }
+            if(!returned)break;
+        }
+        EvtClose(query);
+        if(matched)
+            out.emit("Deep FiveM Event Correlation",
+                std::wstring(rule.channel),
+                std::string(rule.label)+" | "+
+                std::to_string(matched)+
+                " recent events mention FiveM or CitizenFX");
+    }
+}
+
+// Services are reviewed through the service manager. A service path
+// is not executed or changed by this scanner.
+static void inspectServices(Sink& out) {
+    SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,
+        SC_MANAGER_ENUMERATE_SERVICE);
+    if(!manager)return;
+    DWORD needed=0,count=0,resume=0;
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,
+        SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
+        nullptr,0,&needed,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA ||
+       needed==0 || needed>16*1024*1024) {
+        CloseServiceHandle(manager);return;
+    }
+    std::vector<BYTE> buffer(needed);
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,
+        SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
+        buffer.data(),needed,&needed,&count,&resume,nullptr)) {
+        CloseServiceHandle(manager);return;
+    }
+    auto services=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(
+        buffer.data());
+    count=(std::min)(count,DWORD(4096));
+    for(DWORD i=0;i<count && !out.stop();++i) {
+        SC_HANDLE service=OpenServiceW(manager,
+            services[i].lpServiceName,SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD bytes=0;
+        QueryServiceConfigW(service,nullptr,0,&bytes);
+        if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+           bytes>=sizeof(QUERY_SERVICE_CONFIGW) &&
+           bytes<=65536) {
+            std::vector<BYTE> data(bytes);
+            auto config=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(
+                data.data());
+            if(QueryServiceConfigW(service,config,bytes,&bytes) &&
+               config->lpBinaryPathName) {
+                std::wstring command=config->lpBinaryPathName;
+                auto normalized=low(command);
+                if((has(normalized,L"fivem") ||
+                    has(normalized,L"citizenfx")) &&
+                   tempPath(command))
+                    out.emit("Deep FiveM Service Executable",
+                        services[i].lpServiceName,
+                        "Service references a transient FiveM-related path");
+                if((has(normalized,L"fivem") ||
+                    has(normalized,L"citizenfx")) &&
+                   (has(normalized,L"-encodedcommand") ||
+                    has(normalized,L" -enc ")))
+                    out.emit("Deep FiveM Encoded Service Command",
+                        services[i].lpServiceName,
+                        "Service references FiveM and encoded PowerShell");
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(manager);
+}
+// TCP ownership is only reported for a FiveM-named process whose
+// executable itself is in a temporary directory.
+static void inspectTCP(Sink& out,
+                       const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> targets;
+    for(const auto& p:processes)
+        if(isFiveM(p) && tempPath(p.path))targets[p.pid]=&p;
+    if(targets.empty())return;
+    DWORD size=0;
+    if(GetExtendedTcpTable(nullptr,&size,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=ERROR_INSUFFICIENT_BUFFER ||
+       size==0 || size>32*1024*1024)return;
+    std::vector<BYTE> buffer(size);
+    if(GetExtendedTcpTable(buffer.data(),&size,TRUE,AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,0)!=NO_ERROR)return;
+    auto table=reinterpret_cast<MIB_TCPTABLE_OWNER_PID*>(
+        buffer.data());
+    std::unordered_set<DWORD> reported;
+    size_t count=(std::min)(size_t(table->dwNumEntries),
+                            size_t(16384));
+    for(size_t i=0;i<count && !out.stop();++i) {
+        const auto& row=table->table[i];
+        if(row.dwState!=MIB_TCP_STATE_ESTAB)continue;
+        auto it=targets.find(row.dwOwningPid);
+        if(it==targets.end() ||
+           !reported.insert(row.dwOwningPid).second)continue;
+        out.emit("Deep Transient FiveM Network Context",
+            it->second->path,
+            "FiveM-named process in a transient directory has "
+            "an established TCP connection");
+    }
+}
+// Read the process token integrity level as an additional contextual
+// attribute. Elevated access is not inherently malicious.
+static void inspectTokens(Sink& out,
+                          const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& p:processes) {
+        if(out.stop() || checked>=16)break;
+        if(!isFiveM(p))continue;
+        ++checked;
+        HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                   FALSE,p.pid);
+        if(!process)continue;
+        HANDLE token=nullptr;
+        if(!OpenProcessToken(process,TOKEN_QUERY,&token)) {
+            CloseHandle(process);continue;
+        }
+        DWORD bytes=0;
+        GetTokenInformation(token,TokenIntegrityLevel,
+            nullptr,0,&bytes);
+        if(bytes>=sizeof(TOKEN_MANDATORY_LABEL) && bytes<=8192) {
+            std::vector<BYTE> buffer(bytes);
+            if(GetTokenInformation(token,TokenIntegrityLevel,
+                buffer.data(),bytes,&bytes)) {
+                auto label=reinterpret_cast<TOKEN_MANDATORY_LABEL*>(
+                    buffer.data());
+                auto sid=label->Label.Sid;
+                if(IsValidSid(sid)) {
+                    DWORD count=*GetSidSubAuthorityCount(sid);
+                    if(count) {
+                        DWORD rid=*GetSidSubAuthority(sid,count-1);
+                        if(rid>=SECURITY_MANDATORY_HIGH_RID &&
+                           tempPath(p.path))
+                            out.emit("Deep Elevated Transient FiveM",
+                                p.path,
+                                "FiveM-named process in a transient "
+                                "directory runs at high integrity");
+                    }
+                }
+            }
+        }
+        CloseHandle(token);
+        CloseHandle(process);
+    }
+}
+
+// Process mitigation policies can reveal unexpected protection states,
+// but disabled mitigations may be normal for older game components.
+static void inspectMitigations(Sink& out,
+                               const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& p:processes) {
+        if(out.stop() || checked>=12)break;
+        if(!isFiveM(p))continue;
+        ++checked;
+        HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                   FALSE,p.pid);
+        if(!process)continue;
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        if(GetProcessMitigationPolicy(process,
+            ProcessDEPPolicy,&dep,sizeof(dep))) {
+            if(!dep.Enable && tempPath(p.path))
+                out.emit("Deep Transient FiveM DEP Context",p.path,
+                    "Transient FiveM-named process reports DEP disabled");
+        }
+        PROCESS_MITIGATION_ASLR_POLICY aslr{};
+        if(GetProcessMitigationPolicy(process,
+            ProcessASLRPolicy,&aslr,sizeof(aslr))) {
+            if(!aslr.EnableBottomUpRandomization &&
+               !aslr.EnableForceRelocateImages &&
+               tempPath(p.path))
+                out.emit("Deep Transient FiveM ASLR Context",p.path,
+                    "Transient FiveM-named process has limited ASLR policy");
+        }
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamicCode{};
+        if(GetProcessMitigationPolicy(process,
+            ProcessDynamicCodePolicy,&dynamicCode,
+            sizeof(dynamicCode))) {
+            if(dynamicCode.ProhibitDynamicCode && tempPath(p.path))
+                out.emit("Deep Transient FiveM Dynamic Code Policy",
+                    p.path,
+                    "Transient FiveM-named process prohibits dynamic code");
+        }
+        CloseHandle(process);
+    }
+}
+// Inspect process image links by querying the kernel's full image name.
+// The snapshot path can be stale or incomplete, so mismatches require
+// independent review and are limited to FiveM-named processes.
+static void inspectImageNames(Sink& out,
+                              const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& p:processes) {
+        if(out.stop() || checked>=20)break;
+        if(!isFiveM(p))continue;
+        ++checked;
+        HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                   FALSE,p.pid);
+        if(!process)continue;
+        std::vector<wchar_t> buffer(32768,L'\0');
+        DWORD length=static_cast<DWORD>(buffer.size());
+        if(QueryFullProcessImageNameW(process,0,
+            buffer.data(),&length)) {
+            std::wstring actual(buffer.data(),length);
+            auto normalized=low(actual);
+            auto snapshot=low(p.path);
+            if(!snapshot.empty() && normalized!=snapshot &&
+               tempPath(actual))
+                out.emit("Deep FiveM Image Path Disagreement",
+                    actual,
+                    "Live process image differs from snapshot path "
+                    "and points to a transient directory");
+            if(tempPath(actual) && !regular(actual))
+                out.emit("Deep FiveM Image Missing From Disk",
+                    actual,
+                    "Transient live process image is not a regular file");
+        }
+        CloseHandle(process);
+    }
+}
+// Inspect a small set of common executable launch surfaces related
+// to FiveM, but do not classify the existence of a shortcut as suspicious.
+static void inspectStartupEntries(Sink& out) {
+    auto appdata=getenvW(L"APPDATA");
+    auto program=getenvW(L"PROGRAMDATA");
+    std::vector<fs::path> roots;
+    if(!appdata.empty())
+        roots.push_back(fs::path(appdata)/L"Microsoft"/
+            L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    if(!program.empty())
+        roots.push_back(fs::path(program)/L"Microsoft"/
+            L"Windows"/L"Start Menu"/L"Programs"/L"Startup");
+    size_t inspected=0;
+    for(const auto& root:roots) {
+        if(out.stop() || !directory(root))continue;
+        std::error_code error;
+        for(fs::directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,error),end;
+            !error && it!=end && inspected<400 && !out.stop();
+            it.increment(error)) {
+            std::error_code ec;
+            if(!it->is_regular_file(ec))continue;
+            ++inspected;
+            auto path=it->path();
+            auto name=low(path.filename().wstring());
+            if(!has(name,L"fivem") &&
+               !has(name,L"citizenfx"))continue;
+            if(binary(path))
+                out.emit("Deep FiveM Startup Executable",
+                    path.wstring(),
+                    "Executable named for FiveM is present in Startup");
+            if(has(name,L".png.exe") || has(name,L".pdf.exe"))
+                out.emit("Deep FiveM Startup Double Extension",
+                    path.wstring(),
+                    "FiveM-related Startup file has a double extension");
+        }
+    }
+}
+// The startup collector is read-only and avoids resolving shortcuts,
+// because shortcut targets can involve network shares or inaccessible paths.
+
+// Windows PE version resources can be missing or inconsistent. They
+// are not an authenticity guarantee and are not used as a cheat verdict.
+static void inspectVersionMetadata(Sink& out,const fs::path& path) {
+    DWORD ignored=0;
+    DWORD bytes=GetFileVersionInfoSizeW(path.c_str(),&ignored);
+    if(!bytes || bytes>4*1024*1024)return;
+    std::vector<BYTE> data(bytes);
+    if(!GetFileVersionInfoW(path.c_str(),0,bytes,data.data()))
+        return;
+    VS_FIXEDFILEINFO* fixed=nullptr;
+    UINT length=0;
+    if(!VerQueryValueW(data.data(),L"\\",
+        reinterpret_cast<LPVOID*>(&fixed),&length) ||
+       !fixed || length<sizeof(VS_FIXEDFILEINFO))return;
+    if(fixed->dwSignature!=0xFEEF04BD)
+        out.emit("Deep PE Version Resource Signature",path.wstring(),
+            "Version resource has an unexpected fixed-file signature");
+    if(fixed->dwFileVersionMS==0 &&
+       fixed->dwFileVersionLS==0 &&
+       fixed->dwProductVersionMS==0 &&
+       fixed->dwProductVersionLS==0)
+        out.emit("Deep PE Empty Version Fields",path.wstring(),
+            "Version resource contains zeroed version numbers");
+    if((fixed->dwFileFlagsMask&fixed->dwFileFlags)!=fixed->dwFileFlags)
+        out.emit("Deep PE Version Flag Mask",path.wstring(),
+            "Version resource flags exceed its declared mask");
+}
+// Read-only file attribute verification checks the metadata available
+// at scan time. Results can change immediately after the scan.
+static void inspectExtendedAttributes(Sink& out,
+                                      const fs::path& path) {
+    DWORD attributes=GetFileAttributesW(path.c_str());
+    if(attributes==INVALID_FILE_ATTRIBUTES)return;
+    if((attributes&FILE_ATTRIBUTE_COMPRESSED) &&
+       (attributes&FILE_ATTRIBUTE_ENCRYPTED))
+        out.emit("Deep Compressed Encrypted Executable",path.wstring(),
+            "Executable reports both compression and encryption flags");
+    if((attributes&FILE_ATTRIBUTE_OFFLINE) && tempPath(path))
+        out.emit("Deep Offline Transient Executable",path.wstring(),
+            "Transient executable reports an offline file attribute");
+    if((attributes&FILE_ATTRIBUTE_SPARSE_FILE) && binary(path))
+        out.emit("Deep Sparse Executable",path.wstring(),
+            "Executable file has the sparse-file attribute");
+}
+// Record only strong metadata anomalies on files in FiveM plugin
+// directories; normal plugin presence is intentionally not flagged.
+static void inspectPluginAttributes(
+    Sink& out,const std::vector<Process>& processes) {
+    auto folders=pluginFolders(processes);
+    size_t checked=0;
+    for(const auto& folder:folders) {
+        if(out.stop() || checked>=220)break;
+        std::error_code error;
+        fs::recursive_directory_iterator it(folder,
+            fs::directory_options::skip_permission_denied,error),end;
+        while(!error && it!=end && checked<220 && !out.stop()) {
+            if(it.depth()>6)it.disable_recursion_pending();
+            std::error_code ec;
+            if(it->is_symlink(ec))it.disable_recursion_pending();
+            if(it->is_regular_file(ec) && binary(it->path())) {
+                ++checked;
+                inspectVersionMetadata(out,it->path());
+                inspectExtendedAttributes(out,it->path());
+            }
+            it.increment(error);
+        }
+    }
+}
+
+// Check a bounded number of direct filesystem references. A symlink or
+// junction may be a legitimate installer artifact.
+static void inspectReparseTargets(
+    Sink& out,const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& path:candidates(processes)) {
+        if(out.stop() || checked>=100)break;
+        ++checked;
+        DWORD attrs=GetFileAttributesW(path.c_str());
+        if(attrs==INVALID_FILE_ATTRIBUTES ||
+           !(attrs&FILE_ATTRIBUTE_REPARSE_POINT))continue;
+        HANDLE file=CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+            nullptr,OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_BACKUP_SEMANTICS,
+            nullptr);
+        if(file==INVALID_HANDLE_VALUE)continue;
+        std::array<BYTE,16*1024> data{};
+        DWORD returned=0;
+        if(DeviceIoControl(file,FSCTL_GET_REPARSE_POINT,
+            nullptr,0,data.data(),static_cast<DWORD>(data.size()),
+            &returned,nullptr)) {
+            if(returned>=sizeof(DWORD)) {
+                DWORD tag=0;
+                memcpy(&tag,data.data(),sizeof(tag));
+                if(tag!=IO_REPARSE_TAG_SYMLINK &&
+                   tag!=IO_REPARSE_TAG_MOUNT_POINT)
+                    out.emit("Deep Uncommon Executable Reparse Tag",
+                        path.wstring(),
+                        "Executable has a non-symlink reparse tag");
+            }
+        }
+        CloseHandle(file);
+    }
+}
+// Reparse inspection deliberately does not follow targets or load
+// executable content. It cannot establish whether a target is trusted.
+
+// Restrict the evidence engine to a bounded amount of work. Collectors
+// skip inaccessible resources and never interpret absence as cleanliness.
+
+// A scan can encounter duplicate paths through nested installation
+// directories. Deduplication uses a normalized lexical path and a
+// category-specific key, not a claim that files are identical.
+static bool knownPath(const fs::path& path) {
+    auto normalized=low(path.lexically_normal().wstring());
+    if(normalized.empty())return false;
+    if(normalized.size()>32767)return false;
+    return normalized.find(L'\0')==std::wstring::npos;
+}
+static void inspectFileSizeOutliers(
+    Sink& out,const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& path:candidates(processes)) {
+        if(out.stop() || checked>=160)break;
+        ++checked;
+        if(!knownPath(path))continue;
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if(!metadata(path,data))continue;
+        auto length=fileSize(data);
+        if(length>1024ULL*1024ULL*1024ULL)
+            out.emit("Deep Oversized Executable",path.wstring(),
+                "Executable file exceeds one GiB; verify expected size");
+        if(length && length<512)
+            out.emit("Deep Tiny Executable",path.wstring(),
+                "Executable file is smaller than 512 bytes");
+    }
+}
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    Sink out;
+    inspectFiles(out,processes);
+    if(!out.stop())inspectProcessTree(out,processes);
+    if(!out.stop())inspectModules(out,processes);
+    if(!out.stop())inspectMemoryRegions(out,processes);
+    if(!out.stop())inspectPersistence(out);
+    if(!out.stop())inspectTasks(out);
+    if(!out.stop())inspectWER(out);
+    if(!out.stop())inspectDefenderExclusions(out);
+    if(!out.stop())inspectEvents(out);
+    if(!out.stop())inspectServices(out);
+    if(!out.stop())inspectTCP(out,processes);
+    if(!out.stop())inspectTokens(out,processes);
+    if(!out.stop())inspectMitigations(out,processes);
+    if(!out.stop())inspectImageNames(out,processes);
+    if(!out.stop())inspectStartupEntries(out);
+    if(!out.stop())inspectPluginAttributes(out,processes);
+    if(!out.stop())inspectReparseTargets(out,processes);
+    if(!out.stop())inspectFileSizeOutliers(out,processes);
+    return std::move(out.rows);
+}
+} // namespace specialized_v89
+
+// v9.0: targeted Windows execution-artifact consistency review.
+// Every finding is contextual; absence of records is not a clean verdict.
+namespace artifact_consistency_v90 {
+struct Collector {
+    std::vector<Record> rows;
+    std::unordered_set<std::wstring> seen;
+    size_t limit=500;
+    bool stopped() const {
+        return cancelRequested || rows.size()>=limit;
+    }
+    void add(const char* kind,const std::wstring& path,
+             const std::string& reason) {
+        if(stopped() || path.empty())return;
+        std::wstring key=path;
+        key+=L"|";
+        for(const char* p=kind;*p;++p)key.push_back(*p);
+        if(!seen.insert(key).second)return;
+        rows.push_back({kind,utf8(path),"REVIEW ONLY | "+reason});
+    }
+};
+static std::wstring lower(std::wstring text) {
+    std::transform(text.begin(),text.end(),text.begin(),
+        [](wchar_t c){return std::towlower(c);});
+    return text;
+}
+static bool has(const std::wstring& s,const wchar_t* part) {
+    return s.find(part)!=std::wstring::npos;
+}
+static bool starts(const std::wstring& s,const wchar_t* prefix) {
+    return s.rfind(prefix,0)==0;
+}
+static bool ends(const std::wstring& s,const wchar_t* suffix) {
+    const size_t length=wcslen(suffix);
+    return s.size()>=length &&
+           s.compare(s.size()-length,length,suffix)==0;
+}
+static bool regular(const fs::path& path) {
+    std::error_code error;
+    return fs::is_regular_file(path,error);
+}
+static bool directory(const fs::path& path) {
+    std::error_code error;
+    return fs::is_directory(path,error);
+}
+static std::wstring env(const wchar_t* name) {
+    DWORD count=GetEnvironmentVariableW(name,nullptr,0);
+    if(count==0 || count>32768)return {};
+    std::wstring result(count,L'\0');
+    DWORD actual=GetEnvironmentVariableW(name,result.data(),count);
+    if(!actual || actual>=count)return {};
+    result.resize(actual);
+    return result;
+}
+static bool fiveM(const Process& process) {
+    auto name=lower(fs::path(process.path).filename().wstring());
+    return name==L"fivem.exe" ||
+           name==L"fivem_gtaprocess.exe" ||
+           (starts(name,L"fivem_") && ends(name,L".exe"));
+}
+static bool executable(const fs::path& path) {
+    auto ext=lower(path.extension().wstring());
+    return ext==L".exe" || ext==L".dll" ||
+           ext==L".asi" || ext==L".sys" ||
+           ext==L".scr" || ext==L".com";
+}
+static bool transient(const fs::path& path) {
+    auto value=lower(path.wstring());
+    return has(value,L"\\temp\\") ||
+           has(value,L"\\recycle.bin\\") ||
+           has(value,L"\\downloads\\");
+}
+static bool inside(const fs::path& path,const fs::path& root) {
+    auto p=lower(path.lexically_normal().wstring());
+    auto r=lower(root.lexically_normal().wstring());
+    if(p==r)return true;
+    if(r.empty())return false;
+    if(r.back()!=L'\\' && r.back()!=L'/')r+=L'\\';
+    return starts(p,r.c_str());
+}
+static std::vector<fs::path> installations(
+    const std::vector<Process>& processes) {
+    std::vector<fs::path> result;
+    std::unordered_set<std::wstring> seen;
+    auto append=[&](const fs::path& path) {
+        if(!directory(path))return;
+        auto key=lower(path.lexically_normal().wstring());
+        if(seen.insert(key).second)result.push_back(path);
+    };
+    const auto local=env(L"LOCALAPPDATA");
+    if(!local.empty()) {
+        append(fs::path(local)/L"FiveM");
+        append(fs::path(local)/L"FiveM"/L"FiveM.app");
+    }
+    for(const auto& process:processes)
+        if(fiveM(process) && !process.path.empty())
+            append(fs::path(process.path).parent_path());
+    return result;
+}
+static bool metadata(const fs::path& path,
+                     WIN32_FILE_ATTRIBUTE_DATA& data) {
+    return GetFileAttributesExW(path.c_str(),
+        GetFileExInfoStandard,&data)!=FALSE;
+}
+static ULONGLONG sizeOf(const WIN32_FILE_ATTRIBUTE_DATA& data) {
+    ULARGE_INTEGER number{};
+    number.LowPart=data.nFileSizeLow;
+    number.HighPart=data.nFileSizeHigh;
+    return number.QuadPart;
+}
+static ULONGLONG timeOf(FILETIME filetime) {
+    ULARGE_INTEGER number{};
+    number.LowPart=filetime.dwLowDateTime;
+    number.HighPart=filetime.dwHighDateTime;
+    return number.QuadPart;
+}
+static bool prefix(const fs::path& path,
+                   std::vector<unsigned char>& bytes,
+                   size_t maximum=1024*1024) {
+    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    LARGE_INTEGER length{};
+    if(!GetFileSizeEx(file,&length) || length.QuadPart<0) {
+        CloseHandle(file);
+        return false;
+    }
+    size_t count=static_cast<size_t>((std::min)(
+        static_cast<ULONGLONG>(length.QuadPart),
+        static_cast<ULONGLONG>(maximum)));
+    bytes.resize(count);
+    DWORD read=0;
+    BOOL ok=count==0 || ReadFile(file,bytes.data(),
+        static_cast<DWORD>(count),&read,nullptr);
+    CloseHandle(file);
+    if(!ok)return false;
+    bytes.resize(read);
+    return true;
+}
+static bool range(size_t offset,size_t length,size_t total) {
+    return offset<=total && length<=total-offset;
+}
+static std::wstring expand(const std::wstring& input) {
+    if(input.empty())return {};
+    DWORD length=ExpandEnvironmentStringsW(input.c_str(),nullptr,0);
+    if(!length || length>32768)return input;
+    std::wstring output(length,L'\0');
+    DWORD result=ExpandEnvironmentStringsW(input.c_str(),
+        output.data(),length);
+    if(!result || result>length)return input;
+    output.resize(result-1);
+    return output;
+}
+static std::wstring trim(std::wstring text) {
+    auto whitespace=[](wchar_t c) {
+        return c==L' ' || c==L'\t' || c==L'\r' || c==L'\n';
+    };
+    while(!text.empty() && whitespace(text.front()))
+        text.erase(text.begin());
+    while(!text.empty() && whitespace(text.back()))
+        text.pop_back();
+    return text;
+}
+static std::wstring commandPath(const std::wstring& command) {
+    auto input=trim(expand(command));
+    if(input.empty())return {};
+    if(input.front()==L'"') {
+        auto close=input.find(L'"',1);
+        if(close!=std::wstring::npos)
+            return input.substr(1,close-1);
+    }
+    auto lowered=lower(input);
+    for(const wchar_t* extension:{L".exe",L".dll",L".sys",
+                                   L".com",L".scr"}) {
+        size_t position=lowered.find(extension);
+        if(position!=std::wstring::npos)
+            return trim(input.substr(0,position+wcslen(extension)));
+    }
+    return {};
+}
+static bool suspiciousName(const fs::path& path) {
+    auto name=lower(path.filename().wstring());
+    return has(name,L".pdf.exe") ||
+           has(name,L".jpg.exe") ||
+           has(name,L".png.exe") ||
+           has(name,L".txt.exe") ||
+           has(name,L".log.exe") ||
+           has(name,L".zip.exe") ||
+           has(name,L".json.exe");
+}
+static void inspectFile(Collector& out,const fs::path& path,
+                        const char* source) {
+    if(out.stopped() || !executable(path))return;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if(!metadata(path,data))return;
+    const auto bytes=sizeOf(data);
+    if(bytes==0)
+        out.add("v9.0 Empty Executable",path.wstring(),
+            std::string(source)+" | executable file is empty");
+    if(suspiciousName(path))
+        out.add("v9.0 Double Extension",path.wstring(),
+            std::string(source)+" | executable has a document-like extension");
+    if((data.dwFileAttributes&FILE_ATTRIBUTE_HIDDEN) &&
+       (data.dwFileAttributes&FILE_ATTRIBUTE_SYSTEM))
+        out.add("v9.0 Hidden System Executable",path.wstring(),
+            std::string(source)+" | file has hidden and system attributes");
+    if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)
+        out.add("v9.0 Executable Reparse Point",path.wstring(),
+            std::string(source)+" | file has a reparse-point attribute");
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    constexpr ULONGLONG day=86400ULL*10000000ULL;
+    if(timeOf(data.ftLastWriteTime)>timeOf(now)+day)
+        out.add("v9.0 Future Executable Timestamp",path.wstring(),
+            std::string(source)+" | last-write timestamp is over 24h ahead");
+}
+static void inspectProcessImages(Collector& out,
+                                 const std::vector<Process>& processes) {
+    size_t checked=0;
+    for(const auto& process:processes) {
+        if(out.stopped() || checked>=200)break;
+        if(process.path.empty() || !fiveM(process))continue;
+        ++checked;
+        inspectFile(out,process.path,"FiveM process image");
+        if(transient(process.path))
+            out.add("v9.0 FiveM Transient Process",process.path,
+                "FiveM-named process runs from a transient directory");
+        if(!regular(process.path))
+            out.add("v9.0 Missing Process Image",process.path,
+                "FiveM-named process image is not a readable regular file");
+    }
+}
+// Parse bounded PE metadata without loading the image into a process.
+struct PE {
+    std::vector<unsigned char> bytes;
+    IMAGE_FILE_HEADER header{};
+    std::vector<IMAGE_SECTION_HEADER> sections;
+    DWORD entry=0;
+    DWORD importRva=0;
+    DWORD importSize=0;
+    DWORD exportRva=0;
+    DWORD exportSize=0;
+    bool parsed=false;
+    bool load(const fs::path& path) {
+        if(!prefix(path,bytes,8*1024*1024))return false;
+        if(bytes.size()<sizeof(IMAGE_DOS_HEADER))return false;
+        IMAGE_DOS_HEADER dos{};
+        memcpy(&dos,bytes.data(),sizeof(dos));
+        if(dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)
+            return false;
+        size_t nt=static_cast<size_t>(dos.e_lfanew);
+        if(!range(nt,sizeof(DWORD)+sizeof(header)+sizeof(WORD),
+                  bytes.size()))return false;
+        DWORD signature=0;
+        memcpy(&signature,bytes.data()+nt,sizeof(signature));
+        if(signature!=IMAGE_NT_SIGNATURE)return false;
+        memcpy(&header,bytes.data()+nt+sizeof(DWORD),sizeof(header));
+        if(header.NumberOfSections>96)return false;
+        size_t opt=nt+sizeof(DWORD)+sizeof(header);
+        if(!range(opt,header.SizeOfOptionalHeader,bytes.size()))
+            return false;
+        WORD magic=0;
+        memcpy(&magic,bytes.data()+opt,sizeof(magic));
+        if(magic==IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+            if(header.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER64))return false;
+            IMAGE_OPTIONAL_HEADER64 options{};
+            memcpy(&options,bytes.data()+opt,sizeof(options));
+            entry=options.AddressOfEntryPoint;
+            importRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+            importSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+            exportRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+            exportSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+        }else if(magic==IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+            if(header.SizeOfOptionalHeader<
+               sizeof(IMAGE_OPTIONAL_HEADER32))return false;
+            IMAGE_OPTIONAL_HEADER32 options{};
+            memcpy(&options,bytes.data()+opt,sizeof(options));
+            entry=options.AddressOfEntryPoint;
+            importRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+            importSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+            exportRva=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+            exportSize=options.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+        }else return false;
+        size_t offset=opt+header.SizeOfOptionalHeader;
+        size_t length=static_cast<size_t>(
+            header.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+        if(!range(offset,length,bytes.size()))return false;
+        sections.resize(header.NumberOfSections);
+        if(length)memcpy(sections.data(),bytes.data()+offset,length);
+        parsed=true;
+        return true;
+    }
+    bool rva(DWORD address,size_t& offset) const {
+        if(!parsed)return false;
+        for(const auto& section:sections) {
+            ULONGLONG length=(std::max)(
+                section.Misc.VirtualSize,section.SizeOfRawData);
+            if(address<section.VirtualAddress ||
+               static_cast<ULONGLONG>(address)>=
+               static_cast<ULONGLONG>(section.VirtualAddress)+length)
+                continue;
+            DWORD relative=address-section.VirtualAddress;
+            if(relative>=section.SizeOfRawData)return false;
+            ULONGLONG position=
+                static_cast<ULONGLONG>(section.PointerToRawData)+relative;
+            if(position>=bytes.size())return false;
+            offset=static_cast<size_t>(position);
+            return true;
+        }
+        return false;
+    }
+    std::string stringAt(size_t offset,size_t maximum=128) const {
+        std::string text;
+        if(offset>=bytes.size())return text;
+        for(size_t i=offset;i<bytes.size() &&
+            text.size()<maximum;++i) {
+            unsigned char c=bytes[i];
+            if(c==0)break;
+            if(c<32 || c>126)return {};
+            text.push_back(static_cast<char>(c));
+        }
+        return text;
+    }
+};
+static void inspectPESections(Collector& out,const fs::path& path,
+                              const PE& pe) {
+    size_t wx=0,overlap=0,zeroRaw=0,badRaw=0,emptyName=0;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    const ULONGLONG length=metadata(path,data)?sizeOf(data):0;
+    for(size_t i=0;i<pe.sections.size();++i) {
+        const auto& section=pe.sections[i];
+        if((section.Characteristics&IMAGE_SCN_MEM_WRITE) &&
+           (section.Characteristics&IMAGE_SCN_MEM_EXECUTE))++wx;
+        if((section.Characteristics&IMAGE_SCN_MEM_EXECUTE) &&
+           section.SizeOfRawData==0)++zeroRaw;
+        if(section.SizeOfRawData &&
+           static_cast<ULONGLONG>(section.PointerToRawData)+
+           section.SizeOfRawData>length)++badRaw;
+        bool named=false;
+        for(unsigned char c:section.Name)
+            if(c){named=true;break;}
+        if(!named)++emptyName;
+        for(size_t j=0;j<i;++j) {
+            const auto& prior=pe.sections[j];
+            ULONGLONG a=section.PointerToRawData;
+            ULONGLONG b=prior.PointerToRawData;
+            if(section.SizeOfRawData && prior.SizeOfRawData &&
+               a<b+prior.SizeOfRawData &&
+               b<a+section.SizeOfRawData)++overlap;
+        }
+    }
+    if(wx)
+        out.add("v9.0 PE Writable Executable",path.wstring(),
+            std::to_string(wx)+" section(s) allow writing and execution");
+    if(overlap)
+        out.add("v9.0 PE Overlapping Sections",path.wstring(),
+            std::to_string(overlap)+" overlapping raw section pair(s)");
+    if(zeroRaw)
+        out.add("v9.0 PE Executable Zero Raw",path.wstring(),
+            std::to_string(zeroRaw)+" executable section(s) have zero raw bytes");
+    if(badRaw)
+        out.add("v9.0 PE Section Past EOF",path.wstring(),
+            std::to_string(badRaw)+" section(s) point past end of file");
+    if(emptyName)
+        out.add("v9.0 PE Empty Section Names",path.wstring(),
+            std::to_string(emptyName)+" section(s) have empty names");
+    if(pe.entry) {
+        size_t offset=0;
+        if(!pe.rva(pe.entry,offset))
+            out.add("v9.0 PE Unresolved Entry Point",path.wstring(),
+                "PE entry point RVA does not map to available raw data");
+    }
+}
+static void inspectPEImports(Collector& out,const fs::path& path,
+                             const PE& pe) {
+    if(!pe.importRva || !pe.importSize)return;
+    size_t offset=0;
+    if(!pe.rva(pe.importRva,offset)) {
+        out.add("v9.0 PE Unresolved Imports",path.wstring(),
+            "Import directory RVA cannot be resolved");
+        return;
+    }
+    size_t invalid=0,descriptors=0;
+    for(size_t i=0;i<128;++i) {
+        size_t pos=offset+i*sizeof(IMAGE_IMPORT_DESCRIPTOR);
+        if(!range(pos,sizeof(IMAGE_IMPORT_DESCRIPTOR),
+                  pe.bytes.size())) {
+            ++invalid;break;
+        }
+        IMAGE_IMPORT_DESCRIPTOR descriptor{};
+        memcpy(&descriptor,pe.bytes.data()+pos,sizeof(descriptor));
+        if(!descriptor.Name && !descriptor.FirstThunk &&
+           !descriptor.OriginalFirstThunk)break;
+        ++descriptors;
+        size_t nameOffset=0;
+        if(!pe.rva(descriptor.Name,nameOffset) ||
+           pe.stringAt(nameOffset).empty())++invalid;
+    }
+    if(invalid)
+        out.add("v9.0 PE Invalid Import Descriptor",path.wstring(),
+            std::to_string(invalid)+" invalid import descriptor(s)");
+    if(descriptors>=128)
+        out.add("v9.0 PE Import Limit",path.wstring(),
+            "Import descriptor review reached bounded limit");
+}
+static void inspectPEExports(Collector& out,const fs::path& path,
+                             const PE& pe) {
+    if(!pe.exportRva || !pe.exportSize)return;
+    size_t offset=0;
+    if(!pe.rva(pe.exportRva,offset) ||
+       !range(offset,sizeof(IMAGE_EXPORT_DIRECTORY),
+              pe.bytes.size())) {
+        out.add("v9.0 PE Invalid Export Directory",path.wstring(),
+            "Export directory does not resolve to a complete header");
+        return;
+    }
+    IMAGE_EXPORT_DIRECTORY exports{};
+    memcpy(&exports,pe.bytes.data()+offset,sizeof(exports));
+    if(exports.NumberOfFunctions>65536 ||
+       exports.NumberOfNames>65536)
+        out.add("v9.0 PE Large Export Table",path.wstring(),
+            "Export table declares unusually many entries");
+    if(exports.NumberOfNames>exports.NumberOfFunctions)
+        out.add("v9.0 PE Export Count Mismatch",path.wstring(),
+            "Named export count exceeds function count");
+}
+static void inspectPEFile(Collector& out,const fs::path& path) {
+    if(out.stopped())return;
+    PE pe;
+    if(!pe.load(path))return;
+    inspectPESections(out,path,pe);
+    inspectPEImports(out,path,pe);
+    inspectPEExports(out,path,pe);
+    if(pe.header.NumberOfSections==0)
+        out.add("v9.0 PE No Sections",path.wstring(),
+            "PE image declares zero sections");
+    if(pe.header.TimeDateStamp==0)
+        out.add("v9.0 PE Zero COFF Timestamp",path.wstring(),
+            "Zero COFF timestamp may be from reproducible builds");
+}
+static void inspectPluginDirectories(
+    Collector& out,const std::vector<fs::path>& roots) {
+    size_t visited=0,peChecked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stopped() || visited>=1600)break;
+        for(const auto& folder:{
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code ec;
+            fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+            while(!ec && it!=end && visited<1600 && !out.stopped()) {
+                if(it.depth()>7)it.disable_recursion_pending();
+                std::error_code entryError;
+                if(it->is_symlink(entryError))
+                    it.disable_recursion_pending();
+                if(it->is_regular_file(entryError)) {
+                    ++visited;
+                    const auto path=it->path();
+                    const auto key=lower(path.lexically_normal().wstring());
+                    if(seen.insert(key).second && executable(path)) {
+                        inspectFile(out,path,"FiveM plugin or mod");
+                        WIN32_FILE_ATTRIBUTE_DATA data{};
+                        if(metadata(path,data) &&
+                           sizeOf(data)<=8*1024*1024 &&
+                           peChecked<180) {
+                            ++peChecked;
+                            inspectPEFile(out,path);
+                        }
+                    }
+                }
+                it.increment(ec);
+            }
+        }
+    }
+}
+// Registry readers are limited to metadata; no registry keys are changed.
+static void inspectRunKey(Collector& out,HKEY hive,
+                          const wchar_t* subkey,const char* label) {
+    if(out.stopped())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(hive,subkey,0,KEY_READ,&key)!=ERROR_SUCCESS)
+        return;
+    DWORD count=0,maxName=0,maxData=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,&maxData,
+        nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(key);return;
+    }
+    count=(std::min)(count,DWORD(512));
+    maxName=(std::min)(maxName,DWORD(8192));
+    maxData=(std::min)(maxData,DWORD(32768));
+    std::vector<wchar_t> names(maxName+2);
+    std::vector<BYTE> data(maxData+sizeof(wchar_t)*2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD n=static_cast<DWORD>(names.size()-1);
+        DWORD bytes=static_cast<DWORD>(data.size());
+        DWORD type=0;
+        if(RegEnumValueW(key,i,names.data(),&n,nullptr,
+            &type,data.data(),&bytes)!=ERROR_SUCCESS ||
+           (type!=REG_SZ && type!=REG_EXPAND_SZ) ||
+           bytes<sizeof(wchar_t) || bytes%sizeof(wchar_t))
+            continue;
+        const auto* raw=
+            reinterpret_cast<const wchar_t*>(data.data());
+        size_t length=0;
+        while(length<bytes/sizeof(wchar_t) && raw[length])++length;
+        std::wstring command(raw,length);
+        auto normalized=lower(command);
+        if(!has(normalized,L"fivem") &&
+           !has(normalized,L"citizenfx"))continue;
+        auto path=commandPath(command);
+        if(path.empty())continue;
+        if(transient(path))
+            out.add("v9.0 FiveM Transient Autorun",path,
+                std::string(label)+" | startup references a transient path");
+        if(suspiciousName(path))
+            out.add("v9.0 FiveM Autorun Double Extension",path,
+                std::string(label)+" | startup references double extension");
+        if(!regular(path))
+            out.add("v9.0 FiveM Autorun Missing Target",path,
+                std::string(label)+" | executable target is unavailable");
+    }
+    RegCloseKey(key);
+}
+static void inspectAutoruns(Collector& out) {
+    struct Entry {HKEY hive;const wchar_t* subkey;const char* label;};
+    const Entry entries[]={
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "User Run"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "User RunOnce"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+         "Machine Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+         "Machine RunOnce"},
+        {HKEY_CURRENT_USER,
+         L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "User Policy Run"},
+        {HKEY_LOCAL_MACHINE,
+         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+         "Machine Policy Run"}
+    };
+    for(const auto& entry:entries) {
+        if(out.stopped())break;
+        inspectRunKey(out,entry.hive,entry.subkey,entry.label);
+    }
+}
+// Compare parent and child process locations. Parent PIDs can be reused.
+static void inspectParents(Collector& out,
+                           const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& process:processes)
+        byPid[process.pid]=&process;
+    for(const auto& process:processes) {
+        if(out.stopped() || !fiveM(process))continue;
+        auto it=byPid.find(process.parent);
+        if(it==byPid.end())continue;
+        const auto& parent=*it->second;
+        if(transient(parent.path))
+            out.add("v9.0 FiveM Transient Parent",process.path,
+                "Parent process image is in a transient location");
+        if(suspiciousName(parent.path))
+            out.add("v9.0 FiveM Parent Double Extension",process.path,
+                "Parent process image has a misleading double extension");
+    }
+}
+// Loaded modules from temporary locations are contextual observations.
+static void inspectModules(Collector& out,
+                           const std::vector<Process>& processes) {
+    size_t inspected=0;
+    for(const auto& process:processes) {
+        if(out.stopped() || inspected>=10)break;
+        if(!fiveM(process))continue;
+        ++inspected;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,process.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W entry{};
+        entry.dwSize=sizeof(entry);
+        if(Module32FirstW(snapshot,&entry)) {
+            size_t count=0;
+            do {
+                if(out.stopped() || count++>=2048)break;
+                fs::path path(entry.szExePath);
+                if(transient(path))
+                    out.add("v9.0 FiveM Transient Module",path.wstring(),
+                        "Loaded in FiveM process PID "+
+                        std::to_string(process.pid));
+                if(suspiciousName(path))
+                    out.add("v9.0 FiveM Module Double Extension",
+                        path.wstring(),
+                        "Loaded module name contains a misleading extension");
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                if(metadata(path,data) &&
+                   (data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+                    out.add("v9.0 FiveM Module Reparse Point",
+                        path.wstring(),
+                        "Loaded module is marked as a reparse point");
+            }while(Module32NextW(snapshot,&entry));
+        }
+        CloseHandle(snapshot);
+    }
+}
+// Check the Mark-of-the-Web stream on a bounded set of plugin binaries.
+static void inspectOriginStream(Collector& out,const fs::path& path) {
+    std::vector<unsigned char> data;
+    if(!prefix(fs::path(path.wstring()+L":Zone.Identifier"),
+               data,4096))return;
+    std::string text(data.begin(),data.end());
+    if(text.find("ZoneId=3")!=std::string::npos ||
+       text.find("ZoneId=4")!=std::string::npos)
+        out.add("v9.0 Internet-Origin Plugin",path.wstring(),
+            "Plugin carries Internet/Restricted zone metadata");
+}
+static void inspectOrigins(Collector& out,
+                           const std::vector<fs::path>& roots) {
+    size_t examined=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || examined>=160)break;
+        for(const auto& folder:{
+            root/L"plugins",root/L"mods",
+            root/L"FiveM.app"/L"plugins",
+            root/L"FiveM.app"/L"mods"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code ec;
+            fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+            while(!ec && it!=end && examined<160 && !out.stopped()) {
+                if(it.depth()>5)it.disable_recursion_pending();
+                std::error_code entryError;
+                if(it->is_symlink(entryError))
+                    it.disable_recursion_pending();
+                if(it->is_regular_file(entryError) &&
+                   executable(it->path())) {
+                    ++examined;
+                    inspectOriginStream(out,it->path());
+                }
+                it.increment(ec);
+            }
+        }
+    }
+}
+// Inspect only names of alternate data streams, not their content.
+static void inspectStreams(Collector& out,
+                           const std::vector<fs::path>& roots) {
+    size_t examined=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || examined>=100)break;
+        for(const auto& folder:{
+            root/L"plugins",root/L"FiveM.app"/L"plugins"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code ec;
+            fs::recursive_directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+            while(!ec && it!=end && examined<100 && !out.stopped()) {
+                if(it.depth()>5)it.disable_recursion_pending();
+                std::error_code entryError;
+                if(it->is_symlink(entryError))
+                    it.disable_recursion_pending();
+                if(!it->is_regular_file(entryError) ||
+                   !executable(it->path())) {
+                    it.increment(ec);continue;
+                }
+                ++examined;
+                WIN32_FIND_STREAM_DATA stream{};
+                HANDLE handle=FindFirstStreamW(it->path().c_str(),
+                    FindStreamInfoStandard,&stream,0);
+                if(handle!=INVALID_HANDLE_VALUE) {
+                    size_t count=0;
+                    do {
+                        if(out.stopped() || count++>=24)break;
+                        auto name=lower(stream.cStreamName);
+                        if(name==L"::$data" ||
+                           name==L":zone.identifier:$data")continue;
+                        if(has(name,L".exe") ||
+                           has(name,L".dll") ||
+                           has(name,L".ps1"))
+                            out.add("v9.0 Executable-Like Stream",
+                                it->path().wstring()+stream.cStreamName,
+                                "Alternate data stream name resembles an executable");
+                    }while(FindNextStreamW(handle,&stream));
+                    FindClose(handle);
+                }
+                it.increment(ec);
+            }
+        }
+    }
+}
+// Crash records are counted without exposing event XML or user data.
+static void inspectCrashEvents(Collector& out) {
+    if(out.stopped())return;
+    EVT_HANDLE query=EvtQuery(nullptr,L"Application",
+        L"*[System[(EventID=1000 or EventID=1001)]]",
+        EvtQueryChannelPath|EvtQueryReverseDirection);
+    if(!query)return;
+    size_t examined=0,matched=0;
+    while(!out.stopped() && examined<160) {
+        EVT_HANDLE events[8]{};
+        DWORD count=0;
+        if(!EvtNext(query,8,events,100,&count,0))break;
+        for(DWORD i=0;i<count;++i) {
+            ++examined;
+            DWORD bytes=0,used=0;
+            EvtRender(nullptr,events[i],EvtRenderEventXml,
+                0,nullptr,&bytes,&used);
+            if(GetLastError()==ERROR_INSUFFICIENT_BUFFER &&
+               bytes>=sizeof(wchar_t) && bytes<=128*1024) {
+                std::vector<wchar_t> xml(
+                    bytes/sizeof(wchar_t)+1,L'\0');
+                if(EvtRender(nullptr,events[i],EvtRenderEventXml,
+                    bytes,xml.data(),&bytes,&used)) {
+                    auto value=lower(xml.data());
+                    if(has(value,L"fivem") ||
+                       has(value,L"citizenfx"))++matched;
+                }
+            }
+            EvtClose(events[i]);
+        }
+    }
+    EvtClose(query);
+    if(matched)
+        out.add("v9.0 FiveM Crash Context",
+            L"Windows Application Event Log",
+            std::to_string(matched)+
+            " recent crash/report events mention FiveM or CitizenFX");
+}
+// Registry service paths are inspected only when their command mentions
+// FiveM and also contains a separate contextual risk indicator.
+static void inspectServicePaths(Collector& out) {
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",
+        0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(root,nullptr,nullptr,nullptr,
+        &count,&maxName,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr)!=ERROR_SUCCESS) {
+        RegCloseKey(root);return;
+    }
+    count=(std::min)(count,DWORD(5000));
+    maxName=(std::min)(maxName,DWORD(16384));
+    std::vector<wchar_t> names(maxName+2);
+    for(DWORD i=0;i<count && !out.stopped();++i) {
+        DWORD length=static_cast<DWORD>(names.size()-1);
+        if(RegEnumKeyExW(root,i,names.data(),&length,nullptr,
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(root,names.data(),0,KEY_READ,
+            &key)!=ERROR_SUCCESS)continue;
+        DWORD type=0,bytes=0;
+        if(RegQueryValueExW(key,L"ImagePath",nullptr,
+            &type,nullptr,&bytes)==ERROR_SUCCESS &&
+           (type==REG_SZ || type==REG_EXPAND_SZ) &&
+           bytes>=sizeof(wchar_t) && bytes<=32768) {
+            std::vector<wchar_t> value(
+                bytes/sizeof(wchar_t)+1,L'\0');
+            if(RegQueryValueExW(key,L"ImagePath",nullptr,
+                &type,reinterpret_cast<BYTE*>(value.data()),
+                &bytes)==ERROR_SUCCESS) {
+                auto command=lower(value.data());
+                if(has(command,L"fivem") ||
+                   has(command,L"citizenfx")) {
+                    auto path=commandPath(value.data());
+                    if(!path.empty() && transient(path))
+                        out.add("v9.0 FiveM Service Transient Path",
+                            path,"Service image references a temporary directory");
+                    if(!path.empty() && suspiciousName(path))
+                        out.add("v9.0 FiveM Service Double Extension",
+                            path,"Service image has a misleading extension");
+                }
+            }
+        }
+        RegCloseKey(key);
+    }
+    RegCloseKey(root);
+}
+// Local text log scanning is bounded and never retains log contents.
+static void inspectLog(Collector& out,const fs::path& path) {
+    std::vector<unsigned char> bytes;
+    if(!prefix(path,bytes,128*1024))return;
+    std::string text;
+    text.reserve(bytes.size());
+    for(unsigned char c:bytes)
+        if(c)text.push_back(
+            static_cast<char>(std::tolower(c)));
+    struct Marker {
+        const char* term;
+        const char* category;
+        const char* reason;
+    };
+    const Marker markers[]={
+        {"signature verification failed",
+         "v9.0 FiveM Signature Log","Signature verification failure"},
+        {"integrity check failed",
+         "v9.0 FiveM Integrity Log","Integrity check failure"},
+        {"unhandled exception",
+         "v9.0 FiveM Exception Log","Unhandled exception"},
+        {"failed to load module",
+         "v9.0 FiveM Module Failure","Module load failure"},
+        {"failed to initialize",
+         "v9.0 FiveM Initialization Log","Initialization failure"},
+        {"cache corruption",
+         "v9.0 FiveM Cache Log","Cache corruption"}
+    };
+    for(const auto& marker:markers) {
+        if(out.stopped())break;
+        if(text.find(marker.term)!=std::string::npos)
+            out.add(marker.category,path.wstring(),
+                std::string(marker.reason)+
+                " appears in a bounded local log prefix");
+    }
+}
+static void inspectLogs(Collector& out,
+                        const std::vector<fs::path>& roots) {
+    size_t checked=0;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& root:roots) {
+        if(out.stopped() || checked>=80)break;
+        for(const auto& folder:{
+            root/L"logs",root/L"data"/L"logs",
+            root/L"FiveM.app"/L"logs",
+            root/L"FiveM.app"/L"data"/L"logs"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code ec;
+            for(fs::directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && checked<80 && !out.stopped();
+                it.increment(ec)) {
+                std::error_code fileError;
+                if(!it->is_regular_file(fileError))continue;
+                auto extension=lower(it->path().extension().wstring());
+                if(extension!=L".log" && extension!=L".txt")continue;
+                auto key=lower(it->path().lexically_normal().wstring());
+                if(!seen.insert(key).second)continue;
+                ++checked;
+                inspectLog(out,it->path());
+            }
+        }
+    }
+}
+// Scheduled task XML can provide context for executable launch paths.
+// This collector reads a bounded subset of task files and does not run
+// task actions or modify the Task Scheduler configuration.
+static void inspectScheduledTasks(Collector& out) {
+    const auto systemRoot=env(L"SystemRoot");
+    if(systemRoot.empty())return;
+    const fs::path folder=fs::path(systemRoot)/
+        L"System32"/L"Tasks";
+    if(!directory(folder))return;
+    std::error_code ec;
+    fs::recursive_directory_iterator it(folder,
+        fs::directory_options::skip_permission_denied,ec),end;
+    size_t visited=0;
+    while(!ec && it!=end && visited<1000 && !out.stopped()) {
+        if(it.depth()>7)it.disable_recursion_pending();
+        std::error_code entryError;
+        if(it->is_symlink(entryError))
+            it.disable_recursion_pending();
+        if(!it->is_regular_file(entryError)) {
+            it.increment(ec);
+            continue;
+        }
+        ++visited;
+        std::vector<unsigned char> bytes;
+        if(!prefix(it->path(),bytes,256*1024)) {
+            it.increment(ec);
+            continue;
+        }
+        std::string text;
+        text.reserve(bytes.size());
+        for(unsigned char byte:bytes) {
+            if(byte==0)continue;
+            text.push_back(static_cast<char>(std::tolower(byte)));
+        }
+        if(text.find("fivem")==std::string::npos &&
+           text.find("citizenfx")==std::string::npos) {
+            it.increment(ec);
+            continue;
+        }
+        const bool temp=text.find("\\temp\\")!=std::string::npos ||
+                        text.find("\\recycle.bin\\")!=std::string::npos;
+        const bool encoded=
+            text.find("-encodedcommand")!=std::string::npos ||
+            text.find(" -enc ")!=std::string::npos;
+        if(temp)
+            out.add("v9.0 FiveM Task Transient Path",
+                it->path().wstring(),
+                "Task XML mentions FiveM and a transient directory");
+        if(encoded)
+            out.add("v9.0 FiveM Task Encoded Command",
+                it->path().wstring(),
+                "Task XML mentions FiveM and encoded PowerShell arguments");
+        it.increment(ec);
+    }
+}
+// Inspect security descriptors of plugin files for unexpectedly broad
+// writable access only where GetNamedSecurityInfo is available.
+// No ACLs are changed and unreadable descriptors are skipped.
+static void inspectPluginAttributes(Collector& out,
+                                    const std::vector<fs::path>& roots) {
+    size_t checked=0;
+    for(const auto& root:roots) {
+        if(out.stopped() || checked>=120)break;
+        for(const auto& folder:{
+            root/L"plugins",
+            root/L"FiveM.app"/L"plugins"
+        }) {
+            if(!directory(folder))continue;
+            std::error_code ec;
+            for(fs::directory_iterator it(folder,
+                fs::directory_options::skip_permission_denied,ec),end;
+                !ec && it!=end && checked<120 && !out.stopped();
+                it.increment(ec)) {
+                std::error_code entryError;
+                if(!it->is_regular_file(entryError) ||
+                   !executable(it->path()))continue;
+                ++checked;
+                WIN32_FILE_ATTRIBUTE_DATA data{};
+                if(!metadata(it->path(),data))continue;
+                if(data.dwFileAttributes&FILE_ATTRIBUTE_OFFLINE)
+                    out.add("v9.0 Offline Plugin File",
+                        it->path().wstring(),
+                        "Plugin has offline-file attribute");
+                if(data.dwFileAttributes&FILE_ATTRIBUTE_COMPRESSED)
+                    out.add("v9.0 Compressed Plugin File",
+                        it->path().wstring(),
+                        "Plugin has NTFS compression attribute");
+                if(data.dwFileAttributes&FILE_ATTRIBUTE_ENCRYPTED)
+                    out.add("v9.0 Encrypted Plugin File",
+                        it->path().wstring(),
+                        "Plugin has EFS encryption attribute");
+            }
+        }
+    }
+}
+static void inspectCacheDirectories(
+    Collector& out,const std::vector<fs::path>& roots) {
+    for(const auto& root:roots) {
+        if(out.stopped())break;
+        for(const auto& folder:{
+            root/L"data"/L"server-cache",
+            root/L"FiveM.app"/L"data"/L"server-cache"
+        }) {
+            if(!directory(folder))continue;
+            WIN32_FILE_ATTRIBUTE_DATA data{};
+            if(metadata(folder,data) &&
+               (data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
+                out.add("v9.0 FiveM Cache Reparse Directory",
+                    folder.wstring(),
+                    "FiveM server cache directory is a reparse point");
+        }
+    }
+}
+static std::vector<Record> collect(
+    const std::vector<Process>& processes) {
+    Collector out;
+    const auto roots=installations(processes);
+    inspectProcessImages(out,processes);
+    if(!out.stopped())inspectParents(out,processes);
+    if(!out.stopped())inspectModules(out,processes);
+    if(!out.stopped())inspectPluginDirectories(out,roots);
+    if(!out.stopped())inspectOrigins(out,roots);
+    if(!out.stopped())inspectStreams(out,roots);
+    if(!out.stopped())inspectAutoruns(out);
+    if(!out.stopped())inspectServicePaths(out);
+    if(!out.stopped())inspectLogs(out,roots);
+    if(!out.stopped())inspectCrashEvents(out);
+    if(!out.stopped())inspectScheduledTasks(out);
+    if(!out.stopped())inspectPluginAttributes(out,roots);
+    if(!out.stopped())inspectCacheDirectories(out,roots);
+    return std::move(out.rows);
+}
+} // namespace artifact_consistency_v90
+
 static void scanWorker() {
     try {
         stage=1;
@@ -4601,6 +16997,25 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         auto deepExecutables=inspectDeepProcessExecutables(p);
         auto exeAndDriverReview=inspectExecutableAndDriverReview(p);
+        auto additionalArtifactRules=inspectFifteenArtifactRules(p);
+        auto additionalContextRules=inspectAdditionalFifteenRules(p);
+        auto thirdArtifactRules=inspectThirdFifteenRules(p);
+        auto fourthArtifactRules=inspectFourthTwentyRules(p);
+        auto fifthArtifactRules=inspectFifthTwentyRules(p);
+        auto sixthArtifactRules=inspectSixthTwentyRules(p);
+        auto seventhArtifactRules=inspectSeventhTwentyRules(p);
+        auto eighthArtifactRules=inspectEighthThirtyRules(p);
+        auto realEvidence=real_detect::collect(p);
+        auto deepEvidence=deep_evidence::collect(p);
+        auto expandedEvidence=expanded_evidence::collect();
+        auto correlatedEvidence=artifact_correlation::collect(p);
+        auto evidencePlus= evidence_plus::collect(p);
+        auto fivemEvidence=fivem_evidence::collect(p);
+        auto fivemDeepEvidence=fivem_deep::collect(p);
+        auto pathArtifacts=artifact_paths_v87::collect(p);
+        auto artifactReview=artifact_review_v88::collect(p);
+        auto specializedEvidence=specialized_v89::collect(p);
+        auto consistencyEvidence=artifact_consistency_v90::collect(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
         if(!cancelRequested){
@@ -4618,6 +17033,27 @@ static void scanWorker() {
         services.insert(services.end(),processDetails.begin(),processDetails.end());
         services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
         services.insert(services.end(),exeAndDriverReview.begin(),exeAndDriverReview.end());
+        services.insert(services.end(),additionalArtifactRules.begin(),additionalArtifactRules.end());
+        services.insert(services.end(),additionalContextRules.begin(),additionalContextRules.end());
+        services.insert(services.end(),thirdArtifactRules.begin(),thirdArtifactRules.end());
+        services.insert(services.end(),fourthArtifactRules.begin(),fourthArtifactRules.end());
+        services.insert(services.end(),fifthArtifactRules.begin(),fifthArtifactRules.end());
+        services.insert(services.end(),sixthArtifactRules.begin(),sixthArtifactRules.end());
+        services.insert(services.end(),seventhArtifactRules.begin(),seventhArtifactRules.end());
+        services.insert(services.end(),eighthArtifactRules.begin(),eighthArtifactRules.end());
+        services.insert(services.end(),realEvidence.begin(),realEvidence.end());
+        services.insert(services.end(),deepEvidence.begin(),deepEvidence.end());
+        services.insert(services.end(),expandedEvidence.begin(),expandedEvidence.end());
+        services.insert(services.end(),correlatedEvidence.begin(),correlatedEvidence.end());
+        services.insert(services.end(),evidencePlus.begin(),evidencePlus.end());
+        services.insert(services.end(),fivemEvidence.begin(),fivemEvidence.end());
+        services.insert(services.end(),fivemDeepEvidence.begin(),fivemDeepEvidence.end());
+        services.insert(services.end(),pathArtifacts.begin(),pathArtifacts.end());
+        services.insert(services.end(),artifactReview.begin(),artifactReview.end());
+        services.insert(services.end(),specializedEvidence.begin(),specializedEvidence.end());
+        services.insert(services.end(),consistencyEvidence.begin(),consistencyEvidence.end());
+        auto linkedEvidence=artifact_correlation::correlate(services);
+        services.insert(services.end(),linkedEvidence.begin(),linkedEvidence.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size()-deepExecutables.size());
         if(!cancelRequested){
@@ -6336,6 +18772,8 @@ static void processTable(float height) {
     ImGui::Dummy(ImVec2(0,6));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.76f);
     ImGui::InputTextWithHint("##search","Search processes, paths, or assessments...",searchInput,sizeof(searchInput));
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Clear search"))searchInput[0]='\0';
     ImGui::SameLine();ImGui::Checkbox("Show inaccessible paths",&showUnavailable);
     size_t flagged=0;
     {
@@ -6347,6 +18785,7 @@ static void processTable(float height) {
             "%zu SUSPECT process(es). Yellow indicates review, not confirmed malware.",flagged);
     else
         ImGui::TextDisabled("No path-based review indicators found. This does not guarantee safety.");
+    ImGui::TextDisabled("TIP: Search by PID, process name or path. Click Clear search to reset.");
     const ImGuiTableFlags flags=ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
         ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp;
@@ -7062,9 +19501,21 @@ static void drawAtlasProgress(bool compact=false){
     const float fraction=smoothInspectionVisual(
         static_cast<float>(inspectionPresentationFraction()));
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
+    if(done && !scanFailed && !scanCancelled){
+        ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),
+            "VERIFIED  /  INSPECTION FINISHED");
+    }else
+        ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
     ImGui::SameLine();
     ImGui::Text("%d%% verified",verified);
+    if(!compact){
+        ImGui::SameLine();
+        ImGui::TextDisabled("  |  %d/6 stages",std::clamp(completedStages.load(),0,6));
+        if(done && !scanFailed && !scanCancelled){
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),"  COMPLETE");
+        }
+    }
     drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
                                   compact?14.f:19.f);
     if(compact)return;
@@ -7085,6 +19536,21 @@ static void drawAtlasProgress(bool compact=false){
     const int activeIndex=std::clamp(completed,0,5);
     const char* activeName=displayLanguage==1?
         phaseNamesPt[activeIndex]:phaseNames[activeIndex];
+    // Compact milestone rail: shows actual completed stages, not guessed progress.
+    const float railWidth=(std::max)(1.f,(width-5.f*5.f)/6.f);
+    const ImVec2 railStart=ImGui::GetCursorScreenPos();
+    ImDrawList* rail=ImGui::GetWindowDrawList();
+    for(int i=0;i<6;++i){
+        const float left=railStart.x+i*(railWidth+5.f);
+        const ImU32 fill=i<completed?IM_COL32(136,199,153,255):
+            i==activeIndex && scanning?IM_COL32(184,184,184,255):
+            IM_COL32(49,49,49,255);
+        rail->AddRectFilled(ImVec2(left,railStart.y),
+            ImVec2(left+railWidth,railStart.y+5.f),fill,2.f);
+    }
+    ImGui::Dummy(ImVec2(width,7.f));
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("6 real scan stages | Green: complete | Grey: active | Dark: pending");
     ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
     ImGui::SameLine();
     ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
@@ -7121,6 +19587,60 @@ static void drawAtlasProgress(bool compact=false){
 }
 
 static bool simplifiedInterface=true;
+
+static void drawEvidenceSourcesTab() {
+    std::lock_guard<std::mutex> lock(dataMutex);
+    std::map<std::string,size_t> counts;
+    for(const auto& record:records)
+        ++counts[record.category];
+    ImGui::TextUnformatted("EVIDENCE SOURCES");
+    ImGui::TextDisabled("%zu categories | %zu evidence records",
+                        counts.size(),records.size());
+    ImGui::TextWrapped("These counts show observations collected by the scanner. "
+        "They are not threat scores, and repeated observations can refer to the same file.");
+    const auto correlated=counts.find("Cross-Source Evidence Correlation");
+    ImGui::TextDisabled("Cross-source matches: %zu | Manual review only",
+        correlated==counts.end()?size_t(0):correlated->second);
+    ImGui::Separator();
+    std::vector<std::pair<std::string,size_t>> ranked(counts.begin(),counts.end());
+    std::sort(ranked.begin(),ranked.end(),
+        [](const auto& a,const auto& b) {
+            return a.second==b.second?a.first<b.first:a.second>b.second;
+        });
+    if(ImGui::BeginTable("##sourceCounts",2,
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable,ImVec2(0,-1))) {
+        ImGui::TableSetupColumn("Source / category",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Records",ImGuiTableColumnFlags_WidthFixed,95);
+        ImGui::TableHeadersRow();
+        for(const auto& entry:ranked) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(entry.first.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%zu",entry.second);
+        }
+        ImGui::EndTable();
+    }
+}
+static void drawScanQualityTab() {
+    ImGui::TextUnformatted("SCAN COVERAGE & LIMITATIONS");
+    ImGui::Separator();
+    ImGui::TextWrapped("The scanner reads accessible Windows evidence. "
+        "Permission failures, disabled event channels and protected processes "
+        "may limit coverage. An empty category does not prove the absence of artifacts.");
+    ImGui::Spacing();
+    ImGui::Text("Process inventory: %zu",processCount.load());
+    ImGui::Text("Collected records: %zu",recordCount.load());
+    ImGui::Text("Completed stages: %u / 6",completedStages.load());
+    ImGui::Spacing();
+    ImGui::TextWrapped("New read-only sources: scheduled task definitions, "
+        "Windows event logs, firewall rules, Defender exclusions, "
+        "Prefetch metadata, WER crash reports, hosts and proxy settings.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Indicators require manual context. No automatic cheat verdict is made.");
+}
+
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
@@ -7735,6 +20255,14 @@ static void renderUI() {
             }
             if(ImGui::BeginTabItem("Evidence Inspector")){
                 drawEvidenceInspector();
+                ImGui::EndTabItem();
+            }
+            if(ImGui::BeginTabItem("Evidence Sources")) {
+                drawEvidenceSourcesTab();
+                ImGui::EndTabItem();
+            }
+            if(ImGui::BeginTabItem("Scan Quality")) {
+                drawScanQualityTab();
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Scan Comparison")){
