@@ -401,7 +401,7 @@ static void loadSettings() {
             else if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
             else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
-            else if(key=="scale")interfaceScale=std::clamp(std::stof(v),0.95f,1.35f);
+            else if(key=="scale")interfaceScale=std::clamp(std::stof(v),0.95f,1.10f);
             else if(key=="window")windowPreset=std::clamp(std::stoi(v),0,4);
             else if(key=="highlight")highlightSuspicious=(v=="1");
             else if(key=="warnings")showSecurityWarnings=(v=="1");
@@ -4461,6 +4461,36 @@ static std::vector<Record> inspectExecutableAndDriverReview(const std::vector<Pr
         ++exeReviewChecked;
         const auto filename=lowerPath(fs::path(path).filename().wstring());
         const auto match=token(filename);
+        // Review executable names that impersonate core Windows components
+        // outside their expected Windows directories.
+        const bool coreName=
+            filename==L"svchost.exe" || filename==L"lsass.exe" ||
+            filename==L"services.exe" || filename==L"winlogon.exe" ||
+            filename==L"csrss.exe" || filename==L"smss.exe";
+        const bool windowsSystemDirectory=
+            path.find(L"\\windows\\system32\\")!=std::wstring::npos ||
+            path.find(L"\\windows\\syswow64\\")!=std::wstring::npos;
+        if(coreName && !windowsSystemDirectory){
+            records.push_back({"System Process Name Review",utf8(process.name),
+                "REVIEW ONLY | Core Windows executable name outside system directory"
+                " | PID="+std::to_string(process.pid)+
+                " | Path="+utf8(process.path)+
+                " | Check signature and actual Windows installation location."});
+        }
+        // Misleading file names are review leads, not proof of execution abuse.
+        const bool doubleExtension=
+            filename.find(L".pdf.exe")!=std::wstring::npos ||
+            filename.find(L".jpg.exe")!=std::wstring::npos ||
+            filename.find(L".png.exe")!=std::wstring::npos ||
+            filename.find(L".txt.exe")!=std::wstring::npos ||
+            filename.find(L".docx.exe")!=std::wstring::npos;
+        if(doubleExtension){
+            records.push_back({"Executable Extension Review",utf8(process.name),
+                "REVIEW ONLY | Executable uses a misleading double extension"
+                " | PID="+std::to_string(process.pid)+
+                " | Path="+utf8(process.path)+
+                " | Verify origin before drawing conclusions."});
+        }
         const bool unusual=path.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos ||
             path.find(L"\\downloads\\")!=std::wstring::npos;
         if(match.empty() && !unusual)continue;
@@ -5546,7 +5576,7 @@ static void modulesList() {
             ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.127f,0.127f,0.127f,1));
             ImGui::BeginChild("##inspectorBanner",ImVec2(0,108),ImGuiChildFlags_None);
             ImGui::TextColored(ImVec4(0.762f,0.762f,0.762f,1),"INVESTIGATION  /  %02d",inspectedModule+1);
-            ImGui::SetWindowFontScale(1.55f);
+            ImGui::SetWindowFontScale(1.18f);
             ImGui::TextUnformatted(m.title);
             ImGui::SetWindowFontScale(1.f);
             ImGui::TextDisabled("%s",m.implemented?"EVIDENCE INSPECTION":"MODULE UNAVAILABLE");
@@ -6756,7 +6786,7 @@ static bool exportReport(const Report& r,bool csv){
     return out.good();
 }
 static void draw(){
-    ImGui::SetWindowFontScale(1.55f);
+    ImGui::SetWindowFontScale(1.18f);
     ImGui::TextUnformatted(XOR_STR("Binary Intelligence Studio").c_str());
     ImGui::SetWindowFontScale(1.f);
     ImGui::TextDisabled("Offline PE analysis  |  DLL imports  |  Extracted strings  |  Hex viewer");
@@ -7103,7 +7133,7 @@ static void renderUI() {
         ImGui::SameLine(0,15);
     }
     ImGui::BeginGroup();
-    ImGui::SetWindowFontScale(1.24f);
+    ImGui::SetWindowFontScale(1.08f);
     ImGui::TextColored(titleInk,"SYNC PC CHECKER");
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
@@ -7400,7 +7430,7 @@ static void renderUI() {
             IM_COL32(29,29,29,fadeAlpha(255)),2.f);
         ImGui::SetCursorScreenPos(ImVec2(area.x,center.y+76.f));
         ImGui::PushTextWrapPos(area.x+w-24.f);
-        ImGui::SetWindowFontScale(1.35f);
+        ImGui::SetWindowFontScale(1.10f);
         const char* heading=unlocking?"INSPECTION UNLOCKED":"INSPECTION LOCKED";
         ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
             (w-ImGui::CalcTextSize(heading).x)*.5f);
@@ -7436,7 +7466,7 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,1.f));
     } else if(page==0 && simplifiedInterface) {
         const ImVec4 muted(.67f,.67f,.67f,1.f);
-        ImGui::SetWindowFontScale(1.45f);
+        ImGui::SetWindowFontScale(1.12f);
         ImGui::TextUnformatted("PC Inspection");
         ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(muted,"One scan. Clear results. Advanced tools remain available.");
@@ -7488,7 +7518,7 @@ static void renderUI() {
         ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,233),ImGuiChildFlags_Borders);
         ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
-        ImGui::SetWindowFontScale(1.5f);
+        ImGui::SetWindowFontScale(1.12f);
         ImGui::TextColored(pale,"System Inspection");
         ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
@@ -8194,7 +8224,7 @@ static void renderUI() {
         ImGui::Spacing();
         ImGui::Text(localized("Interface Scale"));
         ImGui::SetNextItemWidth(320);
-        if(ImGui::SliderFloat("##scale",&interfaceScale,0.95f,1.35f,"%.2fx"))
+        if(ImGui::SliderFloat("##scale",&interfaceScale,0.95f,1.10f,"%.2fx"))
             ImGui::GetIO().FontGlobalScale=interfaceScale;
         ImGui::Spacing();
         ImGui::Text(localized("Window size (maximum 1920 x 1080)"));
@@ -8351,7 +8381,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     ImGuiIO& io=ImGui::GetIO();
     ImFontConfig fontCfg{};
     fontCfg.OversampleH=2;
-    if(!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf",21.f,&fontCfg))
+    if(!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf",16.f,&fontCfg))
         io.Fonts->AddFontDefault();
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(device,context);
