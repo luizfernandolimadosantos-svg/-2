@@ -258,7 +258,7 @@ static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
 static std::atomic<size_t> peFilesInspected{0};
 static std::wstring executablePath();
 static int accentIndex=0, themeIndex=0, densityIndex=2;
-static float interfaceScale=1.35f;
+static float interfaceScale=1.08f;
 static int windowPreset=2;
 static const char* windowPresetNames[]={"1024 x 720","1280 x 800","1440 x 900",
     "1600 x 900","1920 x 1080"};
@@ -401,7 +401,7 @@ static void loadSettings() {
             else if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
             else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
-            else if(key=="scale")interfaceScale=std::clamp(std::stof(v),1.2f,1.8f);
+            else if(key=="scale")interfaceScale=std::clamp(std::stof(v),0.95f,1.35f);
             else if(key=="window")windowPreset=std::clamp(std::stoi(v),0,4);
             else if(key=="highlight")highlightSuspicious=(v=="1");
             else if(key=="warnings")showSecurityWarnings=(v=="1");
@@ -3507,7 +3507,7 @@ static void drawEvidenceComparison(){
         ImGui::TableHeadersRow();
         unsigned shown=0;
         auto row=[&](const char* change,const Record& r){
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(change);
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(2);
@@ -5253,7 +5253,7 @@ static void applyTheme() {
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
-    ImGui::SetWindowFontScale(1.48f);
+    ImGui::SetWindowFontScale(1.18f);
     ImGui::TextUnformatted(title);
     ImGui::SetWindowFontScale(1.f);
     if(description)ImGui::TextDisabled("%s",description);
@@ -5261,7 +5261,7 @@ static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(0.274f,0.274f,0.274f,.72f));
     ImGui::Separator();
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0,14));
+    ImGui::Dummy(ImVec2(0,5));
 }
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
@@ -5489,7 +5489,7 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
             std::snprintf(address,sizeof(address),"0x%llX",(unsigned long long)f.address);
             std::string filter=std::string(address)+" "+f.category+" "+f.explanation;
             if(!moduleSearchMatches(filter))continue;
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(address);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%llu KiB",(unsigned long long)(f.size/1024));
             ImGui::TableSetColumnIndex(2);
@@ -5581,7 +5581,7 @@ static void modulesList() {
                                     t==DRIVE_REMOVABLE?"Removable":t==DRIVE_REMOTE?"Network":"Other";
                                 const std::string path=utf8(d);
                                 if(!moduleSearchMatches(path+" "+type))continue;
-                                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(path.c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(type);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted("Backing image not verified");
@@ -5610,7 +5610,7 @@ static void modulesList() {
                             if(!match)continue;
                             const std::string name=utf8(proc.name),path=utf8(proc.path);
                             if(!moduleSearchMatches(name+" "+path))continue;
-                            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(name.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",path.c_str());
@@ -5637,7 +5637,7 @@ static void modulesList() {
                         for(const auto& e:snapshot){
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
-                            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                             if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
@@ -5711,7 +5711,7 @@ static void modulesList() {
                                 if(detail.find(lowPath)==std::string::npos)continue;
                                 if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
                                 ++matches;
-                                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
@@ -5735,7 +5735,7 @@ static void modulesList() {
                         for(const auto& e:snapshot){
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
-                            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                             if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
@@ -5809,7 +5809,7 @@ static void modulesList() {
                                 if(detail.find(lowPath)==std::string::npos)continue;
                                 if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
                                 ++matches;
-                                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
@@ -5834,7 +5834,7 @@ static void modulesList() {
                         for(const auto& p:snapshot) {
                             std::string name=utf8(p.name), path=utf8(p.path);
                             if(!moduleSearchMatches(name+" "+path+" "+p.assessment))continue;
-                            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                             if(p.suspicious && highlightSuspicious)
                                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(52,52,52,160));
                             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
@@ -5874,7 +5874,7 @@ static void modulesList() {
                         for(const auto& r:snapshot) {
                             if(!moduleMatches(m.categories,r.category) ||
                                !moduleSearchMatches(r.category+" "+r.name+" "+r.detail))continue;
-                            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                             tintEvidenceRow(r);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
@@ -6059,7 +6059,7 @@ static void drawProcessDetails() {
         ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,2.2f);
         ImGui::TableHeadersRow();
         for(const auto& m:selectedModules) {
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             if(m.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
@@ -6077,7 +6077,7 @@ static void drawProcessDetails() {
         ImGui::TableSetupColumn("Assessment",ImGuiTableColumnFlags_WidthStretch,3);
         ImGui::TableHeadersRow();
         for(const auto& m:selectedImports) {
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(m.assessment.c_str());
         }
@@ -6186,7 +6186,7 @@ static void drawServiceReviews() {
         ImGui::TableHeadersRow();
         for(const auto& item:serviceReviews) {
             if(!matchesService(item))continue;
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             if(item.review && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(item.name).c_str());
@@ -6197,7 +6197,7 @@ static void drawServiceReviews() {
             ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s",item.assessment.c_str());
             ImGui::TableSetColumnIndex(4);
             ImGui::PushID((int)(&item-&serviceReviews[0]));
-            if(ImGui::Button("Show Details",ImVec2(150,40)))ImGui::OpenPopup("Service details");
+            if(ImGui::Button("Show Details",ImVec2(130,32)))ImGui::OpenPopup("Service details");
             if(ImGui::BeginPopup("Service details")) {
                 ImGui::Text("Service: %s",utf8(item.name).c_str());
                 ImGui::TextWrapped("Display name: %s",utf8(item.display).c_str());
@@ -6251,7 +6251,7 @@ static void processTable(float height) {
                 ImVec4(orange().x*.28f,orange().y*.28f,orange().z*.28f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.000f,1.000f,1.000f,1));
         }
-        if(ImGui::Button(filters[f],ImVec2(f==0?160.f:f==3?165.f:135.f,48.f)))
+        if(ImGui::Button(filters[f],ImVec2(f==0?148.f:f==3?152.f:120.f,36.f)))
             processViewFilter=f;
         if(active)ImGui::PopStyleColor(2);
         ImGui::PopID();
@@ -6281,7 +6281,7 @@ static void processTable(float height) {
         ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1.6f);
         ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3.5f);
         ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.5f);
-        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,175.f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,150.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& p:processes) {
@@ -6296,7 +6296,7 @@ static void processTable(float height) {
             std::transform(q.begin(),q.end(),q.begin(),
                 [](unsigned char c){return (char)std::tolower(c);});
             if(combined.find(q)==std::string::npos)continue;
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             if(p.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
@@ -6310,7 +6310,7 @@ static void processTable(float height) {
                 ImGui::TextDisabled("%s",p.assessment.c_str());
             ImGui::TableSetColumnIndex(5);
             ImGui::PushID((int)p.pid);
-            if(ImGui::Button("Show Details",ImVec2(150,40)))selectProcessDetails(p);
+            if(ImGui::Button("Show Details",ImVec2(130,32)))selectProcessDetails(p);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -6450,13 +6450,13 @@ static void recordsTable() {
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& r:records) {
-            ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             tintEvidenceRow(r);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(1);ImGui::Text("%s | %s",r.name.c_str(),evidenceLabel(r));
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.detail.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-            if(ImGui::Button("Show Details",ImVec2(150,40)))openEvidenceDetails(r.category,r.name,r.detail);
+            if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails(r.category,r.name,r.detail);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -6834,7 +6834,7 @@ static void draw(){
             ImGui::TableSetupColumn("File offset");ImGui::TableSetupColumn("Raw bytes");
             ImGui::TableSetupColumn("Entropy");ImGui::TableHeadersRow();
             for(const auto& sec:r.sections){
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                 if(sec.entropy>7.45&&sec.size>1024)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(70,70,70,120));
                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(sec.name.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::Text("0x%08X",sec.rva);
@@ -7076,7 +7076,7 @@ static void renderUI() {
     const ImVec4 accentInk(.84f,.84f,.84f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.039f,0.039f,0.039f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
-    ImGui::BeginChild("##atlasHeader",ImVec2(0,83),ImGuiChildFlags_None);
+    ImGui::BeginChild("##atlasHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
     // logo and a short traveling highlight under the wordmark. Draw-only,
     // non-interactive, and independent of scan findings.
@@ -7164,8 +7164,8 @@ static void renderUI() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
     const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
     const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
-    const int navRows=(9+navColumns-1)/navColumns;
-    const float navRowHeight=54.f;
+    const int navRows=simplifiedInterface?1:(9+navColumns-1)/navColumns;
+    const float navRowHeight=46.f;
     ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     // Persistent UI-only transition state; scan and evidence data are unaffected.
@@ -7267,7 +7267,7 @@ static void renderUI() {
     ImGui::PopStyleColor();
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.019f,0.019f,0.019f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(30,26));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
     // No moving rings, artificial radar sweeps or fabricated activity.
@@ -7315,7 +7315,7 @@ static void renderUI() {
         dl->AddRectFilled(ImVec2(lineStart.x,lineY-1.f),
                           ImVec2(lineStart.x+44.f,lineY+1.f),
                           IM_COL32(158,158,158,190),1.f);
-        ImGui::Dummy(ImVec2(0,29.f));
+        ImGui::Dummy(ImVec2(0,12.f));
     }
     // Only Dashboard shows progress; remove the bar once it reaches 100%.
     // Investigation pages show the lock from launch until scan completion and 100%.
@@ -7669,12 +7669,12 @@ static void renderUI() {
                     ImGui::TableHeadersRow();
                     std::lock_guard<std::mutex> lock(dataMutex);
                     for(const auto& f:files) {
-                        ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",utf8(f.path).c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
                          ImGui::TableSetColumnIndex(3);ImGui::PushID(&f);
-                         if(ImGui::Button("Show Details",ImVec2(150,40)))openEvidenceDetails("File Integrity",utf8(f.path),
+                         if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails("File Integrity",utf8(f.path),
                              "SHA-256: "+f.hash+"\nAuthenticode: "+f.signature,f.path);
                          ImGui::PopID();
                     }
@@ -7700,17 +7700,17 @@ static void renderUI() {
                     for(const auto& r:records) {
                         if(r.category!="USB")continue;
                         ++found;
-                        ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
                          ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-                         if(ImGui::Button("Show Details",ImVec2(150,40)))openEvidenceDetails("USB Registry",r.name,
+                         if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails("USB Registry",r.name,
                              "Registry inventory: "+r.detail+"\nThis entry does not establish when a device was connected.");
                          ImGui::PopID();
                     }
                     if(!found) {
-                        ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                         ImGui::TableSetColumnIndex(0);
                         ImGui::TextDisabled("No USB inventory in current scan. Run Start Full Scan.");
                     }
@@ -7769,7 +7769,7 @@ static void renderUI() {
                 if(timelineSearch[0] && hay.find(timelineSearch)==std::string::npos)
                     continue;
                 ImGui::PushID((int)i);
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                 if(ev.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(92,92,92,150));
                 ImGui::TableSetColumnIndex(0);
@@ -7781,7 +7781,7 @@ static void renderUI() {
                 ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(ev.description.c_str());
                 ImGui::TableSetColumnIndex(4);
-                if(ImGui::Button("Show Details",ImVec2(150,40))) {
+                if(ImGui::Button("Show Details",ImVec2(130,32))) {
                     selectedTimeline=(int)i;
                     openTimelineDetails=true;
                 }
@@ -7848,7 +7848,7 @@ static void renderUI() {
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&text.find(query)==std::string::npos)continue;
                 ++shown;
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
@@ -8035,7 +8035,7 @@ static void renderUI() {
                 ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.f,1.f,1.f,1.f));
             }
             if(ImGui::Button(artifactStatusNames[f],
-                ImVec2(f==0?160.f:f==3?165.f:135.f,48.f)))
+                ImVec2(f==0?148.f:f==3?152.f:120.f,36.f)))
                 artifactStatusFilter=f;
             if(active)ImGui::PopStyleColor(2);
             ImGui::PopID();
@@ -8131,7 +8131,7 @@ static void renderUI() {
                          r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                          r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule");
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,60.f);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(65,65,65,180));
                 else if(suspect)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
@@ -8140,7 +8140,7 @@ static void renderUI() {
                 ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
                 ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-                if(ImGui::Button("Show Details",ImVec2(150,40)))
+                if(ImGui::Button("Show Details",ImVec2(130,32)))
                     openEvidenceDetails(r.category,r.name,r.detail);
                 ImGui::PopID();
             }
@@ -8185,8 +8185,8 @@ static void renderUI() {
         ImGui::Spacing();
         ImGui::Text(localized("Interface Scale"));
         ImGui::SetNextItemWidth(320);
-        if(ImGui::SliderFloat("##scale",&interfaceScale,1.2f,1.8f,"%.2fx"))
-            ImGui::GetIO().FontGlobalScale=interfaceScale;
+        if(ImGui::SliderFloat("##scale",&interfaceScale,0.95f,1.35f,"%.2fx"))
+            ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
         ImGui::Spacing();
         ImGui::Text(localized("Window size (maximum 1920 x 1080)"));
         ImGui::SetNextItemWidth(320);
@@ -8231,13 +8231,13 @@ static void renderUI() {
         if(accentButton(localized("Save Settings"),ImVec2(170,42)))saveSettings();
         ImGui::SameLine();
         if(ImGui::Button(localized("Restore Defaults"),ImVec2(170,42))) {
-            displayLanguage=0;accentIndex=0;themeIndex=0;densityIndex=2;interfaceScale=1.35f;
+            displayLanguage=0;accentIndex=0;themeIndex=0;densityIndex=2;interfaceScale=1.08f;
             windowPreset=2;applyWindowPreset();
             highlightSuspicious=true;showSecurityWarnings=true;
             brandAnimation=true;ambientMotesEnabled=true;
             showNavHover=true;cornerStyle=1;scrollbarWidth=1;
             customAccent=ImVec4(0.527f,0.527f,0.527f,1.f);
-            ImGui::GetIO().FontGlobalScale=interfaceScale;
+            ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
             applyTheme();
             saveSettings();
         }
@@ -8337,7 +8337,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     loadSettings();
     applyWindowPreset();
     applyTheme();
-    ImGui::GetIO().FontGlobalScale=interfaceScale;
+    ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
     // Use Windows' modern UI font when available; fallback to the built-in font.
     ImGuiIO& io=ImGui::GetIO();
     ImFontConfig fontCfg{};
