@@ -19793,7 +19793,7 @@ static void renderUI() {
         ImGui::SameLine(0,18);
         ImGui::TextDisabled("Processes: %zu",processCount.load());
         ImGui::SameLine(0,18);
-        ImGui::TextDisabled("Records: %zu",recordCount.load());
+        ImGui::TextDisabled("Evidence: %zu",recordCount.load());
         if(ImGui::GetContentRegionAvail().x>180.f) {
             ImGui::SameLine();
             ImGui::TextDisabled("Read-only  |  Manual review");
@@ -19836,8 +19836,20 @@ static void renderUI() {
     const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
     if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
     lastNavPage=page;
-    const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
-                       "BINARY LAB","NETWORK","DRIVER AUDIT","ARTIFACT EXPLORER","KERNEL MEMORY DUMP","PREFERENCES"};
+    const char* nav[]={"OVERVIEW","FINDINGS","WINDOWS EVENTS",
+                       "FILE ANALYSIS","NETWORK","DRIVERS","ALL EVIDENCE","MEMORY DUMP","SETTINGS"};
+    // Plain-language navigation: only presentation labels change.
+    const char* navHelp[]={
+        "Overview, scan controls and current progress.",
+        "Review suspicious findings and their supporting evidence.",
+        "Inspect recorded Windows security and system events.",
+        "Inspect executable files and binary metadata.",
+        "Review network connections and related processes.",
+        "Review installed drivers and their trust information.",
+        "Browse all collected artifacts and detailed records.",
+        "Create and verify a process memory dump.",
+        "Adjust appearance, language and interface options."
+    };
     const int navPages[]={0,2,3,6,7,8,9,10,4};
     // Quick page navigation, ignored while editing text or using shortcuts.
     // Ctrl+1..9 follows the visible tab order.
@@ -19896,7 +19908,9 @@ static void renderUI() {
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){
             ImGui::BeginTooltip();
             ImGui::Text("%s",localized(nav[i]));
-            ImGui::TextDisabled("Ctrl + %d",i+1);
+            ImGui::TextWrapped("%s",navHelp[i]);
+            ImGui::Separator();
+            ImGui::TextDisabled("Shortcut: Ctrl + %d",i+1);
             ImGui::EndTooltip();
         }
         const ImVec2 tabMin=ImGui::GetItemRectMin();
@@ -19978,6 +19992,26 @@ static void renderUI() {
                           ImVec2(lineStart.x+44.f,lineY+1.f),
                           IM_COL32(158,158,158,190),1.f);
         ImGui::Dummy(ImVec2(0,12.f));
+    }
+    // Context help makes every page understandable without altering any scanner routines.
+    static bool showPageGuide=true;
+    const char* pageGuide=page==0?
+        "Start a complete scan here. Follow the progress and open results when it finishes.":
+        page==2?"Review findings carefully. A suspicious indicator is not proof of malware.":
+        page==3?"Windows events provide historical context; inspect each record for details.":
+        page==6?"Inspect file metadata, hashes and signatures to investigate binaries.":
+        page==7?"Review active and recorded connections alongside their processes.":
+        page==8?"Inspect driver details and signatures before drawing conclusions.":
+        page==9?"Browse collected evidence. Use the details controls for full context.":
+        page==10?"Advanced tool: capture and verify a process dump when needed.":
+        "Customize how the application looks and how information is displayed.";
+    if(ImGui::SmallButton(showPageGuide?"Hide page help":"What is this page?"))
+        showPageGuide=!showPageGuide;
+    if(showPageGuide){
+        ImGui::SameLine(0,12);
+        ImGui::TextDisabled("GUIDE");
+        ImGui::TextWrapped("%s",pageGuide);
+        ImGui::Spacing();
     }
     // Only Dashboard shows progress; remove the bar once it reaches 100%.
     // Investigation pages show the lock from launch until scan completion and 100%.
@@ -20150,12 +20184,12 @@ static void renderUI() {
         const float heroWidth=side?full-rightWidth-12.f:full;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.073f,0.073f,0.073f,1));
         ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,233),ImGuiChildFlags_Borders);
-        ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
+        ImGui::TextColored(accent,"PC SECURITY / SCAN OVERVIEW");
         ImGui::Dummy(ImVec2(0,8));
         ImGui::SetWindowFontScale(1.12f);
-        ImGui::TextColored(pale,"System Inspection");
+        ImGui::TextColored(pale,"Computer security check");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
+        ImGui::TextColored(quiet,"Checks running programs, services, startup entries and system events");
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
             if(presentationHold.load()){
