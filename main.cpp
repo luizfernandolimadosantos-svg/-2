@@ -1,4 +1,4 @@
-#include <cstdio>
+=#include <cstdio>
 #include <cstdlib>
 #ifdef SYNC_WITH_YARA
 #include <yara.h>
@@ -5197,6 +5197,7 @@ static void applyTheme() {
     st.FramePadding=ImVec2(11,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(10,densityIndex==0?7.f:densityIndex==2?12.f:9.f);
     st.ItemInnerSpacing=ImVec2(9,7);
+    st.CellPadding=ImVec2(12.f,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
     c[ImGuiCol_WindowBg]=ImVec4(.027f,.027f,.027f,1);
@@ -5468,7 +5469,7 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
     ImGui::Dummy(ImVec2(0,8));
     if(ImGui::BeginTable("memoryResults",4,ImGuiTableFlags_Borders|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
-        ImGuiTableFlags_ScrollY,ImVec2(0,embedded?250.f:-40.f))){
+        ImGuiTableFlags_ScrollY,ImVec2(0,embedded?ImMax(320.f,ImGui::GetContentRegionAvail().y-12.f):-40.f))){
         ImGui::TableSetupColumn("Address",ImGuiTableColumnFlags_WidthFixed,150);
         ImGui::TableSetupColumn("Size",ImGuiTableColumnFlags_WidthFixed,100);
         ImGui::TableSetupColumn("Protection",ImGuiTableColumnFlags_WidthFixed,155);
@@ -5818,7 +5819,7 @@ static void modulesList() {
                         ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,75);
                         ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,75);
                         ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1);
-                        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,2);
+                        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3);
                         ImGui::TableSetupColumn("Assessment",ImGuiTableColumnFlags_WidthStretch,2);
                         ImGui::TableHeadersRow();
                         for(const auto& p:snapshot) {
@@ -6264,7 +6265,7 @@ static void processTable(float height) {
     const ImGuiTableFlags flags=ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
         ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp;
-    if(ImGui::BeginTable("processes",6,flags,ImVec2(0,height))) {
+    if(ImGui::BeginTable("processes",6,flags,ImVec2(0,height<0.f?ImGui::GetContentRegionAvail().y:height))) {
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,64);
         ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,68);
@@ -8305,7 +8306,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                   L"SyncPCChecker",appIcon};
     RegisterClassExW(&wc);
     hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
-                       WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1200,780,nullptr,nullptr,inst,nullptr);
+                       WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1360,860,nullptr,nullptr,inst,nullptr);
     if(!hwnd){
         diagnosticLog("CreateWindowW failed.");
         MessageBoxW(nullptr,L"Unable to create the application window. "
