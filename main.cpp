@@ -4027,10 +4027,50 @@ static std::vector<Record> inspectDeepProcessExecutables(
 static constexpr unsigned kMinimumDisplaySeconds=15;
 static std::atomic<unsigned> presentationWaitRemaining{0};
 static std::atomic<bool> presentationHold{false};
+
+// Stage-boundary process observer. It samples actual OS snapshots during the
+// worker; it is not a lossless ETW event stream.
+static std::atomic<unsigned> observedSnapshots{0},observedNewPids{0};
+static std::atomic<unsigned> observedGonePids{0},observedUniquePids{0};
+static std::vector<Record> observeProcessBoundary(
+    const std::vector<Process>& snapshot,
+    std::unordered_map<DWORD,std::wstring>& previous,
+    std::unordered_set<DWORD>& everSeen){
+    std::vector<Record> events;
+    std::unordered_map<DWORD,std::wstring> current;
+    for(const auto& proc:snapshot){
+        current[proc.pid]=proc.name;
+        everSeen.insert(proc.pid);
+        const auto prior=previous.find(proc.pid);
+        if(prior==previous.end() && !previous.empty()){
+            events.push_back({"Process Observation","PID "+std::to_string(proc.pid),
+                "New PID observed between scan stages; may have started earlier"});
+            ++observedNewPids;
+        }else if(prior!=previous.end() && prior->second!=proc.name){
+            events.push_back({"Process Observation","PID "+std::to_string(proc.pid),
+                "Executable name differs between observations; possible PID reuse"});
+        }
+    }
+    for(const auto& prior:previous){
+        if(!current.count(prior.first)){
+            events.push_back({"Process Observation","PID "+std::to_string(prior.first),
+                "PID absent from next scan-stage snapshot"});
+            ++observedGonePids;
+        }
+    }
+    previous=std::move(current);
+    ++observedSnapshots;
+    observedUniquePids=static_cast<unsigned>(everSeen.size());
+    return events;
+}
 static void scanWorker() {
     try {
         stage=1;
         auto p=enumerateProcesses();
+        std::unordered_map<DWORD,std::wstring> observedPrevious;
+        std::unordered_set<DWORD> observedEver;
+        std::vector<Record> observedEvents=
+            observeProcessBoundary(p,observedPrevious,observedEver);
         const std::wstring winRoot=windowsRoot();
         sequentialTotal=static_cast<unsigned>(p.size()*(kProcessChecksPerPid+2));
         processChecksPlanned=static_cast<unsigned long long>(p.size())*kProcessChecksPerPid;
@@ -4048,6 +4088,13 @@ static void scanWorker() {
         auto deepExecutables=inspectDeepProcessExecutables(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
+        if(!cancelRequested){
+            setSequentialItem("Process observation between stages");
+            auto observation=observeProcessBoundary(
+                enumerateProcesses(),observedPrevious,observedEver);
+            observedEvents.insert(observedEvents.end(),
+                observation.begin(),observation.end());
+        }
         markInspectionStage(1);
         stage=2;
         sequentialDone=0;sequentialTotal=0;
@@ -4057,6 +4104,13 @@ static void scanWorker() {
         services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size()-deepExecutables.size());
+        if(!cancelRequested){
+            setSequentialItem("Process observation between stages");
+            auto observation=observeProcessBoundary(
+                enumerateProcesses(),observedPrevious,observedEver);
+            observedEvents.insert(observedEvents.end(),
+                observation.begin(),observation.end());
+        }
         markInspectionStage(2);
         stage=3;
         sequentialDone=0;sequentialTotal=0;
@@ -4064,6 +4118,13 @@ static void scanWorker() {
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[2]=static_cast<unsigned>(startup.size());
+        if(!cancelRequested){
+            setSequentialItem("Process observation between stages");
+            auto observation=observeProcessBoundary(
+                enumerateProcesses(),observedPrevious,observedEver);
+            observedEvents.insert(observedEvents.end(),
+                observation.begin(),observation.end());
+        }
         markInspectionStage(3);
         stage=4;
         sequentialDone=0;sequentialTotal=0;
@@ -4076,6 +4137,13 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[3]=static_cast<unsigned>(
             network.size()+udp.size()+tcp6.size()+usb.size()+defender.size());
+        if(!cancelRequested){
+            setSequentialItem("Process observation between stages");
+            auto observation=observeProcessBoundary(
+                enumerateProcesses(),observedPrevious,observedEver);
+            observedEvents.insert(observedEvents.end(),
+                observation.begin(),observation.end());
+        }
         markInspectionStage(4);
         stage=5;
         sequentialDone=0;
@@ -4267,6 +4335,7 @@ static void scanWorker() {
         stageWorkItems[4]=forensicProducedRecords.load();
         markInspectionStage(5);
         stage=5;
+        services.insert(services.end(),observedEvents.begin(),observedEvents.end());
         services.insert(services.end(),processChanges.begin(),processChanges.end());
         services.insert(services.end(),startup.begin(),startup.end());
         services.insert(services.end(),network.begin(),network.end());
@@ -4372,6 +4441,8 @@ static void startScan() {
     processChecksPlanned=0;processChecksCompleted=0;processChecksUnavailable=0;
     processNewPids=0;processExitedPids=0;processSecondSnapshot=0;
     forensicProducedRecords=0;
+    observedSnapshots=0;observedNewPids=0;
+    observedGonePids=0;observedUniquePids=0;
     presentationHold=false;presentationWaitRemaining=0;
     deepFilesChecked=0;deepFilesSkipped=0;deepUniquePaths=0;
     sequentialDone=0;sequentialTotal=0;
@@ -6944,6 +7015,11 @@ static void renderUI() {
                 ImGui::Text("Deep executable files checked: %u",deepFilesChecked.load());
                 ImGui::Text("Deep paths found: %u | skipped: %u",
                     deepUniquePaths.load(),deepFilesSkipped.load());
+                ImGui::Text("Process observations: %u | unique PIDs: %u",
+                    observedSnapshots.load(),observedUniquePids.load());
+                ImGui::Text("Observed new PIDs: %u | disappeared PIDs: %u",
+                    observedNewPids.load(),observedGonePids.load());
+                ImGui::TextDisabled("Stage-boundary sampling, not continuous ETW tracing.");
                 ImGui::Text("First process snapshot: %u",stageWorkItems[0].load());
                 ImGui::Text("Second process snapshot: %u",processSecondSnapshot.load());
                 ImGui::Text("New PIDs between snapshots: %u",processNewPids.load());
