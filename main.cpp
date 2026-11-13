@@ -257,8 +257,8 @@ static std::atomic<int> totalStages{6};
 static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
 static std::atomic<size_t> peFilesInspected{0};
 static std::wstring executablePath();
-static int accentIndex=0, themeIndex=0, densityIndex=1;
-static float interfaceScale=1.0f;
+static int accentIndex=0, themeIndex=0, densityIndex=2;
+static float interfaceScale=1.15f;
 static int windowPreset=2;
 static const char* windowPresetNames[]={"1024 x 720","1280 x 800","1440 x 900",
     "1600 x 900","1920 x 1080"};
@@ -3498,7 +3498,7 @@ static void drawEvidenceComparison(){
         ImGui::TableHeadersRow();
         unsigned shown=0;
         auto row=[&](const char* change,const Record& r){
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(change);
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(2);
@@ -5197,7 +5197,7 @@ static void applyTheme() {
     st.FramePadding=ImVec2(11,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(10,densityIndex==0?7.f:densityIndex==2?12.f:9.f);
     st.ItemInnerSpacing=ImVec2(9,7);
-    st.CellPadding=ImVec2(12.f,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
+    st.CellPadding=ImVec2(16.f,densityIndex==0?11.f:densityIndex==2?16.f:13.f);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
     auto& c=st.Colors;
     c[ImGuiCol_WindowBg]=ImVec4(.027f,.027f,.027f,1);
@@ -5480,7 +5480,7 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
             std::snprintf(address,sizeof(address),"0x%llX",(unsigned long long)f.address);
             std::string filter=std::string(address)+" "+f.category+" "+f.explanation;
             if(!moduleSearchMatches(filter))continue;
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(address);
             ImGui::TableSetColumnIndex(1);ImGui::Text("%llu KiB",(unsigned long long)(f.size/1024));
             ImGui::TableSetColumnIndex(2);
@@ -5572,7 +5572,7 @@ static void modulesList() {
                                     t==DRIVE_REMOVABLE?"Removable":t==DRIVE_REMOTE?"Network":"Other";
                                 const std::string path=utf8(d);
                                 if(!moduleSearchMatches(path+" "+type))continue;
-                                ImGui::TableNextRow();
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(path.c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(type);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted("Backing image not verified");
@@ -5601,7 +5601,7 @@ static void modulesList() {
                             if(!match)continue;
                             const std::string name=utf8(proc.name),path=utf8(proc.path);
                             if(!moduleSearchMatches(name+" "+path))continue;
-                            ImGui::TableNextRow();
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(name.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                             ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",path.c_str());
@@ -5628,7 +5628,7 @@ static void modulesList() {
                         for(const auto& e:snapshot){
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
-                            ImGui::TableNextRow();
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                             if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
@@ -5702,7 +5702,7 @@ static void modulesList() {
                                 if(detail.find(lowPath)==std::string::npos)continue;
                                 if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
                                 ++matches;
-                                ImGui::TableNextRow();
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
@@ -5726,7 +5726,7 @@ static void modulesList() {
                         for(const auto& e:snapshot){
                             if(!moduleSearchMatches(e.timestamp+" "+e.source+" "+e.eventId+
                                 " "+e.description+" "+e.detail))continue;
-                            ImGui::TableNextRow();
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                             if(e.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(73,73,73,120));
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(e.timestamp.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(e.source.c_str());
@@ -5800,7 +5800,7 @@ static void modulesList() {
                                 if(detail.find(lowPath)==std::string::npos)continue;
                                 if(!moduleSearchMatches(path+" "+rec.category+" "+rec.name+" "+rec.detail))continue;
                                 ++matches;
-                                ImGui::TableNextRow();
+                                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(proc.name).c_str());
                                 ImGui::TableSetColumnIndex(1);ImGui::Text("%lu",(unsigned long)proc.pid);
                                 ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(rec.category.c_str());
@@ -5825,7 +5825,7 @@ static void modulesList() {
                         for(const auto& p:snapshot) {
                             std::string name=utf8(p.name), path=utf8(p.path);
                             if(!moduleSearchMatches(name+" "+path+" "+p.assessment))continue;
-                            ImGui::TableNextRow();
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                             if(p.suspicious && highlightSuspicious)
                                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(52,52,52,160));
                             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
@@ -5865,7 +5865,7 @@ static void modulesList() {
                         for(const auto& r:snapshot) {
                             if(!moduleMatches(m.categories,r.category) ||
                                !moduleSearchMatches(r.category+" "+r.name+" "+r.detail))continue;
-                            ImGui::TableNextRow();
+                            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                             tintEvidenceRow(r);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
@@ -6050,7 +6050,7 @@ static void drawProcessDetails() {
         ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,2.2f);
         ImGui::TableHeadersRow();
         for(const auto& m:selectedModules) {
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             if(m.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
@@ -6068,7 +6068,7 @@ static void drawProcessDetails() {
         ImGui::TableSetupColumn("Assessment",ImGuiTableColumnFlags_WidthStretch,3);
         ImGui::TableHeadersRow();
         for(const auto& m:selectedImports) {
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(m.assessment.c_str());
         }
@@ -6172,12 +6172,12 @@ static void drawServiceReviews() {
         ImGui::TableSetupColumn("Service",ImGuiTableColumnFlags_WidthStretch,1.5f);
         ImGui::TableSetupColumn("Display name",ImGuiTableColumnFlags_WidthStretch,2.f);
         ImGui::TableSetupColumn("State",ImGuiTableColumnFlags_WidthFixed,110);
-        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.5f);
         ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableHeadersRow();
         for(const auto& item:serviceReviews) {
             if(!matchesService(item))continue;
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             if(item.review && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(item.name).c_str());
@@ -6249,7 +6249,7 @@ static void processTable(float height) {
         if(f<3)ImGui::SameLine(0,7);
     }
     ImGui::Dummy(ImVec2(0,6));
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.68f);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.76f);
     ImGui::InputTextWithHint("##search","Search processes, paths, or assessments...",searchInput,sizeof(searchInput));
     ImGui::SameLine();ImGui::Checkbox("Show inaccessible paths",&showUnavailable);
     size_t flagged=0;
@@ -6269,10 +6269,10 @@ static void processTable(float height) {
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableSetupColumn("PID",ImGuiTableColumnFlags_WidthFixed,64);
         ImGui::TableSetupColumn("Parent",ImGuiTableColumnFlags_WidthFixed,68);
-        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1.2f);
-        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3.f);
-        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.f);
-        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,112.f);
+        ImGui::TableSetupColumn("Process",ImGuiTableColumnFlags_WidthStretch,1.6f);
+        ImGui::TableSetupColumn("Executable path",ImGuiTableColumnFlags_WidthStretch,3.5f);
+        ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.5f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,138.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& p:processes) {
@@ -6287,7 +6287,7 @@ static void processTable(float height) {
             std::transform(q.begin(),q.end(),q.begin(),
                 [](unsigned char c){return (char)std::tolower(c);});
             if(combined.find(q)==std::string::npos)continue;
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             if(p.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::Text("%lu",(unsigned long)p.pid);
@@ -6441,7 +6441,7 @@ static void recordsTable() {
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& r:records) {
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
             tintEvidenceRow(r);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(1);ImGui::Text("%s | %s",r.name.c_str(),evidenceLabel(r));
@@ -6825,7 +6825,7 @@ static void draw(){
             ImGui::TableSetupColumn("File offset");ImGui::TableSetupColumn("Raw bytes");
             ImGui::TableSetupColumn("Entropy");ImGui::TableHeadersRow();
             for(const auto& sec:r.sections){
-                ImGui::TableNextRow();
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                 if(sec.entropy>7.45&&sec.size>1024)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(70,70,70,120));
                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(sec.name.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::Text("0x%08X",sec.rva);
@@ -7660,7 +7660,7 @@ static void renderUI() {
                     ImGui::TableHeadersRow();
                     std::lock_guard<std::mutex> lock(dataMutex);
                     for(const auto& f:files) {
-                        ImGui::TableNextRow();
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",utf8(f.path).c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
@@ -7691,7 +7691,7 @@ static void renderUI() {
                     for(const auto& r:records) {
                         if(r.category!="USB")continue;
                         ++found;
-                        ImGui::TableNextRow();
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
@@ -7701,7 +7701,7 @@ static void renderUI() {
                          ImGui::PopID();
                     }
                     if(!found) {
-                        ImGui::TableNextRow();
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                         ImGui::TableSetColumnIndex(0);
                         ImGui::TextDisabled("No USB inventory in current scan. Run Start Full Scan.");
                     }
@@ -7760,7 +7760,7 @@ static void renderUI() {
                 if(timelineSearch[0] && hay.find(timelineSearch)==std::string::npos)
                     continue;
                 ImGui::PushID((int)i);
-                ImGui::TableNextRow();
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                 if(ev.alert)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(92,92,92,150));
                 ImGui::TableSetColumnIndex(0);
@@ -7839,7 +7839,7 @@ static void renderUI() {
                     [](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()&&text.find(query)==std::string::npos)continue;
                 ++shown;
-                ImGui::TableNextRow();
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                 ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
                 ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
@@ -8121,7 +8121,7 @@ static void renderUI() {
                          r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                          r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule");
-                ImGui::TableNextRow();
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,42.f);
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(65,65,65,180));
                 else if(suspect)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
