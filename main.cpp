@@ -258,7 +258,7 @@ static std::atomic<size_t> processCount{0}, recordCount{0}, fileCount{0};
 static std::atomic<size_t> peFilesInspected{0};
 static std::wstring executablePath();
 static int accentIndex=0, themeIndex=0, densityIndex=2;
-static float interfaceScale=1.08f;
+static float interfaceScale=1.0f;
 static int windowPreset=2;
 static const char* windowPresetNames[]={"1024 x 720","1280 x 800","1440 x 900",
     "1600 x 900","1920 x 1080"};
@@ -5253,7 +5253,7 @@ static void applyTheme() {
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
-    ImGui::SetWindowFontScale(1.18f);
+    ImGui::SetWindowFontScale(1.0f);
     ImGui::TextUnformatted(title);
     ImGui::SetWindowFontScale(1.f);
     if(description)ImGui::TextDisabled("%s",description);
@@ -6236,6 +6236,7 @@ static void drawServiceReviews() {
 
 // Process findings have only a heuristic review flag. Confirmed detections
 // are never inferred from that flag.
+static bool expandedFindingsTable=true;
 static int processViewFilter=0; // 0 all, 1 suspect, 2 detected, 3 no indicators
 static void processTable(float height) {
     ImGui::TextDisabled("%s",XOR_STR("PROCESS TRIAGE").c_str());
@@ -7633,14 +7634,22 @@ static void renderUI() {
         modulesList();
         ImGui::EndChild();
     } else if(page==2) {
-        sectionTitle(done?"Investigation Results":"Investigation Results",
-                     "Process inventory with explainable path-based review indicators.");
-        ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
-                          processCount.load(),recordCount.load(),fileCount.load());
-        ImGui::Spacing();
+        if(!expandedFindingsTable){
+            sectionTitle("Investigation Results",
+                         "Process inventory with explainable path-based review indicators.");
+            ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
+                              processCount.load(),recordCount.load(),fileCount.load());
+        }
+        if(ImGui::SmallButton(expandedFindingsTable?
+            "Show overview##tableHeight":"Expand results table##tableHeight"))
+            expandedFindingsTable=!expandedFindingsTable;
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu processes | %zu records",
+                            processCount.load(),recordCount.load());
         if(ImGui::BeginTabBar("results")) {
             if(ImGui::BeginTabItem("Findings")) {
-                ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
+                if(!expandedFindingsTable)
+                    ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
                 processTable(-1.f);
                 ImGui::EndTabItem();
             }
@@ -8186,7 +8195,7 @@ static void renderUI() {
         ImGui::Text(localized("Interface Scale"));
         ImGui::SetNextItemWidth(320);
         if(ImGui::SliderFloat("##scale",&interfaceScale,0.95f,1.35f,"%.2fx"))
-            ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
+            ImGui::GetIO().FontGlobalScale=interfaceScale;
         ImGui::Spacing();
         ImGui::Text(localized("Window size (maximum 1920 x 1080)"));
         ImGui::SetNextItemWidth(320);
@@ -8231,13 +8240,13 @@ static void renderUI() {
         if(accentButton(localized("Save Settings"),ImVec2(170,42)))saveSettings();
         ImGui::SameLine();
         if(ImGui::Button(localized("Restore Defaults"),ImVec2(170,42))) {
-            displayLanguage=0;accentIndex=0;themeIndex=0;densityIndex=2;interfaceScale=1.08f;
+            displayLanguage=0;accentIndex=0;themeIndex=0;densityIndex=2;interfaceScale=1.0f;
             windowPreset=2;applyWindowPreset();
             highlightSuspicious=true;showSecurityWarnings=true;
             brandAnimation=true;ambientMotesEnabled=true;
             showNavHover=true;cornerStyle=1;scrollbarWidth=1;
             customAccent=ImVec4(0.527f,0.527f,0.527f,1.f);
-            ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
+            ImGui::GetIO().FontGlobalScale=interfaceScale;
             applyTheme();
             saveSettings();
         }
@@ -8337,7 +8346,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     loadSettings();
     applyWindowPreset();
     applyTheme();
-    ImGui::GetIO().FontGlobalScale=(std::min)(interfaceScale,1.35f);
+    ImGui::GetIO().FontGlobalScale=interfaceScale;
     // Use Windows' modern UI font when available; fallback to the built-in font.
     ImGuiIO& io=ImGui::GetIO();
     ImFontConfig fontCfg{};
