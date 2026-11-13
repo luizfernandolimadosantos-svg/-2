@@ -2632,7 +2632,8 @@ static std::vector<Record> inspectShellInitialization(){
                 low.find(L"wscript")!=std::wstring::npos;
             if(!nameMatch && !unusual)continue;
             out.push_back({"Shell Initialization",utf8(valueName),
-                std::string(nameMatch?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                std::string(nameMatch?"REVIEW - NAME RULE":
+                    (broad||temp?"NEEDS REVIEW":"INVENTORY ONLY"))+
                 " | "+k.label+" | Value: "+utf8(value)+
                 " | Why: shell initialization references an unusual command "
                 "or a name-rule match. Confirm this is expected."});
@@ -2749,7 +2750,7 @@ static std::vector<Record> inspectBamExecutionHistory(){
 static std::vector<Record> inspectDefenderExclusionIndicators(){
     std::vector<Record> out;
     const wchar_t* base=L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\";
-    const wchar_t* groups[]={L"Paths",L"Processes",L"Extensions"};
+    const wchar_t* groups[]={L"Paths",L"Processes",L"Extensions",L"IpAddresses"};
     for(const wchar_t* group:groups){
         if(cancelRequested)break;
         HKEY key=nullptr;
@@ -2768,7 +2769,6 @@ static std::vector<Record> inspectDefenderExclusionIndicators(){
                 lower==L"*" || lower==L".exe" || lower==L".dll");
             const bool temp=(lower.find(L"\\temp\\")!=std::wstring::npos ||
                 lower.find(L"\\downloads\\")!=std::wstring::npos);
-            if(!nameMatch && !broad && !temp)continue;
             out.push_back({"Defender Exclusion Review",utf8(value),
                 std::string(nameMatch?"DETECTED - NAME RULE":"NEEDS REVIEW")+
                 " | Defender exclusion group: "+utf8(group)+
@@ -4197,8 +4197,8 @@ static std::vector<Record> inspectNamedBatchScripts(){
     };
     std::unordered_set<std::wstring> visited;
     unsigned examined=0;
-    constexpr unsigned kMaxEntries=8000;
-    constexpr unsigned kMaxDepth=2;
+    constexpr unsigned kMaxEntries=30000;
+    constexpr unsigned kMaxDepth=4;
     for(const auto& root:roots){
         if(cancelRequested || examined>=kMaxEntries)break;
         std::vector<std::pair<fs::path,unsigned>> pending{{root,0}};
@@ -4233,8 +4233,47 @@ static std::vector<Record> inspectNamedBatchScripts(){
                         matched=keyword;break;
                     }
                 }
-                if(matched.empty())continue;
+                // Inspect a bounded script sample even when the filename is innocuous.
+                // No commands are executed; content matches are investigation leads.
+                std::string scriptSample;
+                {
+                    std::ifstream script(it->path(),std::ios::binary);
+                    if(script){
+                        scriptSample.resize(65536);
+                        script.read(scriptSample.data(),static_cast<std::streamsize>(scriptSample.size()));
+                        scriptSample.resize(static_cast<std::size_t>(script.gcount()));
+                        std::transform(scriptSample.begin(),scriptSample.end(),
+                            scriptSample.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+                    }
+                }
+                const std::vector<std::string> scriptIndicators={
+                    "add-mppreference", "set-mppreference",
+                    "disableantispyware", "exclusionpath",
+                    "exclusionprocess", "exclusionextension",
+                    "reg add", "schtasks /create", "powershell -enc",
+                    "frombase64string", "certutil -decode"
+                };
+                std::string contentMatch;
+                for(const auto& indicator:scriptIndicators){
+                    if(scriptSample.find(indicator)!=std::string::npos){
+                        contentMatch=indicator;break;
+                    }
+                }
+                // Inventory all discovered batch files, not only filename matches.
+                if(matched.empty() && contentMatch.empty()){
+                    out.push_back({"Batch Script Inventory",utf8(it->path().filename().wstring()),
+                        "INVENTORY ONLY | Path: "+utf8(it->path().wstring())+
+                        " | No configured filename/content indicator in sampled bytes."});
+                    continue;
+                }
                 ++batNameMatches;
+                if(matched.empty()){
+                    out.push_back({"Batch Script Content Review",utf8(it->path().filename().wstring()),
+                        "REVIEW - CONTENT KEYWORD | Match: "+contentMatch+
+                        " | Path: "+utf8(it->path().wstring())+
+                        " | Sampled first 64 KiB only; script not executed."});
+                    continue;
+                }
                 out.push_back({"Batch Script Name Rule",utf8(it->path().filename().wstring()),
                     "REVIEW - FILENAME KEYWORD | Match: "+utf8(matched)+
                     " | Extension: "+utf8(ext)+
@@ -7723,34 +7762,8 @@ static void renderUI() {
         std::vector<Record> snapshot;
         {
             std::lock_guard<std::mutex> lock(dataMutex);
-            for(const auto& r:records){
-                if(r.category.rfind("Artifact: ",0)==0 ||
-                   r.category=="FiveM Cheat Name Detection" ||
-                   r.category=="Executable Location" ||
-                   r.category=="Executable Provenance" ||
-                   r.category=="Module Provenance" ||
-                   r.category=="Module Signature" ||
-                   r.category=="Known Hash Indicator" ||
-                   r.category=="Signature Review" ||
-                   r.category=="Execution Artifact" ||
-                   r.category=="Scan Coverage" ||
-                   r.category=="Expanded Persistence" ||
-                   r.category=="Startup File Review" ||
-                   r.category=="Special Persistence" ||
-                   r.category=="Executable Alternate Stream" ||
-                   r.category=="BAM Execution History" ||
-                   r.category=="Defender Exclusion Review" ||
-                   r.category=="Scheduled Task Name" ||
-                   r.category=="COM Registration Review" ||
-                   r.category=="Service Image Review" ||
-                   r.category=="Execution Configuration" ||
-                   r.category=="Filename Masquerading" ||
-                   r.category=="Shell Initialization" ||
-                   r.category=="Security Policy Review" ||
-                   r.category=="Detection Coverage" ||
-                   r.category=="Batch Script Name Rule")
-                    snapshot.push_back(r);
-            }
+            for(const auto& r:records)
+                snapshot.push_back(r);
         }
         static std::string artifactExportMessage;
         ImGui::Text("Collected artifacts: %zu",snapshot.size());
@@ -7787,7 +7800,9 @@ static void renderUI() {
                     (artifactType==6&&
                       (r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
                        r.category=="FiveM Cheat Name Detection")) ||
-                    (artifactType==7&&r.category=="Batch Script Name Rule");
+                    (artifactType==7&&(r.category=="Batch Script Name Rule" ||
+                       r.category=="Batch Script Content Review" ||
+                       r.category=="Batch Script Inventory"));
                 if(!matchType)continue;
                 const bool detected=
                     isDetectedRecord(r) ||
@@ -7797,7 +7812,8 @@ static void renderUI() {
                     (isSuspectRecord(r) ||
                      r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                      r.detail.find("REVIEW:")!=std::string::npos ||
-                     r.category=="Batch Script Name Rule");
+                     r.category=="Batch Script Name Rule" ||
+                     r.category=="Batch Script Content Review");
                 if(artifactStatusFilter==1 && !suspect)continue;
                 if(artifactStatusFilter==2 && !detected)continue;
                 if(artifactStatusFilter==3 && (detected||suspect))continue;
