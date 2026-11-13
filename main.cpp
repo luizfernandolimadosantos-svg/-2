@@ -51,6 +51,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <memory>
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx11.h"
@@ -3809,6 +3810,8 @@ static std::vector<Record> inspectIndividualProcesses(
         if(cancelRequested)break;
         const std::string pid=std::to_string(p.pid);
         HANDLE handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
+        const auto closeHandle=[](void* h){if(h)CloseHandle(static_cast<HANDLE>(h));};
+        std::unique_ptr<void,decltype(closeHandle)> handleGuard(handle,closeHandle);
         const auto emit=[&](const char* check,const std::string& result,bool available){
             setSequentialItem("PID "+pid+" / "+check);
             output.push_back({"Process Check",pid+" / "+check,
@@ -3909,6 +3912,7 @@ static std::vector<Record> inspectIndividualProcesses(
         emit("IO other bytes",ioOk?std::to_string(io.OtherTransferCount):"Unavailable",ioOk);
         if(cancelRequested)break;
         HANDLE memoryHandle=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,p.pid);
+        std::unique_ptr<void,decltype(closeHandle)> memoryGuard(memoryHandle,closeHandle);
         PROCESS_MEMORY_COUNTERS_EX pmc{};
         const bool memoryOk=memoryHandle&&GetProcessMemoryInfo(memoryHandle,
             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),sizeof(pmc));
@@ -3925,8 +3929,7 @@ static std::vector<Record> inspectIndividualProcesses(
         emit("Peak pagefile usage bytes",memoryOk?std::to_string(pmc.PeakPagefileUsage):"Unavailable",memoryOk);
         if(cancelRequested)break;
         emit("Quota paged pool bytes",memoryOk?std::to_string(pmc.QuotaPagedPoolUsage):"Unavailable",memoryOk);
-        if(memoryHandle)CloseHandle(memoryHandle);
-        if(handle)CloseHandle(handle);
+        // RAII closes both handles on normal completion or cancellation.
     }
     return output;
 }
@@ -3976,6 +3979,99 @@ static std::vector<Record> reconcileProcessSnapshots(
 // This is read-only. Results are published only after the worker finishes.
 static std::atomic<unsigned> deepFilesChecked{0},deepFilesSkipped{0};
 static std::atomic<unsigned> deepUniquePaths{0};
+
+// Bounded PE section entropy inspection. Does not load or execute the file.
+// The estimate uses at most 1 MiB per section; not a malware verdict.
+static std::atomic<unsigned> peEntropyFiles{0},peEntropySections{0};
+static std::atomic<unsigned> peEntropyInvalid{0},peEntropySectionsSkipped{0};
+static std::atomic<unsigned> peEntropyCancelled{0};
+static std::vector<Record> inspectPeSectionEntropy(const std::wstring& path){
+    std::vector<Record> results;
+    // Invalid/inaccessible files are counted, not silently treated as inspected.
+    const auto reject=[&](){
+        ++peEntropyInvalid;
+        return std::vector<Record>{};
+    };
+    std::ifstream f(fs::path(path),std::ios::binary);
+    if(!f)return reject();
+    f.seekg(0,std::ios::end);
+    const auto end=f.tellg();
+    if(end<static_cast<std::streamoff>(sizeof(IMAGE_DOS_HEADER)))return reject();
+    const auto length=static_cast<std::uint64_t>(end);
+    f.seekg(0);
+    IMAGE_DOS_HEADER dos{};
+    f.read(reinterpret_cast<char*>(&dos),sizeof(dos));
+    if(!f || dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0)return reject();
+    const auto ntOffset=static_cast<std::uint64_t>(dos.e_lfanew);
+    if(ntOffset>length || length-ntOffset<sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER))
+        return reject();
+    f.seekg(static_cast<std::streamoff>(ntOffset));
+    DWORD signature=0;
+    IMAGE_FILE_HEADER header{};
+    f.read(reinterpret_cast<char*>(&signature),sizeof(signature));
+    f.read(reinterpret_cast<char*>(&header),sizeof(header));
+    if(!f || signature!=IMAGE_NT_SIGNATURE ||
+       header.NumberOfSections==0 || header.NumberOfSections>96)return reject();
+    const auto tableOffset=ntOffset+sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER)+header.SizeOfOptionalHeader;
+    const auto sectionBytes=static_cast<std::uint64_t>(header.NumberOfSections)*sizeof(IMAGE_SECTION_HEADER);
+    if(tableOffset>length || sectionBytes>length-tableOffset)return reject();
+    // Verify optional header magic before claiming an executable PE was parsed.
+    if(header.SizeOfOptionalHeader<sizeof(WORD))return reject();
+    WORD optionalMagic=0;
+    f.seekg(static_cast<std::streamoff>(
+        ntOffset+sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER)));
+    f.read(reinterpret_cast<char*>(&optionalMagic),sizeof(optionalMagic));
+    if(!f || (optionalMagic!=IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+              optionalMagic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC))return reject();
+    f.seekg(static_cast<std::streamoff>(tableOffset));
+    std::vector<IMAGE_SECTION_HEADER> sections(header.NumberOfSections);
+    f.read(reinterpret_cast<char*>(sections.data()),
+        static_cast<std::streamsize>(sectionBytes));
+    if(!f)return reject();
+    ++peEntropyFiles;
+    results.push_back({"PE File Metadata",std::string(path.begin(),path.end()),
+        "Machine="+std::to_string(header.Machine)+
+        " | Sections="+std::to_string(header.NumberOfSections)+
+        " | PE="+std::string(optionalMagic==IMAGE_NT_OPTIONAL_HDR64_MAGIC?"PE32+":"PE32")+
+        " | Timestamp="+std::to_string(header.TimeDateStamp)+
+        " | Characteristics="+std::to_string(header.Characteristics)});
+    for(const auto& section:sections){
+        if(cancelRequested){++peEntropyCancelled;break;}
+        const auto offset=static_cast<std::uint64_t>(section.PointerToRawData);
+        const auto rawSize=static_cast<std::uint64_t>(section.SizeOfRawData);
+        if(!rawSize || offset>length || rawSize>length-offset){
+            ++peEntropySectionsSkipped;
+            continue;
+        }
+        const auto sample=static_cast<std::size_t>(
+            std::min<std::uint64_t>(rawSize,1024ull*1024ull));
+        std::vector<unsigned char> bytes(sample);
+        f.clear();
+        f.seekg(static_cast<std::streamoff>(offset));
+        f.read(reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(sample));
+        if(!f){++peEntropySectionsSkipped;continue;}
+        std::array<std::uint64_t,256> histogram{};
+        for(unsigned char byte:bytes)++histogram[byte];
+        double entropy=0.0;
+        for(auto count:histogram){
+            if(!count)continue;
+            const double probability=static_cast<double>(count)/sample;
+            entropy-=probability*std::log2(probability);
+        }
+        std::string name(reinterpret_cast<const char*>(section.Name),8);
+        name.resize(name.find('\0'));
+        std::ostringstream details;
+        details<<std::fixed<<std::setprecision(3)
+            <<"Entropy: "<<entropy<<" bits/byte | Sample: "<<sample
+            <<" bytes | Raw section: "<<rawSize<<" bytes"
+            <<" | Virtual size: "<<section.Misc.VirtualSize
+            <<" | Flags: "<<section.Characteristics;
+        results.push_back({"PE Section Entropy",name,details.str()});
+        ++peEntropySections;
+    }
+    return results;
+}
 static std::vector<Record> inspectDeepProcessExecutables(
     const std::vector<Process>& snapshot){
     std::vector<Record> findings;
@@ -4015,6 +4111,12 @@ static std::vector<Record> inspectDeepProcessExecutables(
         if(cancelRequested)break;
         setSequentialItem("Signature PID "+std::to_string(proc.pid));
         const auto signature=signatureStatus(proc.path);
+        if(cancelRequested)break;
+        setSequentialItem("PE section entropy PID "+std::to_string(proc.pid));
+        auto sectionFindings=inspectPeSectionEntropy(proc.path);
+        for(auto& item:sectionFindings)
+            item.detail="PID="+std::to_string(proc.pid)+" | "+item.detail;
+        findings.insert(findings.end(),sectionFindings.begin(),sectionFindings.end());
         ++deepFilesChecked;
         findings.push_back({"Deep Executable Check",std::to_string(proc.pid),
             "Path: "+utf8(proc.path)+" | Size: "+std::to_string(size)+
@@ -4062,6 +4164,86 @@ static std::vector<Record> observeProcessBoundary(
     ++observedSnapshots;
     observedUniquePids=static_cast<unsigned>(everSeen.size());
     return events;
+}
+
+// Read-only, bounded filename screening for Windows batch scripts.
+// A keyword hit is a review indicator, never proof of cheating.
+static std::atomic<unsigned> batFilesSeen{0},batNameMatches{0},batDirsFailed{0};
+static std::vector<Record> inspectNamedBatchScripts(){
+    std::vector<Record> out;
+    const auto env=[](const wchar_t* key)->std::wstring{
+        wchar_t buffer[32768]{};
+        DWORD n=GetEnvironmentVariableW(key,buffer,32768);
+        return n>0 && n<32768 ? std::wstring(buffer,n) : L"";
+    };
+    const auto user=env(L"USERPROFILE");
+    const auto local=env(L"LOCALAPPDATA");
+    const auto roaming=env(L"APPDATA");
+    const auto temp=env(L"TEMP");
+    std::vector<fs::path> roots;
+    if(!user.empty()){
+        roots.emplace_back(fs::path(user)/L"Desktop");
+        roots.emplace_back(fs::path(user)/L"Downloads");
+        roots.emplace_back(fs::path(user)/L"Documents");
+    }
+    if(!local.empty())roots.emplace_back(local);
+    if(!roaming.empty())roots.emplace_back(roaming);
+    if(!temp.empty())roots.emplace_back(temp);
+    const std::vector<std::wstring> keywords={
+        L"cheat",L"bypass",L"external",L"inject",L"spoofer",
+        L"fivem",L"executor",L"loader",L"redengine",L"eulen",
+        L"skript",L"tzproject",L"lynx",L"aimbot",L"triggerbot"
+    };
+    std::unordered_set<std::wstring> visited;
+    unsigned examined=0;
+    constexpr unsigned kMaxEntries=8000;
+    constexpr unsigned kMaxDepth=2;
+    for(const auto& root:roots){
+        if(cancelRequested || examined>=kMaxEntries)break;
+        std::vector<std::pair<fs::path,unsigned>> pending{{root,0}};
+        while(!pending.empty() && !cancelRequested && examined<kMaxEntries){
+            auto current=pending.back();pending.pop_back();
+            std::error_code ec;
+            if(!fs::is_directory(current.first,ec))continue;
+            const auto key=lowerPath(current.first.wstring());
+            if(!visited.insert(key).second)continue;
+            fs::directory_iterator it(current.first,
+                fs::directory_options::skip_permission_denied,ec),last;
+            if(ec){++batDirsFailed;continue;}
+            for(;it!=last && !cancelRequested && examined<kMaxEntries;it.increment(ec)){
+                if(ec){++batDirsFailed;ec.clear();break;}
+                ++examined;
+                std::error_code statusError;
+                const auto status=it->symlink_status(statusError);
+                if(statusError || fs::is_symlink(status))continue;
+                if(fs::is_directory(status)){
+                    if(current.second<kMaxDepth)
+                        pending.emplace_back(it->path(),current.second+1);
+                    continue;
+                }
+                if(!fs::is_regular_file(status))continue;
+                const auto ext=lowerPath(it->path().extension().wstring());
+                if(ext!=L".bat" && ext!=L".cmd")continue;
+                ++batFilesSeen;
+                const auto filename=lowerPath(it->path().filename().wstring());
+                std::wstring matched;
+                for(const auto& keyword:keywords){
+                    if(filename.find(keyword)!=std::wstring::npos){
+                        matched=keyword;break;
+                    }
+                }
+                if(matched.empty())continue;
+                ++batNameMatches;
+                out.push_back({"Batch Script Name Rule",utf8(it->path().filename().wstring()),
+                    "REVIEW - FILENAME KEYWORD | Match: "+utf8(matched)+
+                    " | Extension: "+utf8(ext)+
+                    " | Path: "+utf8(it->path().wstring())+
+                    " | Filename only; script content not executed or interpreted. "
+                    "This does not establish cheating or malicious behavior."});
+            }
+        }
+    }
+    return out;
 }
 static void scanWorker() {
     try {
@@ -4324,6 +4506,9 @@ static void scanWorker() {
         setSequentialItem("inspectYaraLocalFiles");
         auto yaraFindings=inspectYaraLocalFiles(p);
         ++sequentialDone;        if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("inspectNamedBatchScripts (.bat/.cmd)");
+        auto batchNameFindings=inspectNamedBatchScripts();
+        if(cancelRequested){scanCancelled=true;scanning=false;return;}
         // Reconcile a second actual Windows snapshot; this is a bounded
         // discovery pass, not an invented process count or an ETW monitor.
         setSequentialItem("Second process snapshot / PID reconciliation");
@@ -4331,7 +4516,7 @@ static void scanWorker() {
         auto processChanges=reconcileProcessSnapshots(p,secondSnapshot);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         forensicProducedRecords=static_cast<unsigned>(forensicHeaders.size()+
-            yaraFindings.size()+processChanges.size());
+            yaraFindings.size()+processChanges.size()+batchNameFindings.size());
         stageWorkItems[4]=forensicProducedRecords.load();
         markInspectionStage(5);
         stage=5;
@@ -4351,6 +4536,7 @@ static void scanWorker() {
         services.insert(services.end(),extraPolicies.begin(),extraPolicies.end());
         services.insert(services.end(),forensicHeaders.begin(),forensicHeaders.end());
         services.insert(services.end(),yaraFindings.begin(),yaraFindings.end());
+        services.insert(services.end(),batchNameFindings.begin(),batchNameFindings.end());
         services.insert(services.end(),policyRules.begin(),policyRules.end());
         services.insert(services.end(),firmwareIndicators.begin(),firmwareIndicators.end());
         services.insert(services.end(),fiveMTest.begin(),fiveMTest.end());
@@ -4445,6 +4631,9 @@ static void startScan() {
     observedGonePids=0;observedUniquePids=0;
     presentationHold=false;presentationWaitRemaining=0;
     deepFilesChecked=0;deepFilesSkipped=0;deepUniquePaths=0;
+    peEntropyFiles=0;peEntropySections=0;
+    peEntropyInvalid=0;peEntropySectionsSkipped=0;peEntropyCancelled=0;
+    batFilesSeen=0;batNameMatches=0;batDirsFailed=0;
     sequentialDone=0;sequentialTotal=0;
     setSequentialItem("");
     forensicSourceStatus=0;
@@ -7012,6 +7201,13 @@ static void renderUI() {
         }
         if(done){
             if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
+                ImGui::Text("Batch scripts: %u found | %u filename matches | %u inaccessible folders",
+                    batFilesSeen.load(),batNameMatches.load(),batDirsFailed.load());
+                ImGui::Text("PE entropy: %u files | %u sections",
+                    peEntropyFiles.load(),peEntropySections.load());
+                ImGui::Text("PE invalid/unavailable: %u | sections skipped: %u",
+                    peEntropyInvalid.load(),peEntropySectionsSkipped.load());
+                ImGui::Text("PE inspection cancellations: %u",peEntropyCancelled.load());
                 ImGui::Text("Deep executable files checked: %u",deepFilesChecked.load());
                 ImGui::Text("Deep paths found: %u | skipped: %u",
                     deepUniquePaths.load(),deepFilesSkipped.load());
@@ -7486,7 +7682,7 @@ static void renderUI() {
         }
         ImGui::Dummy(ImVec2(0,7));
         const char* types[]={"All artifacts","EXE","DLL","SYS","Prefetch",
-                             "Scripts / shortcuts","Cheat / External name matches"};
+                             "Scripts / shortcuts","Cheat / External name matches","BAT / CMD name matches"};
         ImGui::SetNextItemWidth(215);
         ImGui::Combo("Type##artifact", &artifactType,types,IM_ARRAYSIZE(types));
         ImGui::SameLine();
@@ -7521,7 +7717,8 @@ static void renderUI() {
                    r.category=="Filename Masquerading" ||
                    r.category=="Shell Initialization" ||
                    r.category=="Security Policy Review" ||
-                   r.category=="Detection Coverage")
+                   r.category=="Detection Coverage" ||
+                   r.category=="Batch Script Name Rule")
                     snapshot.push_back(r);
             }
         }
@@ -7555,10 +7752,12 @@ static void renderUI() {
                     (artifactType==2&&r.category=="Artifact: DLL") ||
                     (artifactType==3&&r.category=="Artifact: Driver") ||
                     (artifactType==4&&r.category=="Artifact: Prefetch") ||
-                    (artifactType==5&&r.category=="Artifact: Script/Shortcut") ||
+                    (artifactType==5&&(r.category=="Artifact: Script/Shortcut" ||
+                       r.category=="Batch Script Name Rule")) ||
                     (artifactType==6&&
                       (r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
-                       r.category=="FiveM Cheat Name Detection"));
+                       r.category=="FiveM Cheat Name Detection")) ||
+                    (artifactType==7&&r.category=="Batch Script Name Rule");
                 if(!matchType)continue;
                 const bool detected=
                     isDetectedRecord(r) ||
@@ -7567,7 +7766,8 @@ static void renderUI() {
                 const bool suspect=!detected &&
                     (isSuspectRecord(r) ||
                      r.detail.find("NEEDS REVIEW")!=std::string::npos ||
-                     r.detail.find("REVIEW:")!=std::string::npos);
+                     r.detail.find("REVIEW:")!=std::string::npos ||
+                     r.category=="Batch Script Name Rule");
                 if(artifactStatusFilter==1 && !suspect)continue;
                 if(artifactStatusFilter==2 && !detected)continue;
                 if(artifactStatusFilter==3 && (detected||suspect))continue;
@@ -7589,7 +7789,8 @@ static void renderUI() {
                     const bool suspect=!detected &&
                         (isSuspectRecord(r) ||
                          r.detail.find("NEEDS REVIEW")!=std::string::npos ||
-                         r.detail.find("REVIEW:")!=std::string::npos);
+                         r.detail.find("REVIEW:")!=std::string::npos ||
+                     r.category=="Batch Script Name Rule");
                 ImGui::TableNextRow();
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(65,65,65,180));
