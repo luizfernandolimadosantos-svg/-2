@@ -4251,7 +4251,24 @@ static std::vector<Record> inspectNamedBatchScripts(){
                     "disableantispyware", "exclusionpath",
                     "exclusionprocess", "exclusionextension",
                     "reg add", "schtasks /create", "powershell -enc",
-                    "frombase64string", "certutil -decode"
+                    "frombase64string", "certutil -decode",
+                    "disable-realtimemonitoring", "disablerealtimemonitoring",
+                    "disablebehaviormonitoring", "disableioavprotection",
+                    "disablescriptscanning", "disableantispyware",
+                    "remove-mppreference", "add-mppreference",
+                    "set-mppreference", "exclusionpath",
+                    "exclusionprocess", "exclusionextension",
+                    "sc stop windefend", "net stop windefend",
+                    "wevtutil cl", "clear-eventlog",
+                    "remove-eventlog", "vssadmin delete shadows",
+                    "bcdedit /set testsigning", "bcdedit /set nointegritychecks",
+                    "reg delete", "reg add",
+                    "schtasks /change", "schtasks /delete",
+                    "powershell -encodedcommand", "powershell -enc",
+                    "invoke-expression", "iex(", "downloadstring(",
+                    "bitsadmin /transfer", "certutil -urlcache",
+                    "mshta ", "rundll32 ", "regsvr32 ",
+                    "tamperprotection", "exclusionipaddress"
                 };
                 std::string contentMatch;
                 for(const auto& indicator:scriptIndicators){
@@ -4297,6 +4314,34 @@ static void recordScanFailure(const char* reason){
     diagnosticLog(reason?reason:"Unknown scanner error");
     scanFailed=true;
     if(forensicSourceStatus.load()==0)forensicSourceStatus=2;
+}
+// Conservative correlation: independent observed configuration and script/exclusion
+// indicators are required. This is a review alert, not proof of successful evasion.
+static std::atomic<bool> bypassCorrelatedAlert{false};
+static std::atomic<unsigned> bypassCorrelatedSignals{0};
+static std::vector<Record> correlateBypassIndicators(const std::vector<Record>& source){
+    bool weakenedDefender=false,scriptIndicator=false,matchingExclusion=false;
+    for(const auto& r:source){
+        if(r.category=="Security Policy Review" &&
+           (r.name.find("Defender")!=std::string::npos ||
+            r.name.find("Windows event log")!=std::string::npos))
+            weakenedDefender=true;
+        if(r.category=="Batch Script Content Review")
+            scriptIndicator=true;
+        if(r.category=="Defender Exclusion Review" &&
+           r.detail.find("DETECTED - NAME RULE")!=std::string::npos)
+            matchingExclusion=true;
+    }
+    const unsigned signals=static_cast<unsigned>(weakenedDefender)+
+        static_cast<unsigned>(scriptIndicator)+static_cast<unsigned>(matchingExclusion);
+    bypassCorrelatedSignals=signals;
+    bypassCorrelatedAlert=(weakenedDefender && (scriptIndicator||matchingExclusion));
+    if(!bypassCorrelatedAlert)return {};
+    return {{"Bypass Correlation Alert","Corroborated bypass indicators",
+        "BYPASS DETECTED - REVIEW REQUIRED | An observed weakened Defender/event-log "
+        "policy coincides with a batch-script content indicator or cheat-named "
+        "Defender exclusion. This is correlation, NOT proof of execution, evasion "
+        "or malicious intent. Inspect the underlying records."}};
 }
 static void scanWorker() {
     try {
@@ -4620,6 +4665,8 @@ static void scanWorker() {
         services.insert(services.end(),serviceImagePaths.begin(),serviceImagePaths.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
+        auto bypassCorrelations=correlateBypassIndicators(services);
+        services.insert(services.end(),bypassCorrelations.begin(),bypassCorrelations.end());
         auto correlations=correlateForensicEvidence(services);
         forensicCorrelationNotices.store(static_cast<unsigned>(correlations.size()));
         services.insert(services.end(),correlations.begin(),correlations.end());
@@ -4677,6 +4724,8 @@ static int inspectionDisplayPercent(){
 static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
+    bypassCorrelatedAlert=false;
+    bypassCorrelatedSignals=0;
     scanFailureStage=0;
     {
         std::lock_guard<std::mutex> guard(scanFailureMutex);
@@ -6924,6 +6973,19 @@ static void renderUI() {
     ImGui::SameLine(0,7);
     if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
     ImGui::EndChild();
+    // Global alert appears on every main page after a completed scan.
+    if(bypassCorrelatedAlert.load() && !scanning.load()){
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.29f,.055f,.065f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.92f,.20f,.23f,1.f));
+        ImGui::BeginChild("##globalBypassAlert",ImVec2(0,66),ImGuiChildFlags_Borders);
+        ImGui::TextColored(ImVec4(1.f,.30f,.32f,1.f),"BYPASS DETECTED");
+        ImGui::SameLine();
+        ImGui::TextDisabled("Correlated indicators - review required, not proof of evasion.");
+        if(ImGui::Button("View evidence##bypassGlobal"))page=9;
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
+
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
