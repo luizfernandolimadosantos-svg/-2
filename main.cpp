@@ -2049,7 +2049,31 @@ static std::vector<Record> inspectExpandedDllIndicators(const std::vector<Proces
                     if(!reason.empty())reason+=" | ";
                     reason+="Loaded from user-writable/unusual location";
                 }
-                if(reason.empty())continue;
+                // User-mode DLL indicators: name alone is a lead, not a verdict.
+                // Pair filename signals with the loading process and full path.
+                const bool usermodeName=
+                    filename.find(L"usermode")!=std::wstring::npos ||
+                    filename.find(L"user_mode")!=std::wstring::npos ||
+                    filename.find(L"umode")!=std::wstring::npos;
+                const bool usermodeRelated=
+                    usermodeName ||
+                    (userWritableLocation &&
+                     (filename.find(L"inject")!=std::wstring::npos ||
+                      filename.find(L"manualmap")!=std::wstring::npos ||
+                      filename.find(L"bypass")!=std::wstring::npos));
+                if(usermodeRelated){
+                    out.push_back({"Usermode DLL Review",utf8(mod.szModule),
+                        "REVIEW ONLY | Loaded user-mode DLL indicator"
+                        " | Process: "+utf8(proc.name)+
+                        " | PID: "+std::to_string(proc.pid)+
+                        " | Path: "+utf8(path)+
+                        " | Reason: "+std::string(usermodeName?
+                          "usermode/umode filename token":
+                          "injection-related filename in unusual location")+
+                        " | A user-mode DLL is not inherently malicious; "
+                        "this does not prove injection, cheating or bypass."});
+                }
+                if(reason.empty() && !usermodeRelated)continue;
                 ++dllReviewFindings;
                 out.push_back({"DLL Review Indicator",utf8(mod.szModule),
                     "REVIEW ONLY | "+reason+" | Process: "+utf8(proc.name)+
@@ -7941,7 +7965,8 @@ static void renderUI() {
                      r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                      r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule" ||
-                     r.category=="Batch Script Content Review");
+                     r.category=="Batch Script Content Review" ||
+                     r.category=="Usermode DLL Review");
                 if(artifactStatusFilter==1 && !suspect)continue;
                 if(artifactStatusFilter==2 && !detected)continue;
                 if(artifactStatusFilter==3 && (detected||suspect))continue;
