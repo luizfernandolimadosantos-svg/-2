@@ -755,8 +755,8 @@ static std::vector<Record> enumerateTcp() {
 static std::vector<Record> enumerateUsbStorage() {
     std::vector<Record> out;
     const struct {const wchar_t* key;const char* label;} sources[]={
-        {L"SYSTEM\CurrentControlSet\Enum\USBSTOR","USBSTOR"},
-        {L"SYSTEM\CurrentControlSet\Enum\USB","USB Enum"}
+        {L"SYSTEM\\CurrentControlSet\\Enum\\USBSTOR","USBSTOR"},
+        {L"SYSTEM\\CurrentControlSet\\Enum\\USB","USB Enum"}
     };
     for(const auto& source:sources){
         HKEY root=nullptr;
@@ -801,7 +801,7 @@ static std::vector<Record> enumerateUsbStorage() {
     // MountedDevices can preserve historical volume mappings, but not exact attach times.
     HKEY mounted=nullptr;
     const LONG mountedRc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-        L"SYSTEM\MountedDevices",0,KEY_QUERY_VALUE,&mounted);
+        L"SYSTEM\\MountedDevices",0,KEY_QUERY_VALUE,&mounted);
     if(mountedRc==ERROR_SUCCESS){
         size_t found=0;
         for(DWORD i=0;i<512 && !cancelRequested;i++){
@@ -6186,7 +6186,7 @@ static void inspectSubkeyValues(Sink& sink,HKEY hive,
     for(DWORD i=0;i<count && !sink.stop();++i) {
         DWORD n=static_cast<DWORD>(names.size()-1);
         if(RegEnumKeyExW(root,i,names.data(),&n,nullptr,
-                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+                         nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY child=nullptr;
         if(RegOpenKeyExW(root,names.data(),0,KEY_READ,&child)
            !=ERROR_SUCCESS)continue;
@@ -6507,7 +6507,7 @@ static void inspectServiceImageRegistry(Sink& sink) {
     for(DWORD i=0;i<count && !sink.stop();++i) {
         DWORD n=static_cast<DWORD>(name.size()-1);
         if(RegEnumKeyExW(services,i,name.data(),&n,nullptr,
-                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+                         nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY service=nullptr;
         if(RegOpenKeyExW(services,name.data(),0,KEY_READ,&service)
            !=ERROR_SUCCESS)continue;
@@ -7620,7 +7620,7 @@ static void inspectComServerHive(Sink& sink,HKEY hive,
     for(DWORD i=0;i<count && !sink.stop();++i) {
         DWORD n=static_cast<DWORD>(name.size()-1);
         if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
-                         nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+                         nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY clsid=nullptr;
         if(RegOpenKeyExW(root,name.data(),0,KEY_READ,&clsid)
            !=ERROR_SUCCESS)continue;
@@ -8255,7 +8255,7 @@ static void inspectEventChannel(Collector& out,const wchar_t* channel,
     while(examined<maxEvents && !out.stopped()) {
         EVT_HANDLE events[8]{};
         DWORD returned=0;
-        if(!EvtNext(handle,8,events,100,&returned,0))break;
+        if(!EvtNext(handle,8,events,100,0,&returned))break;
         for(DWORD i=0;i<returned;++i) {
             ++examined;
             DWORD needed=0,used=0;
@@ -8425,7 +8425,7 @@ static void inspectDefenderExclusionKey(Collector& out,
     for(DWORD i=0;i<count && !out.stopped();++i) {
         DWORD length=static_cast<DWORD>(name.size()-1);
         if(RegEnumValueW(key,i,name.data(),&length,nullptr,
-            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         std::wstring item(name.data(),length);
         if(item.empty())continue;
         out.add(category,item,
@@ -8795,7 +8795,7 @@ static void inspectServicePaths(State& out) {
     for(DWORD i=0;i<count && !out.stopped();++i) {
         DWORD length=static_cast<DWORD>(names.size()-1);
         if(RegEnumKeyExW(services,i,names.data(),&length,
-            nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY service=nullptr;
         if(RegOpenKeyExW(services,names.data(),0,KEY_READ,
             &service)!=ERROR_SUCCESS)continue;
@@ -8862,7 +8862,7 @@ static void inspectNativeMessagingHive(State& out,HKEY hive,
     for(DWORD i=0;i<count && !out.stopped();++i) {
         DWORD n=static_cast<DWORD>(name.size()-1);
         if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
-            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY child=nullptr;
         if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
             &child)!=ERROR_SUCCESS)continue;
@@ -8979,7 +8979,7 @@ static void inspectImageOptions(State& out) {
         for(DWORD i=0;i<count && !out.stopped();++i) {
             DWORD n=static_cast<DWORD>(names.size()-1);
             if(RegEnumKeyExW(parent,i,names.data(),&n,
-                nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+                nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
             HKEY child=nullptr;
             if(RegOpenKeyExW(parent,names.data(),0,KEY_READ,
                 &child)!=ERROR_SUCCESS)continue;
@@ -9018,7 +9018,7 @@ static void inspectAppPathsHive(State& out,HKEY hive,
     for(DWORD i=0;i<count && !out.stopped();++i) {
         DWORD n=static_cast<DWORD>(name.size()-1);
         if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
-            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY child=nullptr;
         if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
             &child)!=ERROR_SUCCESS)continue;
@@ -9068,7 +9068,7 @@ static void inspectUninstallHive(State& out,HKEY hive,
     for(DWORD i=0;i<count && !out.stopped();++i) {
         DWORD n=static_cast<DWORD>(name.size()-1);
         if(RegEnumKeyExW(root,i,name.data(),&n,nullptr,
-            nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
+            nullptr,nullptr,nullptr)!=ERROR_SUCCESS)continue;
         HKEY child=nullptr;
         if(RegOpenKeyExW(root,name.data(),0,KEY_READ,
             &child)!=ERROR_SUCCESS)continue;
@@ -9569,7 +9569,7 @@ static void inspectEventSpec(Collector& out,const EventSpec& spec) {
     while(!out.stopped() && inspected<spec.maximum) {
         EVT_HANDLE handles[8]{};
         DWORD returned=0;
-        if(!EvtNext(query,8,handles,100,&returned,0))break;
+        if(!EvtNext(query,8,handles,100,0,&returned))break;
         for(DWORD i=0;i<returned;++i) {
             ++inspected;
             DWORD bytes=0,used=0;
@@ -10842,7 +10842,7 @@ static void inspectApplicationCrashes(ResultSink& out) {
     while(!out.stop() && inspected<200) {
         EVT_HANDLE events[8]{};
         DWORD count=0;
-        if(!EvtNext(query,8,events,100,&count,0))break;
+        if(!EvtNext(query,8,events,100,0,&count))break;
         for(DWORD i=0;i<count;++i) {
             ++inspected;
             DWORD bytes=0,used=0;
@@ -12234,7 +12234,7 @@ static void inspectCrashEvents(Evidence& out) {
     while(!out.stopped() && examined<160) {
         EVT_HANDLE events[8]{};
         DWORD count=0;
-        if(!EvtNext(query,8,events,100,&count,0))break;
+        if(!EvtNext(query,8,events,100,0,&count))break;
         for(DWORD i=0;i<count;++i) {
             ++examined;
             DWORD bytes=0,used=0;
@@ -15535,7 +15535,7 @@ static void inspectEvents(Sink& out) {
         while(!out.stop() && examined<40) {
             EVT_HANDLE handles[8]{};
             DWORD returned=0;
-            if(!EvtNext(query,8,handles,100,&returned,0))break;
+            if(!EvtNext(query,8,handles,100,0,&returned))break;
             for(DWORD i=0;i<returned;++i) {
                 ++examined;
                 DWORD bytes=0,used=0;
@@ -15574,7 +15574,7 @@ static void inspectServices(Sink& out) {
         SC_MANAGER_ENUMERATE_SERVICE);
     if(!manager)return;
     DWORD needed=0,count=0,resume=0;
-    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,
         SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
         nullptr,0,&needed,&count,&resume,nullptr);
     if(GetLastError()!=ERROR_MORE_DATA ||
@@ -15582,7 +15582,7 @@ static void inspectServices(Sink& out) {
         CloseServiceHandle(manager);return;
     }
     std::vector<BYTE> buffer(needed);
-    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,
         SERVICE_WIN32|SERVICE_DRIVER,SERVICE_STATE_ALL,
         buffer.data(),needed,&needed,&count,&resume,nullptr)) {
         CloseServiceHandle(manager);return;
@@ -16697,7 +16697,7 @@ static void inspectCrashEvents(Collector& out) {
     while(!out.stopped() && examined<160) {
         EVT_HANDLE events[8]{};
         DWORD count=0;
-        if(!EvtNext(query,8,events,100,&count,0))break;
+        if(!EvtNext(query,8,events,100,0,&count))break;
         for(DWORD i=0;i<count;++i) {
             ++examined;
             DWORD bytes=0,used=0;
