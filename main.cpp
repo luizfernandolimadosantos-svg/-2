@@ -1,4 +1,4 @@
-]#include <cstdio>
+#include <cstdio>
 #include <cstdlib>
 #ifdef SYNC_WITH_YARA
 #include <yara.h>
