@@ -747,35 +747,76 @@ static std::vector<Record> enumerateTcp() {
 }
 
 
-// Read-only USBSTOR device inventory. This is not a historical connection timeline.
+// Read-only historical USB device inventory from multiple registry sources.
+// Registry key modification timestamps are NOT USB connection timestamps.
 static std::vector<Record> enumerateUsbStorage() {
     std::vector<Record> out;
-    HKEY root=nullptr;
-    const wchar_t* key=L"SYSTEM\\CurrentControlSet\\Enum\\USBSTOR";
-    LONG rc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,key,0,KEY_READ,&root);
-    if(rc!=ERROR_SUCCESS) {
-        out.push_back({"USB","Unavailable","USBSTOR registry inventory could not be opened"});
-        return out;
+    const struct {const wchar_t* key;const char* label;} sources[]={
+        {L"SYSTEM\CurrentControlSet\Enum\USBSTOR","USBSTOR"},
+        {L"SYSTEM\CurrentControlSet\Enum\USB","USB Enum"}
+    };
+    for(const auto& source:sources){
+        HKEY root=nullptr;
+        const LONG rc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,source.key,0,
+                                   KEY_ENUMERATE_SUB_KEYS,&root);
+        if(rc!=ERROR_SUCCESS){
+            out.push_back({"USB Coverage",source.label,
+                "Registry enumeration unavailable | Win32 error="+std::to_string(rc)+
+                " | Run with appropriate access; absence of records is not absence of devices."});
+            continue;
+        }
+        size_t found=0;
+        for(DWORD i=0;i<1024 && !cancelRequested;i++){
+            wchar_t device[512]{};
+            DWORD length=512;
+            LONG result=RegEnumKeyExW(root,i,device,&length,nullptr,nullptr,nullptr,nullptr);
+            if(result==ERROR_NO_MORE_ITEMS)break;
+            if(result!=ERROR_SUCCESS)continue;
+            HKEY typeKey=nullptr;
+            if(RegOpenKeyExW(root,device,0,KEY_ENUMERATE_SUB_KEYS,&typeKey)!=ERROR_SUCCESS)
+                continue;
+            for(DWORD j=0;j<512 && !cancelRequested;j++){
+                wchar_t instance[512]{};
+                DWORD n=512;
+                FILETIME lastWrite{};
+                LONG r=RegEnumKeyExW(typeKey,j,instance,&n,nullptr,nullptr,nullptr,&lastWrite);
+                if(r==ERROR_NO_MORE_ITEMS)break;
+                if(r!=ERROR_SUCCESS)continue;
+                ++found;
+                out.push_back({"USB",utf8(device),
+                    std::string("Source: ")+source.label+
+                    " | Instance: "+utf8(instance)+
+                    " | Registry entry (historical inventory, NOT a confirmed recent connection)"});
+            }
+            RegCloseKey(typeKey);
+        }
+        RegCloseKey(root);
+        if(found==0)
+            out.push_back({"USB Coverage",source.label,
+                "No accessible device instances in this registry source; other USB device classes may exist."});
     }
-    for(DWORD i=0;i<512 && !cancelRequested;i++) {
-        wchar_t typeName[512]{};
-        DWORD n=512;
-        LONG result=RegEnumKeyExW(root,i,typeName,&n,nullptr,nullptr,nullptr,nullptr);
-        if(result==ERROR_NO_MORE_ITEMS)break;
-        if(result!=ERROR_SUCCESS)continue;
-        HKEY typeKey=nullptr;
-        if(RegOpenKeyExW(root,typeName,0,KEY_READ,&typeKey)!=ERROR_SUCCESS)continue;
-        for(DWORD j=0;j<256 && !cancelRequested;j++) {
-            wchar_t instance[512]{};
-            DWORD count=512;
-            LONG r=RegEnumKeyExW(typeKey,j,instance,&count,nullptr,nullptr,nullptr,nullptr);
+    // MountedDevices can preserve historical volume mappings, but not exact attach times.
+    HKEY mounted=nullptr;
+    const LONG mountedRc=RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\MountedDevices",0,KEY_QUERY_VALUE,&mounted);
+    if(mountedRc==ERROR_SUCCESS){
+        size_t found=0;
+        for(DWORD i=0;i<512 && !cancelRequested;i++){
+            wchar_t value[512]{};
+            DWORD n=512;
+            LONG r=RegEnumValueW(mounted,i,value,&n,nullptr,nullptr,nullptr,nullptr);
             if(r==ERROR_NO_MORE_ITEMS)break;
             if(r!=ERROR_SUCCESS)continue;
-            out.push_back({"USB",utf8(typeName),utf8(instance)});
+            ++found;
+            out.push_back({"USB Volume History",utf8(value),
+                "MountedDevices historical volume mapping; not necessarily USB and not a connection timestamp."});
         }
-        RegCloseKey(typeKey);
+        RegCloseKey(mounted);
+        if(!found)out.push_back({"USB Coverage","MountedDevices","No accessible volume mappings."});
+    }else{
+        out.push_back({"USB Coverage","MountedDevices",
+            "Volume mapping registry unavailable | Win32 error="+std::to_string(mountedRc)});
     }
-    RegCloseKey(root);
     return out;
 }
 
@@ -3487,7 +3528,9 @@ static std::string recordKey(const Record& r){
 static void drawEvidenceComparison(){
     std::lock_guard<std::mutex> lock(dataMutex);
     if(!hasPreviousScan){
-        ImGui::TextWrapped("Run another complete inspection to compare with the previous session. Comparisons stay in memory and are not persisted.");
+        ImGui::TextWrapped("Comparison requires TWO completed scans in this app session. The first scan is the baseline; run Start Full Scan again to see added and removed evidence.");
+        ImGui::TextDisabled("Baseline is kept in memory only. Restarting the app clears it.");
+        ImGui::Text("Current scan: %zu evidence records.",records.size());
         return;
     }
     std::unordered_set<std::string> oldKeys,newKeys;
@@ -4917,8 +4960,10 @@ static int inspectionDisplayPercent(){
 }
 
 static void startScan() {
-    if(scanning || (inspectionProgressStart>0.0 &&
-        inspectionDisplayPercent()<100 && done))return;
+    // Prevent duplicate starts and keep one completed verification per session.
+    // Failed/cancelled attempts may be retried.
+    if(scanning.load() || (done.load() && !scanFailed.load() &&
+        !scanCancelled.load()))return;
     bypassCorrelatedAlert=false;
     bypassCorrelatedSignals=0;
     dllModulesExamined=0;
@@ -6977,7 +7022,7 @@ static float smoothInspectionVisual(float target){
     // Never decrease during a scan; ease to the next measured/paced target.
     target=std::clamp(target,0.f,1.f);
     if(target<displayed-.15f)displayed=0.f; // new scan reset
-    const float rate=1.f-std::exp(-dt*4.5f);
+    const float rate=1.f-std::exp(-dt*1.25f);
     displayed+=(std::max)(0.f,target-displayed)*rate;
     if(target>=1.f && 1.f-displayed<.0005f)displayed=1.f;
     return displayed;
@@ -7019,7 +7064,7 @@ static void drawAtlasProgress(bool compact=false){
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
     ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
     ImGui::SameLine();
-    ImGui::Text("%.1f%%",fraction*100.f);
+    ImGui::Text("%d%% verified",verified);
     drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
                                   compact?14.f:19.f);
     if(compact)return;
@@ -7061,8 +7106,8 @@ static void drawAtlasProgress(bool compact=false){
         const std::string current=getSequentialItem();
         if(!current.empty())ImGui::TextWrapped("%s: %s",
             displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
-    }else{
-        drawProfessionalProgressTrack("active-stage",activeName,done?1.f:0.f,width,11.f);
+    }else if(!done){
+        drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
     }
     ImGui::Spacing();
     const char* phase=scanFailed?"INSPECTION FAILED":
@@ -7480,8 +7525,11 @@ static void renderUI() {
             }
             if(ImGui::Button("Cancel scan",ImVec2(170,44)))
                 cancelRequested=true;
-        }else if(done && inspectionDisplayPercent()<100){
-            ImGui::TextUnformatted("Preparing results...");
+        }else if(done && !scanFailed && !scanCancelled){
+            ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
+                "VERIFIED  -  SCAN COMPLETED");
+            ImGui::SameLine();
+            if(ImGui::Button("View results",ImVec2(150,42)))page=9;
         }else{
             if(accentButton("START FULL SCAN",ImVec2(230,48)))startScan();
             ImGui::SameLine();
@@ -7533,9 +7581,11 @@ static void renderUI() {
                 ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             }
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
-        }else if(done && inspectionDisplayPercent()<100){
-            ImGui::TextColored(accent,"FINALIZING INSPECTION");
-            ImGui::TextDisabled("Results unlock at 100%% after the scan completes.");
+        }else if(done && !scanFailed && !scanCancelled){
+            ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
+                "VERIFIED  -  SCAN COMPLETED");
+            if(ImGui::Button("VIEW RESULTS",
+                ImVec2((std::min)(150.f,ImGui::GetContentRegionAvail().x),42)))page=2;
         }else{
             if(accentButton(localized("START FULL INSPECTION"),
                 ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
@@ -7688,7 +7738,9 @@ static void renderUI() {
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Scan Comparison")){
-                drawEvidenceComparison();
+                ImGui::TextDisabled("Scan Comparison is unavailable in single-scan mode.");
+                ImGui::TextWrapped("Restart the application to run a new verification. "
+                    "This mode does not compare two scans in one session.");
                 ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Service Review")) {
@@ -7725,7 +7777,7 @@ static void renderUI() {
                 recordsTable();ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("USB Review")) {
-                ImGui::TextDisabled("USB storage devices registered in Windows. This is not a connection timeline.");
+                ImGui::TextDisabled("Historical USB registry inventory and volume mappings. No reliable last-connected timestamp.");
                 if(ImGui::BeginTable("usbDevices",4,ImGuiTableFlags_BordersInnerH|
                     ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))) {
                     ImGui::TableSetupScrollFreeze(0,1);
@@ -7737,7 +7789,7 @@ static void renderUI() {
                     std::lock_guard<std::mutex> lock(dataMutex);
                     int found=0;
                     for(const auto& r:records) {
-                        if(r.category!="USB")continue;
+                        if(r.category!="USB" && r.category!="USB Coverage" && r.category!="USB Volume History")continue;
                         ++found;
                         ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
