@@ -4060,7 +4060,8 @@ static std::vector<Record> inspectPeSectionEntropy(const std::wstring& path){
             entropy-=probability*std::log2(probability);
         }
         std::string name(reinterpret_cast<const char*>(section.Name),8);
-        name.resize(name.find('\0'));
+        const auto nullPosition=name.find('\0');
+        if(nullPosition!=std::string::npos)name.resize(nullPosition);
         std::ostringstream details;
         details<<std::fixed<<std::setprecision(3)
             <<"Entropy: "<<entropy<<" bits/byte | Sample: "<<sample
@@ -4244,6 +4245,19 @@ static std::vector<Record> inspectNamedBatchScripts(){
         }
     }
     return out;
+}
+static std::atomic<int> scanFailureStage{0};
+static std::mutex scanFailureMutex;
+static std::string scanFailureReason;
+static void recordScanFailure(const char* reason){
+    scanFailureStage=stage.load();
+    {
+        std::lock_guard<std::mutex> guard(scanFailureMutex);
+        scanFailureReason=reason?reason:"Unknown scanner error";
+    }
+    diagnosticLog(reason?reason:"Unknown scanner error");
+    scanFailed=true;
+    if(forensicSourceStatus.load()==0)forensicSourceStatus=2;
 }
 static void scanWorker() {
     try {
@@ -4602,9 +4616,10 @@ static void scanWorker() {
             if(cancelRequested){scanCancelled=true;scanning=false;return;}
         }
         done=true;
+    } catch(const std::exception& e) {
+        recordScanFailure(e.what());
     } catch(...) {
-        scanFailed=true;
-        if(forensicSourceStatus.load()==0)forensicSourceStatus=2;
+        recordScanFailure("Unknown exception inside scanWorker");
     }
     scanning=false;
 }
@@ -4623,6 +4638,11 @@ static int inspectionDisplayPercent(){
 static void startScan() {
     if(scanning || (inspectionProgressStart>0.0 &&
         inspectionDisplayPercent()<100 && done))return;
+    scanFailureStage=0;
+    {
+        std::lock_guard<std::mutex> guard(scanFailureMutex);
+        scanFailureReason.clear();
+    }
     peFilesInspected=0;
     processChecksPlanned=0;processChecksCompleted=0;processChecksUnavailable=0;
     processNewPids=0;processExitedPids=0;processSecondSnapshot=0;
@@ -4660,12 +4680,10 @@ static void startScan() {
                 scanWorker();
                 diagnosticLog("Scan worker returned.");
             }catch(const std::exception& e){
-                diagnosticLog(e.what());
-                scanFailed=true;
+                recordScanFailure(e.what());
                 scanning=false;
             }catch(...){
-                diagnosticLog("Unknown exception in scan worker.");
-                scanFailed=true;
+                recordScanFailure("Unknown exception in scan worker thread.");
                 scanning=false;
             }
         }).detach();
@@ -7164,6 +7182,18 @@ static void renderUI() {
             if(ImGui::GetContentRegionAvail().x>145.f)ImGui::SameLine(0,8);
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(130.f,ImGui::GetContentRegionAvail().x),42)))page=2;
+        }
+        if(scanFailed){
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f,.55f,.45f,1.0f),
+                "SCAN FAILED - stage %d",scanFailureStage.load());
+            std::string failure;
+            {
+                std::lock_guard<std::mutex> guard(scanFailureMutex);
+                failure=scanFailureReason;
+            }
+            if(!failure.empty())ImGui::TextWrapped("Reason: %s",failure.c_str());
+            ImGui::TextDisabled("Diagnostic log: %%TEMP%%\\SyncPCChecker\\diagnostic.log");
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
