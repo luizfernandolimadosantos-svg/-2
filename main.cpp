@@ -2002,6 +2002,66 @@ static std::vector<Record> inspectCheatNamedProcesses(
     }
     return out;
 }
+
+// Read-only heuristic inventory of loaded DLL names and locations.
+// No code injection, execution, or attempt to bypass protected processes.
+static std::atomic<unsigned> dllModulesExamined{0},dllReviewFindings{0};
+static std::vector<Record> inspectExpandedDllIndicators(const std::vector<Process>& items){
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    static const std::vector<std::wstring> terms={
+        L"bypass",L"cheat",L"inject",L"spoofer",L"aimbot",L"triggerbot",
+        L"executor",L"redengine",L"eulen",L"fivem",L"hook",
+        L"manualmap",L"mapper",L"loader",L"overlay"
+    };
+    size_t processes=0;
+    for(const auto& proc:items){
+        if(cancelRequested || processes>=180 || dllModulesExamined.load()>=3500)break;
+        if(!proc.pid || proc.pid==4)continue;
+        ++processes;
+        HANDLE snapshot=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,proc.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W mod{};mod.dwSize=sizeof(mod);
+        if(Module32FirstW(snapshot,&mod)){
+            do{
+                if(cancelRequested || dllModulesExamined.load()>=3500)break;
+                const std::wstring path=mod.szExePath;
+                const std::wstring filename=lowerPath(mod.szModule);
+                if(fs::path(filename).extension()!=L".dll")continue;
+                ++dllModulesExamined;
+                const std::wstring unique=std::to_wstring(proc.pid)+L"|"+lowerPath(path);
+                if(!seen.insert(unique).second)continue;
+                std::string reason;
+                for(const auto& term:terms){
+                    if(filename.find(term)!=std::wstring::npos){
+                        reason="Filename keyword: "+utf8(term);
+                        break;
+                    }
+                }
+                const auto normalized=lowerPath(path);
+                const bool userWritableLocation=
+                    normalized.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos ||
+                    normalized.find(L"\\downloads\\")!=std::wstring::npos ||
+                    normalized.find(L"\\desktop\\")!=std::wstring::npos ||
+                    normalized.find(L"\\recycle.bin\\")!=std::wstring::npos;
+                if(userWritableLocation){
+                    if(!reason.empty())reason+=" | ";
+                    reason+="Loaded from user-writable/unusual location";
+                }
+                if(reason.empty())continue;
+                ++dllReviewFindings;
+                out.push_back({"DLL Review Indicator",utf8(mod.szModule),
+                    "REVIEW ONLY | "+reason+" | Process: "+utf8(proc.name)+
+                    " | PID: "+std::to_string(proc.pid)+
+                    " | Path: "+utf8(path)+
+                    " | Filename/path heuristics do not prove injection or bypass."});
+            }while(Module32NextW(snapshot,&mod));
+        }
+        CloseHandle(snapshot);
+    }
+    return out;
+}
 static std::vector<Record> inspectCheatNamedModules(
     const std::vector<Process>& items){
     std::vector<Record> out;
@@ -4493,6 +4553,7 @@ static void scanWorker() {
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectCheatNamedModules");
         auto cheatNameModules=inspectCheatNamedModules(p);
+        auto dllReviewRecords=inspectExpandedDllIndicators(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectArtifactLocations");
@@ -4648,6 +4709,7 @@ static void scanWorker() {
         services.insert(services.end(),provenance.begin(),provenance.end());
         services.insert(services.end(),cheatNameProcesses.begin(),cheatNameProcesses.end());
         services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
+        services.insert(services.end(),dllReviewRecords.begin(),dllReviewRecords.end());
         services.insert(services.end(),artifactLocations.begin(),artifactLocations.end());
         services.insert(services.end(),additionalEvidence.begin(),additionalEvidence.end());
         services.insert(services.end(),expandedPersistence.begin(),expandedPersistence.end());
@@ -4726,6 +4788,8 @@ static void startScan() {
         inspectionDisplayPercent()<100 && done))return;
     bypassCorrelatedAlert=false;
     bypassCorrelatedSignals=0;
+    dllModulesExamined=0;
+    dllReviewFindings=0;
     scanFailureStage=0;
     {
         std::lock_guard<std::mutex> guard(scanFailureMutex);
@@ -7334,6 +7398,8 @@ static void renderUI() {
             if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
                 ImGui::Text("Batch scripts: %u found | %u filename matches | %u inaccessible folders",
                     batFilesSeen.load(),batNameMatches.load(),batDirsFailed.load());
+                ImGui::Text("Loaded DLLs examined: %u | review indicators: %u",
+                    dllModulesExamined.load(),dllReviewFindings.load());
                 ImGui::Text("PE entropy: %u files | %u sections",
                     peEntropyFiles.load(),peEntropySections.load());
                 ImGui::Text("PE invalid/unavailable: %u | sections skipped: %u",
