@@ -4427,6 +4427,74 @@ static std::vector<Record> correlateBypassIndicators(const std::vector<Record>& 
         "Defender exclusion. This is correlation, NOT proof of execution, evasion "
         "or malicious intent. Inspect the underlying records."}};
 }
+
+// Read-only user-mode EXE and loaded kernel-driver inventory.
+// These records are investigation leads, not evidence of a successful bypass.
+static std::atomic<unsigned> exeReviewChecked{0},exeReviewFlagged{0};
+static std::atomic<unsigned> driverReviewChecked{0},driverReviewFlagged{0};
+static std::vector<Record> inspectExecutableAndDriverReview(const std::vector<Process>& processes){
+    std::vector<Record> records;
+    const std::vector<std::wstring> indicators={
+        L"spoofer",L"bypass",L"injector",L"manualmap",L"kdmapper",
+        L"aimbot",L"triggerbot",L"executor",L"redengine",L"eulen"
+    };
+    auto token=[&](const std::wstring& name)->std::wstring{
+        for(const auto& item:indicators)
+            if(name.find(item)!=std::wstring::npos)return item;
+        return L"";
+    };
+    std::unordered_set<std::wstring> visited;
+    for(const auto& process:processes){
+        if(cancelRequested)break;
+        if(process.path.empty() || process.path[0]==L'[')continue;
+        const std::wstring path=lowerPath(process.path);
+        if(!visited.insert(path).second)continue;
+        ++exeReviewChecked;
+        const auto filename=lowerPath(fs::path(path).filename().wstring());
+        const auto match=token(filename);
+        const bool unusual=path.find(L"\\appdata\\local\\temp\\")!=std::wstring::npos ||
+            path.find(L"\\downloads\\")!=std::wstring::npos;
+        if(match.empty() && !unusual)continue;
+        ++exeReviewFlagged;
+        records.push_back({"Usermode EXE Review",utf8(process.name),
+            "REVIEW ONLY | PID="+std::to_string(process.pid)+
+            " | Path="+utf8(process.path)+
+            " | Filename token="+(match.empty()?"none":utf8(match))+
+            " | User-writable location="+(unusual?"yes":"no")+
+            " | A name or location alone does not establish cheating."});
+    }
+    // EnumDeviceDrivers is an inventory of loaded kernel images, not a
+    // hidden-driver or kernel-tampering detector.
+    std::array<LPVOID,2048> addresses{};
+    DWORD needed=0;
+    if(EnumDeviceDrivers(addresses.data(),
+            static_cast<DWORD>(addresses.size()*sizeof(LPVOID)),&needed)){
+        const size_t count=std::min(addresses.size(),
+            static_cast<size_t>(needed/sizeof(LPVOID)));
+        for(size_t i=0;i<count && !cancelRequested;++i){
+            wchar_t pathBuffer[MAX_PATH]{};
+            if(!GetDeviceDriverFileNameW(addresses[i],pathBuffer,MAX_PATH))
+                continue;
+            ++driverReviewChecked;
+            const std::wstring path=lowerPath(pathBuffer);
+            const std::wstring filename=lowerPath(fs::path(path).filename().wstring());
+            const auto match=token(filename);
+            const bool unusual=path.find(L"\\temp\\")!=std::wstring::npos ||
+                path.find(L"\\users\\")!=std::wstring::npos;
+            if(match.empty() && !unusual)continue;
+            ++driverReviewFlagged;
+            records.push_back({"Kernel Driver Review",utf8(filename),
+                "REVIEW ONLY | Loaded driver path="+utf8(pathBuffer)+
+                " | Filename token="+(match.empty()?"none":utf8(match))+
+                " | Unusual path="+(unusual?"yes":"no")+
+                " | This does not prove kernel bypass or malicious activity."});
+        }
+    }else{
+        records.push_back({"Kernel Driver Coverage","Driver inventory unavailable",
+            "Windows did not expose the loaded driver list; not equivalent to no drivers."});
+    }
+    return records;
+}
 static void scanWorker() {
     try {
         stage=1;
@@ -4450,6 +4518,7 @@ static void scanWorker() {
         auto processDetails=inspectIndividualProcesses(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         auto deepExecutables=inspectDeepProcessExecutables(p);
+        auto exeAndDriverReview=inspectExecutableAndDriverReview(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
         if(!cancelRequested){
@@ -4466,6 +4535,7 @@ static void scanWorker() {
         auto services=enumerateServices();
         services.insert(services.end(),processDetails.begin(),processDetails.end());
         services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
+        services.insert(services.end(),exeAndDriverReview.begin(),exeAndDriverReview.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size()-deepExecutables.size());
         if(!cancelRequested){
@@ -4827,6 +4897,8 @@ static void startScan() {
     observedGonePids=0;observedUniquePids=0;
     presentationHold=false;presentationWaitRemaining=0;
     deepFilesChecked=0;deepFilesSkipped=0;deepUniquePaths=0;
+    exeReviewChecked=0;exeReviewFlagged=0;
+    driverReviewChecked=0;driverReviewFlagged=0;
     peEntropyFiles=0;peEntropySections=0;
     peEntropyInvalid=0;peEntropySectionsSkipped=0;peEntropyCancelled=0;
     batFilesSeen=0;batNameMatches=0;batDirsFailed=0;
@@ -6962,6 +7034,7 @@ static void drawAtlasProgress(bool compact=false){
         ImGui::SetTooltip("Progress reflects completed worker milestones. Active stages do not report fabricated percentages.");
 }
 
+static bool simplifiedInterface=true;
 static void renderUI() {
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
@@ -7107,12 +7180,19 @@ static void renderUI() {
             }
         }
     }
+    // Simplified mode keeps only four primary destinations visible.
+    // Advanced mode preserves the complete original navigation.
+    const int simpleNavIndices[]={0,1,6,8};
+    const int visibleNavCount=simplifiedInterface?4:9;
     const float navGap=10.f;
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
     const float navWidth=(std::max)(85.f,
-        (ImGui::GetContentRegionAvail().x-(navColumns-1)*navGap)/navColumns);
-    for(int i=0;i<9;i++){
+        (ImGui::GetContentRegionAvail().x-
+         ((simplifiedInterface?4:navColumns)-1)*navGap)/
+         (simplifiedInterface?4:navColumns));
+    for(int visible=0;visible<visibleNavCount;visible++){
+        const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
@@ -7165,7 +7245,11 @@ static void renderUI() {
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
         ImGui::PopID();
-        if(i%navColumns!=navColumns-1 && i!=8)ImGui::SameLine(0,navGap);
+        if(simplifiedInterface){
+            if(visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
+        }else if(i%navColumns!=navColumns-1 && i!=8){
+            ImGui::SameLine(0,navGap);
+        }
     }
     ImGui::PopStyleVar(2);
     ImGui::EndChild();
@@ -7205,6 +7289,9 @@ static void renderUI() {
                        "SYNC / %s",section);
     if(ImGui::GetContentRegionAvail().x>195.f)ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
+    if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
+    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view"))
+        simplifiedInterface=!simplifiedInterface;
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 9 to switch pages.");
     {
@@ -7336,6 +7423,49 @@ static void renderUI() {
         }
         ImGui::PopStyleColor(2);
         ImGui::Dummy(ImVec2(0,1.f));
+    } else if(page==0 && simplifiedInterface) {
+        const ImVec4 muted(.67f,.67f,.67f,1.f);
+        ImGui::SetWindowFontScale(1.45f);
+        ImGui::TextUnformatted("PC Inspection");
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::TextColored(muted,"One scan. Clear results. Advanced tools remain available.");
+        ImGui::Dummy(ImVec2(0,16));
+        if(scanning){
+            ImGui::TextUnformatted(presentationHold.load()?
+                "Scan finished - preparing results":"Scanning your PC...");
+            if(presentationHold.load()){
+                ImGui::TextDisabled("Display wait: %u seconds (not extra analysis)",
+                    presentationWaitRemaining.load());
+            }
+            if(ImGui::Button("Cancel scan",ImVec2(170,44)))
+                cancelRequested=true;
+        }else if(done && inspectionDisplayPercent()<100){
+            ImGui::TextUnformatted("Preparing results...");
+        }else{
+            if(accentButton("START FULL SCAN",ImVec2(230,48)))startScan();
+            ImGui::SameLine();
+            if(ImGui::Button("View results",ImVec2(150,48)))page=9;
+        }
+        ImGui::Dummy(ImVec2(0,15));
+        ImGui::Separator();
+        ImGui::Text("Processes: %zu",processCount.load());
+        ImGui::Text("Evidence records: %zu",recordCount.load());
+        ImGui::Text("Files checked: %zu",fileCount.load());
+        ImGui::Text("Status: %s",stateText());
+        if(scanFailed){
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.f,.37f,.37f,1.f),
+                "Scan failed at stage %d",scanFailureStage.load());
+            std::string failure;
+            {
+                std::lock_guard<std::mutex> guard(scanFailureMutex);
+                failure=scanFailureReason;
+            }
+            if(!failure.empty())ImGui::TextWrapped("%s",failure.c_str());
+            ImGui::TextDisabled("Details: %%TEMP%%\\SyncPCChecker\\diagnostic.log");
+        }
+        ImGui::Dummy(ImVec2(0,18));
+        ImGui::TextColored(muted,"Need more detail? Select Advanced view above.");
     } else if(page==0) {
         // Rebuilt command center; no legacy metric() tiles.
         const ImVec4 pale(.96f,.96f,.96f,1),quiet(.62f,.62f,.62f,1),accent(.78f,.78f,.78f,1);
