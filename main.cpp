@@ -1,4 +1,4 @@
-=#include <cstdio>
+]#include <cstdio>
 #include <cstdlib>
 #ifdef SYNC_WITH_YARA
 #include <yara.h>
@@ -5469,7 +5469,7 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
     ImGui::Dummy(ImVec2(0,8));
     if(ImGui::BeginTable("memoryResults",4,ImGuiTableFlags_Borders|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|
-        ImGuiTableFlags_ScrollY,ImVec2(0,embedded?ImMax(320.f,ImGui::GetContentRegionAvail().y-12.f):-40.f))){
+        ImGuiTableFlags_ScrollY,ImVec2(0,embedded?std::max(320.0f,ImGui::GetContentRegionAvail().y-12.0f):-40.0f))){
         ImGui::TableSetupColumn("Address",ImGuiTableColumnFlags_WidthFixed,150);
         ImGui::TableSetupColumn("Size",ImGuiTableColumnFlags_WidthFixed,100);
         ImGui::TableSetupColumn("Protection",ImGuiTableColumnFlags_WidthFixed,155);
