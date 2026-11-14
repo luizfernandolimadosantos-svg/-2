@@ -3926,9 +3926,15 @@ static std::vector<Record> inspectYaraLocalFiles(const std::vector<Process>&){
 static std::atomic<unsigned> sequentialDone{0},sequentialTotal{0};
 static std::mutex sequentialLabelMutex;
 static std::string sequentialCurrent;
+static std::atomic<long long> scanActivityTickMs{0};
+static long long scanSteadyMs(){
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static void setSequentialItem(const std::string& label){
     std::lock_guard<std::mutex> lock(sequentialLabelMutex);
     sequentialCurrent=label;
+    scanActivityTickMs.store(scanSteadyMs(),std::memory_order_relaxed);
 }
 static std::string getSequentialItem(){
     std::lock_guard<std::mutex> lock(sequentialLabelMutex);
@@ -16976,6 +16982,7 @@ static std::vector<Record> collect(
 static void scanWorker() {
     try {
         stage=1;
+        setSequentialItem("Running enumerateProcesses");
         auto p=enumerateProcesses();
         std::unordered_map<DWORD,std::wstring> observedPrevious;
         std::unordered_set<DWORD> observedEver;
@@ -16993,28 +17000,50 @@ static void scanWorker() {
             ++sequentialDone;
         }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("Running inspectIndividualProcesses");
         auto processDetails=inspectIndividualProcesses(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("Running inspectDeepProcessExecutables");
         auto deepExecutables=inspectDeepProcessExecutables(p);
+        setSequentialItem("Running inspectExecutableAndDriverReview");
         auto exeAndDriverReview=inspectExecutableAndDriverReview(p);
+        setSequentialItem("Running inspectFifteenArtifactRules");
         auto additionalArtifactRules=inspectFifteenArtifactRules(p);
+        setSequentialItem("Running inspectAdditionalFifteenRules");
         auto additionalContextRules=inspectAdditionalFifteenRules(p);
+        setSequentialItem("Running inspectThirdFifteenRules");
         auto thirdArtifactRules=inspectThirdFifteenRules(p);
+        setSequentialItem("Running inspectFourthTwentyRules");
         auto fourthArtifactRules=inspectFourthTwentyRules(p);
+        setSequentialItem("Running inspectFifthTwentyRules");
         auto fifthArtifactRules=inspectFifthTwentyRules(p);
+        setSequentialItem("Running inspectSixthTwentyRules");
         auto sixthArtifactRules=inspectSixthTwentyRules(p);
+        setSequentialItem("Running inspectSeventhTwentyRules");
         auto seventhArtifactRules=inspectSeventhTwentyRules(p);
+        setSequentialItem("Running inspectEighthThirtyRules");
         auto eighthArtifactRules=inspectEighthThirtyRules(p);
+        setSequentialItem("Running real_detect::collect");
         auto realEvidence=real_detect::collect(p);
+        setSequentialItem("Running deep_evidence::collect");
         auto deepEvidence=deep_evidence::collect(p);
+        setSequentialItem("Running expanded_evidence::collect");
         auto expandedEvidence=expanded_evidence::collect();
+        setSequentialItem("Running artifact_correlation::collect");
         auto correlatedEvidence=artifact_correlation::collect(p);
+        setSequentialItem("Running evidence_plus::collect");
         auto evidencePlus= evidence_plus::collect(p);
+        setSequentialItem("Running fivem_evidence::collect");
         auto fivemEvidence=fivem_evidence::collect(p);
+        setSequentialItem("Running fivem_deep::collect");
         auto fivemDeepEvidence=fivem_deep::collect(p);
+        setSequentialItem("Running artifact_paths_v87::collect");
         auto pathArtifacts=artifact_paths_v87::collect(p);
+        setSequentialItem("Running artifact_review_v88::collect");
         auto artifactReview=artifact_review_v88::collect(p);
+        setSequentialItem("Running specialized_v89::collect");
         auto specializedEvidence=specialized_v89::collect(p);
+        setSequentialItem("Running artifact_consistency_v90::collect");
         auto consistencyEvidence=artifact_consistency_v90::collect(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
@@ -17029,6 +17058,7 @@ static void scanWorker() {
         stage=2;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Service inventory");
+        setSequentialItem("Running enumerateServices");
         auto services=enumerateServices();
         services.insert(services.end(),processDetails.begin(),processDetails.end());
         services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
@@ -17052,6 +17082,7 @@ static void scanWorker() {
         services.insert(services.end(),artifactReview.begin(),artifactReview.end());
         services.insert(services.end(),specializedEvidence.begin(),specializedEvidence.end());
         services.insert(services.end(),consistencyEvidence.begin(),consistencyEvidence.end());
+        setSequentialItem("Running artifact_correlation::correlate");
         auto linkedEvidence=artifact_correlation::correlate(services);
         services.insert(services.end(),linkedEvidence.begin(),linkedEvidence.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
@@ -17067,6 +17098,7 @@ static void scanWorker() {
         stage=3;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Startup inventory");
+        setSequentialItem("Running enumerateStartup");
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[2]=static_cast<unsigned>(startup.size());
@@ -17081,10 +17113,15 @@ static void scanWorker() {
         stage=4;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Network and device inventory");
+        setSequentialItem("Running enumerateTcp");
         auto network=enumerateTcp();
+        setSequentialItem("Running enumerateUdp");
         auto udp=enumerateUdp();
+        setSequentialItem("Running enumerateTcp6");
         auto tcp6=enumerateTcp6();
+        setSequentialItem("Running enumerateUsbStorage");
         auto usb=enumerateUsbStorage();
+        setSequentialItem("Running enumerateDefenderDetections");
         auto defender=enumerateDefenderDetections();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[3]=static_cast<unsigned>(
@@ -17102,18 +17139,22 @@ static void scanWorker() {
         sequentialTotal=39;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectWindowsSecurityConfiguration");
+        setSequentialItem("Running inspectWindowsSecurityConfiguration");
         auto security=inspectWindowsSecurityConfiguration();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectPolicyRuleSet");
+        setSequentialItem("Running inspectPolicyRuleSet");
         auto policyRules=inspectPolicyRuleSet();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFirmwareAndDmaIndicators");
+        setSequentialItem("Running inspectFirmwareAndDmaIndicators");
         auto firmwareIndicators=inspectFirmwareAndDmaIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFiveMSafeTestMarkers");
+        setSequentialItem("Running inspectFiveMSafeTestMarkers");
         auto fiveMTest=inspectFiveMSafeTestMarkers();
         ++sequentialDone;
         // Capture-protection diagnostics: inspect only our own window.
@@ -17136,154 +17177,193 @@ static void scanWorker() {
 
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectImageExecutionOptions");
+        setSequentialItem("Running inspectImageExecutionOptions");
         auto ifeo=inspectImageExecutionOptions();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdvancedPersistence");
+        setSequentialItem("Running inspectAdvancedPersistence");
         auto advancedPersistence=inspectAdvancedPersistence();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtendedEndpoint");
+        setSequentialItem("Running inspectExtendedEndpoint");
         auto extendedEndpoint=inspectExtendedEndpoint();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectDesktopWindowVisibility");
+        setSequentialItem("Running inspectDesktopWindowVisibility");
         auto windowVisibility=inspectDesktopWindowVisibility(hwnd);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectLogonConfiguration");
+        setSequentialItem("Running inspectLogonConfiguration");
         auto logon=inspectLogonConfiguration();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectHostsFile");
+        setSequentialItem("Running inspectHostsFile");
         auto hosts=inspectHostsFile();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectCheatNamedProcesses");
+        setSequentialItem("Running inspectCheatNamedProcesses");
         auto cheatNameProcesses=inspectCheatNamedProcesses(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectCheatNamedModules");
+        setSequentialItem("Running inspectCheatNamedModules");
         auto cheatNameModules=inspectCheatNamedModules(p);
+        setSequentialItem("Running inspectExpandedDllIndicators");
         auto dllReviewRecords=inspectExpandedDllIndicators(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectArtifactLocations");
+        setSequentialItem("Running inspectArtifactLocations");
         auto artifactLocations=inspectArtifactLocations();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdditionalEvidence");
+        setSequentialItem("Running inspectAdditionalEvidence");
         auto additionalEvidence=inspectAdditionalEvidence(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExpandedPersistenceIndicators");
+        setSequentialItem("Running inspectExpandedPersistenceIndicators");
         auto expandedPersistence=inspectExpandedPersistenceIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectStartupFolderIndicators");
+        setSequentialItem("Running inspectStartupFolderIndicators");
         auto startupFileIndicators=inspectStartupFolderIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectSpecialPersistenceKeys");
+        setSequentialItem("Running inspectSpecialPersistenceKeys");
         auto specialPersistence=inspectSpecialPersistenceKeys();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExecutableAlternateStreams");
+        setSequentialItem("Running inspectExecutableAlternateStreams");
         auto executableStreams=inspectExecutableAlternateStreams(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectImageExecutionHijackSettings");
+        setSequentialItem("Running inspectImageExecutionHijackSettings");
         auto executionConfig=inspectImageExecutionHijackSettings();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFilenameMasquerading");
+        setSequentialItem("Running inspectFilenameMasquerading");
         auto masquerading=inspectFilenameMasquerading(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectShellInitialization");
+        setSequentialItem("Running inspectShellInitialization");
         auto shellInitialization=inspectShellInitialization();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectSecurityPolicyWeakening");
+        setSequentialItem("Running inspectSecurityPolicyWeakening");
         auto securityWeakening=inspectSecurityPolicyWeakening();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectBamExecutionHistory");
+        setSequentialItem("Running inspectBamExecutionHistory");
         auto bamHistory=inspectBamExecutionHistory();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectDefenderExclusionIndicators");
+        setSequentialItem("Running inspectDefenderExclusionIndicators");
         auto defenderExclusions=inspectDefenderExclusionIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectScheduledTaskNames");
+        setSequentialItem("Running inspectScheduledTaskNames");
         auto scheduledTaskNames=inspectScheduledTaskNames();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectUserComRegistrationIndicators");
+        setSequentialItem("Running inspectUserComRegistrationIndicators");
         auto comRegistrations=inspectUserComRegistrationIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectServiceImagePathIndicators");
+        setSequentialItem("Running inspectServiceImagePathIndicators");
         auto serviceImagePaths=inspectServiceImagePathIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectPeStructure");
+        setSequentialItem("Running inspectPeStructure");
         auto peFindings=inspectPeStructure(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExecutableProvenance");
+        setSequentialItem("Running inspectExecutableProvenance");
         auto provenance=inspectExecutableProvenance(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectLoadedModuleProvenance");
+        setSequentialItem("Running inspectLoadedModuleProvenance");
         auto loadedModules=inspectLoadedModuleProvenance(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectTemporaryExecutables");
+        setSequentialItem("Running inspectTemporaryExecutables");
         auto temporaryExecutables=inspectTemporaryExecutables(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("collectWindowsTimeline");
+        setSequentialItem("Running collectWindowsTimeline");
         auto timeline=collectWindowsTimeline();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectBypassEvidenceIntegrity");
+        setSequentialItem("Running inspectBypassEvidenceIntegrity");
         auto bypassIntegrity=inspectBypassEvidenceIntegrity();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtendedBypassEvidence");
+        setSequentialItem("Running inspectExtendedBypassEvidence");
         auto bypassExtended=inspectExtendedBypassEvidence(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdditionalCheatIndicators");
+        setSequentialItem("Running inspectAdditionalCheatIndicators");
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAuditAndPlatformEvidence");
+        setSequentialItem("Running inspectAuditAndPlatformEvidence");
         auto auditPlatform=inspectAuditAndPlatformEvidence();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtraSecurityPolicies");
+        setSequentialItem("Running inspectExtraSecurityPolicies");
         auto extraPolicies=inspectExtraSecurityPolicies();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectForensicSourceHeaders");
+        setSequentialItem("Running inspectForensicSourceHeaders");
         auto forensicHeaders=inspectForensicSourceHeaders();
         ++sequentialDone;
         forensicSourceChecks.store(static_cast<unsigned>(forensicHeaders.size()));
         forensicSourceStatus.store(1);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectYaraLocalFiles");
+        setSequentialItem("Running inspectYaraLocalFiles");
         auto yaraFindings=inspectYaraLocalFiles(p);
         ++sequentialDone;        if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectNamedBatchScripts (.bat/.cmd)");
+        setSequentialItem("Running inspectNamedBatchScripts");
         auto batchNameFindings=inspectNamedBatchScripts();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         // Reconcile a second actual Windows snapshot; this is a bounded
         // discovery pass, not an invented process count or an ETW monitor.
         setSequentialItem("Second process snapshot / PID reconciliation");
+        setSequentialItem("Running enumerateProcesses");
         auto secondSnapshot=enumerateProcesses();
+        setSequentialItem("Running reconcileProcessSnapshots");
         auto processChanges=reconcileProcessSnapshots(p,secondSnapshot);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         forensicProducedRecords=static_cast<unsigned>(forensicHeaders.size()+
@@ -17339,8 +17419,10 @@ static void scanWorker() {
         services.insert(services.end(),serviceImagePaths.begin(),serviceImagePaths.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
+        setSequentialItem("Running correlateBypassIndicators");
         auto bypassCorrelations=correlateBypassIndicators(services);
         services.insert(services.end(),bypassCorrelations.begin(),bypassCorrelations.end());
+        setSequentialItem("Running correlateForensicEvidence");
         auto correlations=correlateForensicEvidence(services);
         forensicCorrelationNotices.store(static_cast<unsigned>(correlations.size()));
         services.insert(services.end(),correlations.begin(),correlations.end());
@@ -19615,6 +19697,14 @@ static void drawAtlasProgress(bool compact=false){
         const std::string current=getSequentialItem();
         if(!current.empty())ImGui::TextWrapped("%s: %s",
             displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
+        const long long last=scanActivityTickMs.load(std::memory_order_relaxed);
+        const long long quietMs=last>0?scanSteadyMs()-last:0;
+        if(quietMs>12000){
+            ImGui::TextWrapped("This check has been running for %.0f seconds. "
+                "It may be processing a large amount of data or waiting for Windows. "
+                "The scan has not been marked complete.",quietMs/1000.0);
+        }
+
     }else if(!done){
         drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
     }
