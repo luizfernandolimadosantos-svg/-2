@@ -19882,6 +19882,10 @@ static void renderUI() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.065f,.084f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
+    // Advanced navigation: animate each real tab, not arbitrary screen strips.
+    static float viewTransitionStart=-100.f;
+    static bool viewTransitionActive=false;
+    const float viewNow=(float)ImGui::GetTime();
     const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
     const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
     const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
@@ -19925,6 +19929,15 @@ static void renderUI() {
          (simplifiedInterface?simpleColumns:navColumns));
     for(int visible=0;visible<visibleNavCount;visible++){
         const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
+        float itemAlpha=1.f;
+        if(viewTransitionActive && !reducedMotion){
+            const float t=(viewNow-viewTransitionStart-visible*0.115f)/0.26f;
+            const float v=std::clamp(t,0.f,1.f);
+            itemAlpha=v*v*(3.f-2.f*v);
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+                            ImGui::GetStyle().Alpha*itemAlpha);
+        if(itemAlpha<0.98f)ImGui::BeginDisabled();
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
@@ -19977,6 +19990,8 @@ static void renderUI() {
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
         ImGui::PopID();
+        if(itemAlpha<0.98f)ImGui::EndDisabled();
+        ImGui::PopStyleVar(); // Individual tab opacity
         if(simplifiedInterface){
             if(visible%simpleColumns!=simpleColumns-1 &&
                visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
@@ -20024,8 +20039,6 @@ static void renderUI() {
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
     // A brief, non-blocking monochrome transition when switching view modes.
-    static float viewTransitionStart=-100.f;
-    static bool viewTransitionActive=false;
     if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view")){
         simplifiedInterface=!simplifiedInterface;
         viewTransitionStart=(float)ImGui::GetTime();
@@ -21051,45 +21064,11 @@ static void renderUI() {
             transitionDraw->PopClipRect();
         }
     }
-    // Staggered reveal: seven regions appear one after another.
-    // Purely visual; no scan routines or underlying widgets are changed.
-    if(viewTransitionActive){
-        const float elapsed=(float)ImGui::GetTime()-viewTransitionStart;
-        constexpr float delay=0.105f;
-        constexpr float duration=0.24f;
-        constexpr int regions=7;
-        if(elapsed>=delay*(regions-1)+duration){
-            viewTransitionActive=false;
-        }else{
-            const ImVec2 pos=ImGui::GetWindowPos();
-            const ImVec2 size=ImGui::GetWindowSize();
-            // Leave the page title and Advanced view button visible.
-            const float top=pos.y+94.f;
-            const float bottom=pos.y+size.y;
-            const float regionHeight=(bottom-top)/regions;
-            ImDrawList* overlay=ImGui::GetWindowDrawList();
-            overlay->PushClipRect(ImVec2(pos.x,top),
-                                  ImVec2(pos.x+size.x,bottom),true);
-            for(int region=0;region<regions;++region){
-                const float local=(elapsed-region*delay)/duration;
-                const float clamped=(std::max)(0.f,(std::min)(1.f,local));
-                const float eased=clamped*clamped*(3.f-2.f*clamped);
-                const int opacity=(int)(255.f*(1.f-eased));
-                const float y0=top+regionHeight*region;
-                const float y1=(region==regions-1)?bottom:y0+regionHeight+1.f;
-                if(opacity>0)
-                    overlay->AddRectFilled(ImVec2(pos.x,y0),
-                        ImVec2(pos.x+size.x,y1),
-                        IM_COL32(12,12,13,opacity));
-                if(local>0.f && local<1.f){
-                    overlay->AddLine(ImVec2(pos.x+20.f,y1-1.f),
-                        ImVec2(pos.x+size.x-20.f,y1-1.f),
-                        IM_COL32(218,218,218,(int)(70.f*(1.f-eased))),1.f);
-                }
-            }
-            overlay->PopClipRect();
-        }
-    }
+    // End the animation after all visible tabs have appeared.
+    if(viewTransitionActive &&
+       (reducedMotion || (float)ImGui::GetTime()-viewTransitionStart >
+        (simplifiedInterface?3.f:8.f)*0.115f+0.26f))
+        viewTransitionActive=false;
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
