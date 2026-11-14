@@ -18011,6 +18011,12 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
         ImGui::EndTable();
     }
 }
+// UI-only navigation animation. No scanner state is modified.
+static double syncPageAnimationAt = -100.0;
+static float syncEase(float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    return t*t*(3.f-2.f*t);
+}
 static void modulesList() {
     const float full=ImGui::GetContentRegionAvail().x;
     const float gap=10.f;
@@ -18020,6 +18026,13 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(i%columns)ImGui::SameLine(0,gap);
+        // Each module enters individually on every navigation to this page.
+        const float cardAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
+        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.095f)/0.38f);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+            ImGui::GetStyle().Alpha*(0.02f+0.98f*cardT));
+        // Keep the card's layout stable while animating its contents.
+
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
@@ -18044,6 +18057,7 @@ static void modulesList() {
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
+        ImGui::PopStyleVar(); // per-card alpha
         ImGui::PopID();
     }
     if(openInspectorRequested) { ImGui::OpenPopup("Evidence inspector"); openInspectorRequested=false; }
@@ -19899,7 +19913,10 @@ static void renderUI() {
     static float navTransitionStart=0.f;
     const float uiNow=(float)ImGui::GetTime();
     const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
-    if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
+    if(pageChanged) {
+        navTransitionStart=reducedMotion?-100.f:uiNow;
+        syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
+    }
     lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
                        "BINARY LAB","NETWORK","DRIVER AUDIT","ARTIFACT EXPLORER","KERNEL MEMORY DUMP","PREFERENCES"};
@@ -20043,6 +20060,7 @@ static void renderUI() {
         simplifiedInterface=!simplifiedInterface;
         viewTransitionStart=(float)ImGui::GetTime();
         viewTransitionActive=!reducedMotion;
+        syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
     }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 9 to switch pages.");
@@ -20086,6 +20104,12 @@ static void renderUI() {
         ImGui::GetTime()-unlockAnimationStart : 100.0;
     const bool unlocking=!waitingForPresentation &&
         unlockElapsed<1.65;
+    // Fade the whole page content on every navigation, including revisits.
+    // Module cards receive an additional individual stagger below.
+    const float pageAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
+    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.42f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+        ImGui::GetStyle().Alpha*(0.04f+0.96f*pageFade));
     if((waitingForPresentation || (unlocking && !reducedMotion)) &&
        page!=0 && page!=4) {
         const float opening=unlocking?
@@ -21023,6 +21047,7 @@ static void renderUI() {
         }
         ImGui::EndChild();
     }
+    ImGui::PopStyleVar(); // page content fade
     // Atlas navigation transition: a short monochrome cinematic wipe.
     // Rendered over the content only, so navigation and the top bar stay
     // responsive. No result state, scan progress or evidence is modified.
