@@ -19649,72 +19649,88 @@ static float syncIntroEase(float x) {
     x=(std::max)(0.f,(std::min)(1.f,x));
     return x*x*(3.f-2.f*x);
 }
+static double syncIntroRevealAt=-1.0;
 static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
     ImGui::SetNextWindowPos(p);
     ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.038f,.038f,.042f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.035f,.038f,1.f));
     ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
     ImDrawList* d=ImGui::GetWindowDrawList();
-    const float t=(float)ImGui::GetTime();
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.46f;
+    const double now=ImGui::GetTime();
+    const float t=(float)now;
+    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.48f;
     const bool transitioning=syncIntroTransition>=0.0;
-    const float elapsed=transitioning?(float)(ImGui::GetTime()-syncIntroTransition):0.f;
-    const float leave=transitioning?syncIntroEase(elapsed/.55f):0.f;
-    const float enter=transitioning?syncIntroEase((elapsed-.48f)/1.05f):0.f;
-    const float alpha=1.f-leave;
-    const int a=(int)(255.f*alpha);
-    // Architectural grid and fine dividers, restrained and monochrome.
-    for(int j=1;j<9;++j){
-        float x=p.x+sz.x*j/9.f;
-        d->AddLine(ImVec2(x,p.y),ImVec2(x,p.y+sz.y),IM_COL32(255,255,255,9));
+    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
+    auto fade=[&](float begin,float duration) {
+        return syncIntroEase((elapsed-begin)/duration);
+    };
+    const float welcomeOpacity=transitioning?1.f-fade(.10f,.48f):1.f;
+    const float loadingOpacity=transitioning?fade(.58f,.38f)*(1.f-fade(2.10f,.36f)):0.f;
+    auto ink=[](int gray,float alpha) {
+        return IM_COL32(gray,gray,gray,(int)(255.f*(std::max)(0.f,(std::min)(1.f,alpha))));
+    };
+    // Gentle vignette and hairline grid, kept subtle to avoid visual noise.
+    d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
+        IM_COL32(9,9,11,255),IM_COL32(18,18,20,255),
+        IM_COL32(10,10,12,255),IM_COL32(13,13,15,255));
+    for(int j=1;j<8;++j) {
+        const float x=p.x+sz.x*j/8.f;
+        d->AddLine(ImVec2(x,p.y+80.f),ImVec2(x,p.y+sz.y-60.f),ink(255,.025f));
     }
-    d->AddLine(ImVec2(p.x+34,p.y+69),ImVec2(p.x+sz.x-34,p.y+69),IM_COL32(255,255,255,34));
-    d->AddText(ImVec2(p.x+37,p.y+36),IM_COL32(233,233,233,230),"SYNC PC CHECKER");
-    d->AddText(ImVec2(p.x+sz.x-142,p.y+37),IM_COL32(135,135,135,220),"DESKTOP  /  SYNC");
-    // Original embedded logo, with a subtle orbit.
-    const float logo=74.f;
-    if(syncLogoTexture && alpha>.01f)
+    d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
+    d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
+    d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"DESKTOP APP");
+    const float pulse=.5f+.5f*std::sin(t*1.65f);
+    const float logoY=cy-115.f-(transitioning?fade(.15f,.65f)*22.f:0.f);
+    for(int i=3;i>=1;--i) {
+        const float radius=44.f+i*18.f+pulse*3.f;
+        d->AddCircle(ImVec2(cx,logoY),radius,ink(220,(.035f+.014f*pulse)/i),96,1.0f);
+    }
+    if(syncLogoTexture)
         d->AddImage((ImTextureID)syncLogoTexture,
-            ImVec2(cx-logo*.5f,cy-145.f),ImVec2(cx+logo*.5f,cy-145.f+logo),
-            ImVec2(0,0),ImVec2(1,1),IM_COL32(255,255,255,a));
-    d->AddCircle(ImVec2(cx,cy-108.f),49.f,IM_COL32(215,215,215,(int)(38*alpha)),72,1.f);
-    float orbit=t*.38f;
-    d->AddCircleFilled(ImVec2(cx+49.f*std::cos(orbit),cy-108.f+49.f*std::sin(orbit)),
-        2.f,IM_COL32(230,230,230,(int)(145*alpha)));
-    const char* heading="Welcome to Sync.";
-    const char* detail="Check your PC. Review the results.";
-    ImVec2 hs=ImGui::CalcTextSize(heading);
-    ImVec2 ds=ImGui::CalcTextSize(detail);
-    d->AddText(ImVec2(cx-hs.x*.5f,cy-25.f),IM_COL32(245,245,245,a),heading);
-    d->AddText(ImVec2(cx-ds.x*.5f,cy+13.f),IM_COL32(160,160,160,a),detail);
-    if(!transitioning){
-        ImGui::SetCursorScreenPos(ImVec2(cx-113.f,cy+79.f));
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.89f,.89f,.89f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.76f,.76f,.76f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.06f,.06f,.06f,1.f));
-        if(ImGui::Button("Open Scanner  ->",ImVec2(226,46)))
-            syncIntroTransition=ImGui::GetTime();
-        ImGui::PopStyleColor(4);
-    }else{
-        // Three visual phases: fade welcome, reveal line, then fade scanner in.
-        float line=syncIntroEase((elapsed-.3f)/1.35f);
-        float w=210.f*line;
-        d->AddLine(ImVec2(cx-w,cy+82.f),ImVec2(cx+w,cy+82.f),
-            IM_COL32(225,225,225,210),2.f);
-        const char* loading="Opening scanner";
-        ImVec2 ls=ImGui::CalcTextSize(loading);
-        d->AddText(ImVec2(cx-ls.x*.5f,cy+106.f),IM_COL32(185,185,185,220),loading);
-        if(elapsed>=2.05f)syncIntroOpen=false;
+            ImVec2(cx-36.f,logoY-36.f),ImVec2(cx+36.f,logoY+36.f),
+            ImVec2(0,0),ImVec2(1,1),ink(255,transitioning?.92f:1.f));
+    if(welcomeOpacity>.005f) {
+        const char* heading="Welcome to Sync.";
+        const char* detail="Check your PC. Review the results.";
+        const ImVec2 hs=ImGui::CalcTextSize(heading), ds=ImGui::CalcTextSize(detail);
+        const float offset=(1.f-welcomeOpacity)*12.f;
+        d->AddText(ImVec2(cx-hs.x*.5f,cy-12.f-offset),ink(247,welcomeOpacity),heading);
+        d->AddText(ImVec2(cx-ds.x*.5f,cy+23.f-offset),ink(169,welcomeOpacity),detail);
     }
-    d->AddLine(ImVec2(p.x+34,p.y+sz.y-51),ImVec2(p.x+sz.x-34,p.y+sz.y-51),
-        IM_COL32(255,255,255,29));
-    d->AddText(ImVec2(p.x+37,p.y+sz.y-34),IM_COL32(130,130,130,210),
-        "SYSTEM INSPECTION");
+    if(!transitioning) {
+        ImGui::SetCursorScreenPos(ImVec2(cx-115.f,cy+91.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.90f,.90f,.90f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
+        if(ImGui::Button("Open Scanner  ->",ImVec2(230.f,46.f)))
+            syncIntroTransition=now;
+        ImGui::PopStyleColor(4);
+    } else {
+        // The sequence is visual only; it does not pretend to run a scan.
+        const float line=fade(.48f,.95f);
+        d->AddLine(ImVec2(cx-145.f*line,cy+68.f),
+                   ImVec2(cx+145.f*line,cy+68.f),ink(226,.75f*loadingOpacity),1.5f);
+        const char* label="Opening scanner";
+        const ImVec2 ls=ImGui::CalcTextSize(label);
+        d->AddText(ImVec2(cx-ls.x*.5f,cy+88.f),ink(205,loadingOpacity),label);
+        for(int i=0;i<3;++i) {
+            float beat=.24f+.76f*(.5f+.5f*std::sin(t*5.f-i*.8f));
+            d->AddCircleFilled(ImVec2(cx+(i-1)*16.f,cy+124.f),2.5f,
+                               ink(220,loadingOpacity*beat),16);
+        }
+        if(elapsed>=2.50f) {
+            syncIntroOpen=false;
+            syncIntroRevealAt=now;
+        }
+    }
+    d->AddLine(ImVec2(p.x+32,p.y+sz.y-51),ImVec2(p.x+sz.x-32,p.y+sz.y-51),ink(255,.10f));
+    d->AddText(ImVec2(p.x+36,p.y+sz.y-35),ink(155,.75f),"SYSTEM INSPECTION");
     ImGui::End();
     ImGui::PopStyleColor();
 }
@@ -21085,6 +21101,19 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
         renderUI();
+        // Reveal the existing scanner smoothly, without changing its scan logic.
+        if(!syncIntroOpen && syncIntroRevealAt>=0.0) {
+            const float fade=1.f-syncIntroEase(
+                (float)((ImGui::GetTime()-syncIntroRevealAt)/.70));
+            if(fade>.001f) {
+                ImGuiViewport* vp=ImGui::GetMainViewport();
+                ImGui::GetForegroundDrawList()->AddRectFilled(
+                    vp->WorkPos,
+                    ImVec2(vp->WorkPos.x+vp->WorkSize.x,
+                           vp->WorkPos.y+vp->WorkSize.y),
+                    IM_COL32(9,9,11,(int)(255.f*fade)));
+            } else syncIntroRevealAt=-1.0;
+        }
         if(ambientMotesEnabled){
             ImGuiViewport* mainViewport=ImGui::GetMainViewport();
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
