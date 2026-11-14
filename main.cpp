@@ -37,7 +37,7 @@
 #include <cstring>
 #include <array>
 #include <chrono>
-#include <system_error>
+#include <system_error>\n#include <functional>
 #include <cstdint>
 #include <winreg.h>
 #include <cctype>
@@ -10369,21 +10369,43 @@ static void inspectPEImages(Collector& out,
     }
 }
 // The scan is bounded and may skip inaccessible protected objects.
-static std::vector<Record> collect(const std::vector<Process>& processes) {
+static std::vector<Record> collect(
+    const std::vector<Process>& processes,
+    const std::function<void(const char*)>& reportProgress = {}) {
     Collector out;
-    inspectTaskFiles(out);
-    if(!out.stopped())inspectOperationalEvents(out);
-    if(!out.stopped())inspectBrowserHosts(out);
-    if(!out.stopped())inspectRegistryLocations(out);
-    if(!out.stopped())inspectStartupLocations(out);
-    if(!out.stopped())inspectPrefetch(out);
-    if(!out.stopped())inspectForensicStores(out);
-    if(!out.stopped())inspectCrashReports(out);
-    if(!out.stopped())inspectAuthenticode(out,processes);
-    if(!out.stopped())inspectNetworkOwners(out,processes);
-    if(!out.stopped())inspectImageAttributes(out,processes);
-    if(!out.stopped())inspectAlternateStreamNames(out,processes);
-    if(!out.stopped())inspectPEImages(out,processes);
+    auto run = [&](const char* name, auto&& work) {
+        if (out.stopped()) return;
+        if (reportProgress) reportProgress(name);
+        diagnosticLog(name);
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            work();
+        } catch (const std::exception& e) {
+            diagnosticLog(e.what());
+        } catch (...) {
+            diagnosticLog("Evidence collection subcheck failed with unknown exception");
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        char message[180]{};
+        snprintf(message, sizeof(message), "Evidence check %s finished in %lld ms",
+                 name, static_cast<long long>(elapsed));
+        diagnosticLog(message);
+    };
+    run("Task files", [&]{ inspectTaskFiles(out); });
+    run("Operational events", [&]{ inspectOperationalEvents(out); });
+    run("Browser hosts", [&]{ inspectBrowserHosts(out); });
+    run("Registry locations", [&]{ inspectRegistryLocations(out); });
+    run("Startup locations", [&]{ inspectStartupLocations(out); });
+    run("Prefetch", [&]{ inspectPrefetch(out); });
+    run("Forensic stores", [&]{ inspectForensicStores(out); });
+    run("Crash reports", [&]{ inspectCrashReports(out); });
+    run("Authenticode", [&]{ inspectAuthenticode(out, processes); });
+    run("Network owners", [&]{ inspectNetworkOwners(out, processes); });
+    run("Image attributes", [&]{ inspectImageAttributes(out, processes); });
+    run("Alternate streams", [&]{ inspectAlternateStreamNames(out, processes); });
+    run("PE images", [&]{ inspectPEImages(out, processes); });
+    if (reportProgress) reportProgress("Evidence collection complete");
     return std::move(out.rows);
 }
 } // namespace evidence_plus
@@ -17032,7 +17054,7 @@ static void scanWorker() {
         setSequentialItem("Running artifact_correlation::collect");
         auto correlatedEvidence=artifact_correlation::collect(p);
         setSequentialItem("Running evidence_plus::collect");
-        auto evidencePlus= evidence_plus::collect(p);
+        auto evidencePlus= evidence_plus::collect(p, [](const char* check) {\n            setSequentialItem(std::string("Evidence: ") + check);\n        });
         setSequentialItem("Running fivem_evidence::collect");
         auto fivemEvidence=fivem_evidence::collect(p);
         setSequentialItem("Running fivem_deep::collect");
