@@ -20023,8 +20023,14 @@ static void renderUI() {
     if(ImGui::GetContentRegionAvail().x>195.f)ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
-    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view"))
+    // A brief, non-blocking monochrome transition when switching view modes.
+    static float viewTransitionStart=-100.f;
+    static bool viewTransitionActive=false;
+    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view")){
         simplifiedInterface=!simplifiedInterface;
+        viewTransitionStart=(float)ImGui::GetTime();
+        viewTransitionActive=!reducedMotion;
+    }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 9 to switch pages.");
     {
@@ -21043,6 +21049,26 @@ static void renderUI() {
                 IM_COL32(234,234,234,
                     static_cast<int>(125.f*edgeAlpha)));
             transitionDraw->PopClipRect();
+        }
+    }
+    // Overlay the content area (not the header/button) with a fading curtain.
+    // No scanner work is paused or changed by this visual effect.
+    if(viewTransitionActive){
+        const float t=((float)ImGui::GetTime()-viewTransitionStart)/0.42f;
+        if(t>=1.f) viewTransitionActive=false;
+        else {
+            const float fade=(1.f-t)*(1.f-t);
+            const ImVec2 pos=ImGui::GetWindowPos();
+            const ImVec2 size=ImGui::GetWindowSize();
+            ImDrawList* overlay=ImGui::GetWindowDrawList();
+            overlay->PushClipRect(pos,ImVec2(pos.x+size.x,pos.y+size.y),true);
+            overlay->AddRectFilled(pos,ImVec2(pos.x+size.x,pos.y+size.y),
+                IM_COL32(12,12,13,(int)(210.f*fade)));
+            const float lineY=pos.y+size.y*(0.16f+0.84f*t);
+            overlay->AddLine(ImVec2(pos.x+22.f,lineY),
+                ImVec2(pos.x+size.x-22.f,lineY),
+                IM_COL32(235,235,235,(int)(95.f*fade)),1.f);
+            overlay->PopClipRect();
         }
     }
     ImGui::EndChild();
