@@ -4278,7 +4278,7 @@ static std::vector<Record> inspectDeepProcessExecutables(
     return findings;
 }
 // Optional presentation hold, never counted as forensic work.
-static constexpr unsigned kMinimumDisplaySeconds=15;
+static constexpr unsigned kMinimumDisplaySeconds=0; // No artificial post-scan waiting
 static std::atomic<unsigned> presentationWaitRemaining{0};
 static std::atomic<bool> presentationHold{false};
 
@@ -17360,7 +17360,7 @@ static void scanWorker() {
         // presentation countdown; do not change scanElapsedUs or stage timings.
         const auto actualUs=scanElapsedUs.load();
         const auto minimumUs=static_cast<unsigned long long>(kMinimumDisplaySeconds)*1000000ULL;
-        if(actualUs<minimumUs){
+        if(kMinimumDisplaySeconds>0 && actualUs<minimumUs){
             presentationHold=true;
             const auto until=std::chrono::steady_clock::now()+
                 std::chrono::microseconds(minimumUs-actualUs);
@@ -18031,8 +18031,13 @@ static void modulesList() {
         const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.095f)/0.38f);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
             ImGui::GetStyle().Alpha*(0.02f+0.98f*cardT));
-        // Keep the card's layout stable while animating its contents.
-
+        // Keep the card's layout stable; do not show or activate it before its turn.
+        if(cardT<=0.001f) {
+            ImGui::Dummy(ImVec2(width,180.f));
+            ImGui::PopStyleVar();
+            ImGui::PopID();
+            continue;
+        }
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
@@ -18932,6 +18937,21 @@ static bool isSensitiveDumpTarget(const std::wstring& path){
     for(const wchar_t* item:blocked)if(name==item)return true;
     return false;
 }
+// Check current file availability without changing the scanned system.
+// A missing path is not proof of deletion: it may have been moved or renamed.
+static std::string evidenceFileAvailability(const std::wstring& path) {
+    if(path.empty())return "Unable to verify - no file path recorded.";
+    const DWORD attributes=GetFileAttributesW(path.c_str());
+    if(attributes!=INVALID_FILE_ATTRIBUTES) {
+        return (attributes&FILE_ATTRIBUTE_DIRECTORY)
+            ? "Path exists (directory, not a file)."
+            : "File exists.";
+    }
+    const DWORD error=GetLastError();
+    if(error==ERROR_FILE_NOT_FOUND || error==ERROR_PATH_NOT_FOUND)
+        return "File removed or deleted (not found at the recorded path).";
+    return "Unable to verify file status (Windows error "+std::to_string(error)+").";
+}
 static void drawEvidenceDetails() {
     if(!evidenceDetailsOpen)return;
     ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_FirstUseEver);
@@ -18957,6 +18977,9 @@ static void drawEvidenceDetails() {
     if(!evidenceFile.empty()) {
         ImGui::Separator();
         ImGui::TextWrapped("File: %s",utf8(evidenceFile).c_str());
+        const std::string fileAvailability=evidenceFileAvailability(evidenceFile);
+        ImGui::TextWrapped("File status: %s",fileAvailability.c_str());
+        ImGui::TextDisabled("Status checked now; this does not establish when or why a file disappeared.");
         if(ImGui::Button("Verify SHA-256 and Authenticode")) {
             evidenceHash=sha256(evidenceFile);
             evidenceSignature=signatureStatus(evidenceFile);
@@ -19579,8 +19602,14 @@ static void drawAtlasProgress(bool compact=false){
         const float pulse=0.12f+0.08f*(std::sin(t*2.2f)+1.f);
         const float progress=total?std::clamp(checked/static_cast<float>(total),0.f,1.f):pulse;
         drawProfessionalProgressTrack("active-stage",activeName,progress,width,11.f);
-        if(total)ImGui::TextDisabled("%u / %u %s",checked,total,
-            displayLanguage==1?"itens verificados":"items checked");
+        if(total) {
+            ImGui::TextDisabled("%u / %u %s",checked,total,
+                displayLanguage==1?"itens verificados":"items checked");
+            if(checked>=total && completedStages.load()<=activeIndex)
+                ImGui::TextDisabled("%s",displayLanguage==1?
+                    "Itens concluidos; finalizando verificacoes desta etapa...":
+                    "Items checked; finishing remaining checks in this stage...");
+        }
         else ImGui::TextDisabled("%s",displayLanguage==1?
             "Aguardando contagem da etapa":"Waiting for stage item count");
         const std::string current=getSequentialItem();
