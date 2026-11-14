@@ -19496,33 +19496,6 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::Dummy(ImVec2(width,height));
     ImGui::PopID();
 }
-// UI-only stage presentation: never changes worker progress or scan results.
-// Completed milestones are revealed sequentially even if the worker finishes
-// several of them between two rendered frames.
-static int inspectionPresentedStages(){
-    static double lastScanStart=-1.0;
-    static double lastAdvance=0.0;
-    static int presented=0;
-    const double now=ImGui::GetTime();
-    if(lastScanStart!=inspectionProgressStart){
-        lastScanStart=inspectionProgressStart;
-        lastAdvance=now;
-        presented=0;
-    }
-    const int actual=std::clamp(completedStages.load(),0,6);
-    if(inspectionProgressStart<=0.0 || (!scanning && !done)){
-        presented=0;
-        lastAdvance=now;
-        return presented;
-    }
-    if(actual<presented){presented=actual;lastAdvance=now;}
-    // Presentation only: at most one completed stage every 0.65 seconds.
-    if(presented<actual && now-lastAdvance>=0.65){
-        ++presented;
-        lastAdvance=now;
-    }
-    return presented;
-}
 static void drawAtlasProgress(bool compact=false){
     const int verified=inspectionDisplayPercent();
     const float fraction=smoothInspectionVisual(
@@ -19559,9 +19532,7 @@ static void drawAtlasProgress(bool compact=false){
         "PUBLICAÇÃO DOS RESULTADOS"
     };
     constexpr int phaseCount=6;
-    const int actualCompleted=std::clamp(completedStages.load(),0,6);
-    const int completed=inspectionPresentedStages();
-    const bool presentingEarlierStage=completed<actualCompleted;
+    const int completed=std::clamp(completedStages.load(),0,6);
     const int activeIndex=std::clamp(completed,0,5);
     const char* activeName=displayLanguage==1?
         phaseNamesPt[activeIndex]:phaseNames[activeIndex];
@@ -19582,16 +19553,12 @@ static void drawAtlasProgress(bool compact=false){
         ImGui::SetTooltip("6 real scan stages | Green: complete | Grey: active | Dark: pending");
     ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
     ImGui::SameLine();
-    ImGui::TextDisabled("%02d / %02d",done && completed==6?6:activeIndex+1,phaseCount);
-    ImGui::TextUnformatted(done && completed==6?
+    ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
+    ImGui::TextUnformatted(done?
         (displayLanguage==1?"TODAS AS ETAPAS CONCLUÍDAS":"ALL STAGES COMPLETE"):activeName);
-    if(presentingEarlierStage)
-        ImGui::TextDisabled("%s",displayLanguage==1?
-            "Exibindo etapas concluidas (progresso real acima)":
-            "Showing completed stages (actual progress above)");
     // A stage reaches 100% only when its worker milestone is completed.
     // Use indeterminate activity rather than inventing a percentage within it.
-    if(!done && scanning && !presentingEarlierStage){
+    if(!done && scanning){
         const unsigned total=sequentialTotal.load();
         const unsigned checked=sequentialDone.load();
         const float t=static_cast<float>(ImGui::GetTime());
@@ -19605,9 +19572,8 @@ static void drawAtlasProgress(bool compact=false){
         const std::string current=getSequentialItem();
         if(!current.empty())ImGui::TextWrapped("%s: %s",
             displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
-    }else if(!done || presentingEarlierStage){
-        drawProfessionalProgressTrack("active-stage",activeName,
-            presentingEarlierStage?1.f:0.f,width,11.f);
+    }else if(!done){
+        drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
     }
     ImGui::Spacing();
     const char* phase=scanFailed?"INSPECTION FAILED":
@@ -19793,7 +19759,7 @@ static void renderUI() {
         ImGui::SameLine(0,18);
         ImGui::TextDisabled("Processes: %zu",processCount.load());
         ImGui::SameLine(0,18);
-        ImGui::TextDisabled("Evidence: %zu",recordCount.load());
+        ImGui::TextDisabled("Records: %zu",recordCount.load());
         if(ImGui::GetContentRegionAvail().x>180.f) {
             ImGui::SameLine();
             ImGui::TextDisabled("Read-only  |  Manual review");
@@ -19836,20 +19802,8 @@ static void renderUI() {
     const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
     if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
     lastNavPage=page;
-    const char* nav[]={"OVERVIEW","FINDINGS","WINDOWS EVENTS",
-                       "FILE ANALYSIS","NETWORK","DRIVERS","ALL EVIDENCE","MEMORY DUMP","SETTINGS"};
-    // Plain-language navigation: only presentation labels change.
-    const char* navHelp[]={
-        "Overview, scan controls and current progress.",
-        "Review suspicious findings and their supporting evidence.",
-        "Inspect recorded Windows security and system events.",
-        "Inspect executable files and binary metadata.",
-        "Review network connections and related processes.",
-        "Review installed drivers and their trust information.",
-        "Browse all collected artifacts and detailed records.",
-        "Create and verify a process memory dump.",
-        "Adjust appearance, language and interface options."
-    };
+    const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
+                       "BINARY LAB","NETWORK","DRIVER AUDIT","ARTIFACT EXPLORER","KERNEL MEMORY DUMP","PREFERENCES"};
     const int navPages[]={0,2,3,6,7,8,9,10,4};
     // Quick page navigation, ignored while editing text or using shortcuts.
     // Ctrl+1..9 follows the visible tab order.
@@ -19908,9 +19862,7 @@ static void renderUI() {
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){
             ImGui::BeginTooltip();
             ImGui::Text("%s",localized(nav[i]));
-            ImGui::TextWrapped("%s",navHelp[i]);
-            ImGui::Separator();
-            ImGui::TextDisabled("Shortcut: Ctrl + %d",i+1);
+            ImGui::TextDisabled("Ctrl + %d",i+1);
             ImGui::EndTooltip();
         }
         const ImVec2 tabMin=ImGui::GetItemRectMin();
@@ -19992,26 +19944,6 @@ static void renderUI() {
                           ImVec2(lineStart.x+44.f,lineY+1.f),
                           IM_COL32(158,158,158,190),1.f);
         ImGui::Dummy(ImVec2(0,12.f));
-    }
-    // Context help makes every page understandable without altering any scanner routines.
-    static bool showPageGuide=true;
-    const char* pageGuide=page==0?
-        "Start a complete scan here. Follow the progress and open results when it finishes.":
-        page==2?"Review findings carefully. A suspicious indicator is not proof of malware.":
-        page==3?"Windows events provide historical context; inspect each record for details.":
-        page==6?"Inspect file metadata, hashes and signatures to investigate binaries.":
-        page==7?"Review active and recorded connections alongside their processes.":
-        page==8?"Inspect driver details and signatures before drawing conclusions.":
-        page==9?"Browse collected evidence. Use the details controls for full context.":
-        page==10?"Advanced tool: capture and verify a process dump when needed.":
-        "Customize how the application looks and how information is displayed.";
-    if(ImGui::SmallButton(showPageGuide?"Hide page help":"What is this page?"))
-        showPageGuide=!showPageGuide;
-    if(showPageGuide){
-        ImGui::SameLine(0,12);
-        ImGui::TextDisabled("GUIDE");
-        ImGui::TextWrapped("%s",pageGuide);
-        ImGui::Spacing();
     }
     // Only Dashboard shows progress; remove the bar once it reaches 100%.
     // Investigation pages show the lock from launch until scan completion and 100%.
@@ -20184,12 +20116,12 @@ static void renderUI() {
         const float heroWidth=side?full-rightWidth-12.f:full;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.073f,0.073f,0.073f,1));
         ImGui::BeginChild("##heroCommand",ImVec2(heroWidth,233),ImGuiChildFlags_Borders);
-        ImGui::TextColored(accent,"PC SECURITY / SCAN OVERVIEW");
+        ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
         ImGui::SetWindowFontScale(1.12f);
-        ImGui::TextColored(pale,"Computer security check");
+        ImGui::TextColored(pale,"System Inspection");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(quiet,"Checks running programs, services, startup entries and system events");
+        ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
             if(presentationHold.load()){
@@ -21025,6 +20957,66 @@ static void renderUI() {
     drawProcessDetails();
     drawEvidenceDetails();
 }
+
+// Minimal monochrome welcome screen. UI-only; scanner logic is unchanged.
+static bool syncWelcomeOpen=true;
+static double syncWelcomeOpenedAt=-1.0;
+static void renderSyncWelcome(){
+    ImGuiViewport* vp=ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    const ImGuiWindowFlags flags=ImGuiWindowFlags_NoDecoration|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.043f,.043f,.047f,1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
+    ImGui::Begin("##sync_welcome",nullptr,flags);
+    if(syncWelcomeOpenedAt<0.0)syncWelcomeOpenedAt=ImGui::GetTime();
+    const float elapsed=static_cast<float>(ImGui::GetTime()-syncWelcomeOpenedAt);
+    const float fade=std::clamp(elapsed/1.2f,0.f,1.f);
+    const float ease=fade*fade*(3.f-2.f*fade);
+    const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
+    const ImVec2 center(p.x+sz.x*.5f,p.y+sz.y*.5f);
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    // Gentle halo, thin framing and an understated animated progress stroke.
+    for(int i=7;i>=1;--i){
+        dl->AddCircle(center,72.f+i*10.f,
+            IM_COL32(210,210,210,static_cast<int>(ease*(10-i))),64,1.f);
+    }
+    dl->AddLine(ImVec2(p.x+40,p.y+54),ImVec2(p.x+sz.x-40,p.y+54),
+        IM_COL32(75,75,79,170),1.f);
+    dl->AddLine(ImVec2(p.x+40,p.y+sz.y-46),ImVec2(p.x+sz.x-40,p.y+sz.y-46),
+        IM_COL32(75,75,79,170),1.f);
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.92f,.92f,.92f,ease));
+    const char* brand="SYNC PC CHECKER";
+    const char* heading="Welcome to Sync.";
+    const char* sub="Check your PC. Review the results.";
+    auto centered=[&](const char* value,float y){
+        const ImVec2 measure=ImGui::CalcTextSize(value);
+        ImGui::SetCursorScreenPos(ImVec2(center.x-measure.x*.5f,y));
+        ImGui::TextUnformatted(value);
+    };
+    centered(brand,p.y+76.f);
+    ImGui::SetWindowFontScale(2.0f);
+    centered(heading,center.y-82.f+12.f*(1.f-ease));
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.62f,.62f,.65f,ease));
+    centered(sub,center.y-12.f+8.f*(1.f-ease));
+    ImGui::PopStyleColor();
+    ImGui::SetCursorScreenPos(ImVec2(center.x-112.f,center.y+62.f));
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.91f,.91f,.91f,ease));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.78f,.78f,.78f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.07f,.07f,.07f,1.f));
+    if(ImGui::Button("Open Scanner",ImVec2(224.f,46.f)))
+        syncWelcomeOpen=false;
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor();
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+}
+
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     SetUnhandledExceptionFilter(diagnosticUnhandledException);
     diagnosticLog("Application starting.");
@@ -21073,8 +21065,8 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         }
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
-        renderUI();
-        if(ambientMotesEnabled){
+        if(syncWelcomeOpen)renderSyncWelcome();else renderUI();
+        if(!syncWelcomeOpen && ambientMotesEnabled){
             ImGuiViewport* mainViewport=ImGui::GetMainViewport();
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
