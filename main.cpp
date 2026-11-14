@@ -37,7 +37,8 @@
 #include <cstring>
 #include <array>
 #include <chrono>
-#include <system_error>\n#include <functional>
+#include <system_error>
+#include <functional>
 #include <cstdint>
 #include <winreg.h>
 #include <cctype>
@@ -17054,7 +17055,9 @@ static void scanWorker() {
         setSequentialItem("Running artifact_correlation::collect");
         auto correlatedEvidence=artifact_correlation::collect(p);
         setSequentialItem("Running evidence_plus::collect");
-        auto evidencePlus= evidence_plus::collect(p, [](const char* check) {\n            setSequentialItem(std::string("Evidence: ") + check);\n        });
+        auto evidencePlus= evidence_plus::collect(p, [](const char* check) {
+            setSequentialItem(std::string("Evidence: ") + check);
+        });
         setSequentialItem("Running fivem_evidence::collect");
         auto fivemEvidence=fivem_evidence::collect(p);
         setSequentialItem("Running fivem_deep::collect");
