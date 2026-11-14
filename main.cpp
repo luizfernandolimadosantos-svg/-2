@@ -21051,23 +21051,42 @@ static void renderUI() {
             transitionDraw->PopClipRect();
         }
     }
-    // Overlay the content area (not the header/button) with a fading curtain.
-    // No scanner work is paused or changed by this visual effect.
+    // Staggered reveal: seven regions appear one after another.
+    // Purely visual; no scan routines or underlying widgets are changed.
     if(viewTransitionActive){
-        const float t=((float)ImGui::GetTime()-viewTransitionStart)/0.42f;
-        if(t>=1.f) viewTransitionActive=false;
-        else {
-            const float fade=(1.f-t)*(1.f-t);
+        const float elapsed=(float)ImGui::GetTime()-viewTransitionStart;
+        constexpr float delay=0.105f;
+        constexpr float duration=0.24f;
+        constexpr int regions=7;
+        if(elapsed>=delay*(regions-1)+duration){
+            viewTransitionActive=false;
+        }else{
             const ImVec2 pos=ImGui::GetWindowPos();
             const ImVec2 size=ImGui::GetWindowSize();
+            // Leave the page title and Advanced view button visible.
+            const float top=pos.y+94.f;
+            const float bottom=pos.y+size.y;
+            const float regionHeight=(bottom-top)/regions;
             ImDrawList* overlay=ImGui::GetWindowDrawList();
-            overlay->PushClipRect(pos,ImVec2(pos.x+size.x,pos.y+size.y),true);
-            overlay->AddRectFilled(pos,ImVec2(pos.x+size.x,pos.y+size.y),
-                IM_COL32(12,12,13,(int)(210.f*fade)));
-            const float lineY=pos.y+size.y*(0.16f+0.84f*t);
-            overlay->AddLine(ImVec2(pos.x+22.f,lineY),
-                ImVec2(pos.x+size.x-22.f,lineY),
-                IM_COL32(235,235,235,(int)(95.f*fade)),1.f);
+            overlay->PushClipRect(ImVec2(pos.x,top),
+                                  ImVec2(pos.x+size.x,bottom),true);
+            for(int region=0;region<regions;++region){
+                const float local=(elapsed-region*delay)/duration;
+                const float clamped=(std::max)(0.f,(std::min)(1.f,local));
+                const float eased=clamped*clamped*(3.f-2.f*clamped);
+                const int opacity=(int)(255.f*(1.f-eased));
+                const float y0=top+regionHeight*region;
+                const float y1=(region==regions-1)?bottom:y0+regionHeight+1.f;
+                if(opacity>0)
+                    overlay->AddRectFilled(ImVec2(pos.x,y0),
+                        ImVec2(pos.x+size.x,y1),
+                        IM_COL32(12,12,13,opacity));
+                if(local>0.f && local<1.f){
+                    overlay->AddLine(ImVec2(pos.x+20.f,y1-1.f),
+                        ImVec2(pos.x+size.x-20.f,y1-1.f),
+                        IM_COL32(218,218,218,(int)(70.f*(1.f-eased))),1.f);
+                }
+            }
             overlay->PopClipRect();
         }
     }
