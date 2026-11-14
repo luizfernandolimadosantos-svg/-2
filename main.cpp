@@ -20958,63 +20958,86 @@ static void renderUI() {
     drawEvidenceDetails();
 }
 
-// Minimal monochrome welcome screen. UI-only; scanner logic is unchanged.
-static bool syncWelcomeOpen=true;
-static double syncWelcomeOpenedAt=-1.0;
-static void renderSyncWelcome(){
-    ImGuiViewport* vp=ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    const ImGuiWindowFlags flags=ImGuiWindowFlags_NoDecoration|
-        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
-        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar;
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.043f,.043f,.047f,1.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
-    ImGui::Begin("##sync_welcome",nullptr,flags);
-    if(syncWelcomeOpenedAt<0.0)syncWelcomeOpenedAt=ImGui::GetTime();
-    const float elapsed=static_cast<float>(ImGui::GetTime()-syncWelcomeOpenedAt);
-    const float fade=std::clamp(elapsed/1.2f,0.f,1.f);
-    const float ease=fade*fade*(3.f-2.f*fade);
-    const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
-    const ImVec2 center(p.x+sz.x*.5f,p.y+sz.y*.5f);
-    ImDrawList* dl=ImGui::GetWindowDrawList();
-    // Gentle halo, thin framing and an understated animated progress stroke.
-    for(int i=7;i>=1;--i){
-        dl->AddCircle(center,72.f+i*10.f,
-            IM_COL32(210,210,210,static_cast<int>(ease*(10-i))),64,1.f);
+// Opening screen and cinematic transition. Scanner logic remains untouched.
+static int syncOpeningState=0; // 0 welcome, 1 transition, 2 scanner
+static double syncOpeningStarted=0.0;
+static float syncEase(float x) {
+    x=std::clamp(x,0.0f,1.0f);
+    return x*x*(3.0f-2.0f*x);
+}
+static void renderSyncOpening() {
+    ImGuiIO& io=ImGui::GetIO();
+    const ImVec2 size=io.DisplaySize;
+    const ImVec2 center(size.x*0.5f,size.y*0.5f);
+    const double now=ImGui::GetTime();
+    if(syncOpeningStarted==0.0)syncOpeningStarted=now;
+    const float elapsed=static_cast<float>(now-syncOpeningStarted);
+    if(syncOpeningState==1 && elapsed>=2.8f) {
+        syncOpeningState=2;
+        return;
     }
-    dl->AddLine(ImVec2(p.x+40,p.y+54),ImVec2(p.x+sz.x-40,p.y+54),
-        IM_COL32(75,75,79,170),1.f);
-    dl->AddLine(ImVec2(p.x+40,p.y+sz.y-46),ImVec2(p.x+sz.x-40,p.y+sz.y-46),
-        IM_COL32(75,75,79,170),1.f);
-    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.92f,.92f,.92f,ease));
-    const char* brand="SYNC PC CHECKER";
-    const char* heading="Welcome to Sync.";
-    const char* sub="Check your PC. Review the results.";
-    auto centered=[&](const char* value,float y){
-        const ImVec2 measure=ImGui::CalcTextSize(value);
-        ImGui::SetCursorScreenPos(ImVec2(center.x-measure.x*.5f,y));
-        ImGui::TextUnformatted(value);
+    ImDrawList* draw=ImGui::GetBackgroundDrawList();
+    draw->AddRectFilled(ImVec2(0,0),size,IM_COL32(11,11,13,255));
+    const float fadeIn=syncEase(elapsed/0.75f);
+    const float fadeOut=(syncOpeningState==1)?(1.0f-syncEase((elapsed-0.15f)/0.65f)):1.0f;
+    const float alpha=fadeIn*fadeOut;
+    auto color=[&](int r,int g,int b,float a=1.0f){
+        return IM_COL32(r,g,b,static_cast<int>(255.0f*std::clamp(a*alpha,0.0f,1.0f)));
     };
-    centered(brand,p.y+76.f);
-    ImGui::SetWindowFontScale(2.0f);
-    centered(heading,center.y-82.f+12.f*(1.f-ease));
-    ImGui::SetWindowFontScale(1.f);
-    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.62f,.62f,.65f,ease));
-    centered(sub,center.y-12.f+8.f*(1.f-ease));
-    ImGui::PopStyleColor();
-    ImGui::SetCursorScreenPos(ImVec2(center.x-112.f,center.y+62.f));
-    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.91f,.91f,.91f,ease));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.78f,.78f,.78f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.07f,.07f,.07f,1.f));
-    if(ImGui::Button("Open Scanner",ImVec2(224.f,46.f)))
-        syncWelcomeOpen=false;
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleColor();
-    ImGui::End();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    if(syncOpeningState==0) {
+        draw->AddCircle(ImVec2(center.x,center.y-105),38.0f,color(220,220,222),64,1.6f);
+        draw->AddLine(ImVec2(center.x-12,center.y-105),ImVec2(center.x-2,center.y-95),color(235,235,235),2.0f);
+        draw->AddLine(ImVec2(center.x-2,center.y-95),ImVec2(center.x+16,center.y-117),color(235,235,235),2.0f);
+        const char* title="SYNC PC CHECKER";
+        const char* sub="Check your PC. Review the results.";
+        ImVec2 t=ImGui::CalcTextSize(title),st=ImGui::CalcTextSize(sub);
+        draw->AddText(ImVec2(center.x-t.x/2,center.y-32),color(246,246,246),title);
+        draw->AddText(ImVec2(center.x-st.x/2,center.y+3),color(151,151,156),sub);
+        ImGui::SetNextWindowPos(ImVec2(center.x-105,center.y+68));
+        ImGui::SetNextWindowSize(ImVec2(210,45));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,8.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(0,0,0,0));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(0,0,0,0));
+        ImGui::Begin("##sync_opening_button",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground);
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.91f,.91f,.92f,1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1,1,1,1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.78f,.78f,.80f,1));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.06f,.06f,.07f,1));
+        if(ImGui::Button("Open Scanner  >##open",ImVec2(210,45))) {
+            syncOpeningState=1;
+            syncOpeningStarted=now;
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::End();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+    } else {
+        // First phase: quiet title fade. Second phase: animated monochrome ring.
+        const float appear=syncEase((elapsed-0.5f)/0.5f);
+        const char* label="Opening scanner";
+        ImVec2 t=ImGui::CalcTextSize(label);
+        draw->AddText(ImVec2(center.x-t.x/2,center.y+63),
+                      IM_COL32(190,190,194,static_cast<int>(220*appear)),label);
+        const float radius=34.0f+4.0f*std::sin(elapsed*3.5f);
+        draw->AddCircle(center,radius,IM_COL32(85,85,89,170),64,1.5f);
+        const float start=elapsed*2.6f;
+        const int segments=50;
+        for(int i=0;i<segments;i++){
+            const float a=start+static_cast<float>(i)*2.3f/segments;
+            const float b=start+static_cast<float>(i+1)*2.3f/segments;
+            draw->AddLine(ImVec2(center.x+std::cos(a)*radius,center.y+std::sin(a)*radius),
+                          ImVec2(center.x+std::cos(b)*radius,center.y+std::sin(b)*radius),
+                          IM_COL32(235,235,237,static_cast<int>(235.0f*(i+1)/segments)),2.6f);
+        }
+        // Fade the black overlay away to reveal the actual scanner UI.
+        if(elapsed>1.55f) {
+            const float reveal=syncEase((elapsed-1.55f)/1.2f);
+            // Actual scanner is rendered underneath during this interval.
+            // This alpha is used by the main loop's foreground overlay instead.
+            (void)reveal;
+        }
+    }
 }
 
 int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
@@ -21065,8 +21088,24 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         }
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
-        if(syncWelcomeOpen)renderSyncWelcome();else renderUI();
-        if(!syncWelcomeOpen && ambientMotesEnabled){
+        if(syncOpeningState==0) {
+            renderSyncOpening();
+        } else if(syncOpeningState==1) {
+            const float transitionElapsed=static_cast<float>(ImGui::GetTime()-syncOpeningStarted);
+            if(transitionElapsed>=1.55f) {
+                renderUI();
+                const float opacity=1.0f-syncEase((transitionElapsed-1.55f)/1.2f);
+                ImGui::GetForegroundDrawList()->AddRectFilled(
+                    ImVec2(0,0),ImGui::GetIO().DisplaySize,
+                    IM_COL32(11,11,13,static_cast<int>(255.0f*opacity)));
+            } else {
+                renderSyncOpening();
+            }
+            if(transitionElapsed>=2.8f)syncOpeningState=2;
+        } else {
+            renderUI();
+        }
+        if(syncOpeningState==2 && ambientMotesEnabled){
             ImGuiViewport* mainViewport=ImGui::GetMainViewport();
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
