@@ -16973,6 +16973,59 @@ static std::vector<Record> collect(
 }
 } // namespace artifact_consistency_v90
 
+
+// Read-only FiveM module provenance review. These are indicators for manual
+// inspection, not proof of cheating. No process memory is modified.
+namespace fivem_module_review {
+static std::wstring lowercase(std::wstring v) {
+    std::transform(v.begin(),v.end(),v.begin(),
+                   [](wchar_t c){return std::towlower(c);});
+    return v;
+}
+static bool isFivem(const Process& p) {
+    const auto name=lowercase(p.name);
+    const auto path=lowercase(p.path);
+    return name.find(L"fivem")!=std::wstring::npos ||
+           path.find(L"fivem.app")!=std::wstring::npos;
+}
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> seen;
+    for(const auto& proc:processes) {
+        if(cancelRequested)break;
+        if(!isFivem(proc))continue;
+        HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,
+                                                proc.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue; // access denied or protected
+        MODULEENTRY32W module{};
+        module.dwSize=sizeof(module);
+        if(Module32FirstW(snapshot,&module)) {
+            do {
+                if(cancelRequested)break;
+                const std::wstring modulePath=lowercase(module.szExePath);
+                if(!seen.insert(std::to_wstring(proc.pid)+L"|"+modulePath).second)
+                    continue;
+                const std::wstring ext=fs::path(modulePath).extension().wstring();
+                if(ext!=L".dll" && ext!=L".asi")continue;
+                const bool userTemp=modulePath.find(L"\\appdata\\local\\temp\\")!=
+                                    std::wstring::npos;
+                const bool downloads=modulePath.find(L"\\downloads\\")!=
+                                     std::wstring::npos;
+                const bool scriptFolder=modulePath.find(L"\\startup\\")!=
+                                        std::wstring::npos;
+                if(userTemp || downloads || scriptFolder) {
+                    out.push_back({"FiveM module review",utf8(module.szExePath),
+                        "REVIEW ONLY | Module loaded into FiveM from a temporary, "
+                        "downloads or startup folder. PID "+std::to_string(proc.pid)+
+                        ". This location alone does not prove cheating."});
+                }
+            } while(Module32NextW(snapshot,&module));
+        }
+        CloseHandle(snapshot);
+    }
+    return out;
+}
+}
 static void scanWorker() {
     try {
         stage=1;
@@ -17016,6 +17069,7 @@ static void scanWorker() {
         auto artifactReview=artifact_review_v88::collect(p);
         auto specializedEvidence=specialized_v89::collect(p);
         auto consistencyEvidence=artifact_consistency_v90::collect(p);
+        auto moduleProvenance=fivem_module_review::collect(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
         if(!cancelRequested){
@@ -17052,6 +17106,7 @@ static void scanWorker() {
         services.insert(services.end(),artifactReview.begin(),artifactReview.end());
         services.insert(services.end(),specializedEvidence.begin(),specializedEvidence.end());
         services.insert(services.end(),consistencyEvidence.begin(),consistencyEvidence.end());
+        services.insert(services.end(),moduleProvenance.begin(),moduleProvenance.end());
         auto linkedEvidence=artifact_correlation::correlate(services);
         services.insert(services.end(),linkedEvidence.begin(),linkedEvidence.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
@@ -20966,77 +21021,70 @@ static float syncEase(float x) {
     return x*x*(3.0f-2.0f*x);
 }
 static void renderSyncOpening() {
-    ImGuiIO& io=ImGui::GetIO();
-    const ImVec2 size=io.DisplaySize;
-    const ImVec2 center(size.x*0.5f,size.y*0.5f);
+    const ImVec2 screen=ImGui::GetIO().DisplaySize;
+    const ImVec2 center(screen.x*.5f,screen.y*.5f);
     const double now=ImGui::GetTime();
     if(syncOpeningStarted==0.0)syncOpeningStarted=now;
-    const float elapsed=static_cast<float>(now-syncOpeningStarted);
-    if(syncOpeningState==1 && elapsed>=2.8f) {
-        syncOpeningState=2;
-        return;
+    const float elapsed=float(now-syncOpeningStarted);
+    ImDrawList* d=ImGui::GetBackgroundDrawList();
+    d->AddRectFilled(ImVec2(0,0),screen,IM_COL32(9,9,10,255));
+    // Restrained concentric rings; all drawing stays inside ImGui.
+    const float appear=syncEase(elapsed/.85f);
+    const ImVec2 emblem(center.x,center.y-85);
+    for(int i=0;i<3;i++){
+        float radius=40.f+float(i)*20.f;
+        int a=int((18.f+30.f*appear)*(1.f-float(i)*.2f));
+        d->AddCircle(emblem,radius,IM_COL32(220,220,220,a),80,1.f);
     }
-    ImDrawList* draw=ImGui::GetBackgroundDrawList();
-    draw->AddRectFilled(ImVec2(0,0),size,IM_COL32(11,11,13,255));
-    const float fadeIn=syncEase(elapsed/0.75f);
-    const float fadeOut=(syncOpeningState==1)?(1.0f-syncEase((elapsed-0.15f)/0.65f)):1.0f;
-    const float alpha=fadeIn*fadeOut;
-    auto color=[&](int r,int g,int b,float a=1.0f){
-        return IM_COL32(r,g,b,static_cast<int>(255.0f*std::clamp(a*alpha,0.0f,1.0f)));
+    d->AddCircle(emblem,32.f,IM_COL32(220,220,220,int(200*appear)),80,1.6f);
+    d->AddLine(ImVec2(emblem.x-12,emblem.y),ImVec2(emblem.x-3,emblem.y+9),
+               IM_COL32(240,240,240,int(235*appear)),2.f);
+    d->AddLine(ImVec2(emblem.x-3,emblem.y+9),ImVec2(emblem.x+15,emblem.y-13),
+               IM_COL32(240,240,240,int(235*appear)),2.f);
+    auto centered=[&](const char* str,float y,ImU32 color){
+        ImVec2 sz=ImGui::CalcTextSize(str);
+        d->AddText(ImVec2(center.x-sz.x*.5f,y),color,str);
     };
-    if(syncOpeningState==0) {
-        draw->AddCircle(ImVec2(center.x,center.y-105),38.0f,color(220,220,222),64,1.6f);
-        draw->AddLine(ImVec2(center.x-12,center.y-105),ImVec2(center.x-2,center.y-95),color(235,235,235),2.0f);
-        draw->AddLine(ImVec2(center.x-2,center.y-95),ImVec2(center.x+16,center.y-117),color(235,235,235),2.0f);
-        const char* title="SYNC PC CHECKER";
-        const char* sub="Check your PC. Review the results.";
-        ImVec2 t=ImGui::CalcTextSize(title),st=ImGui::CalcTextSize(sub);
-        draw->AddText(ImVec2(center.x-t.x/2,center.y-32),color(246,246,246),title);
-        draw->AddText(ImVec2(center.x-st.x/2,center.y+3),color(151,151,156),sub);
-        ImGui::SetNextWindowPos(ImVec2(center.x-105,center.y+68));
-        ImGui::SetNextWindowSize(ImVec2(210,45));
+    if(syncOpeningState==0){
+        centered("SYNC PC CHECKER",center.y-2,IM_COL32(244,244,244,int(255*appear)));
+        centered("Check your PC. Review the results.",center.y+29,
+                 IM_COL32(151,151,155,int(220*appear)));
+        ImGui::SetNextWindowPos(ImVec2(center.x-110,center.y+92));
+        ImGui::SetNextWindowSize(ImVec2(220,48));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,8.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(0,0,0,0));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(0,0,0,0));
-        ImGui::Begin("##sync_opening_button",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground);
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.91f,.91f,.92f,1));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,9.f);
+        ImGui::Begin("##sync_opening_button",nullptr,
+                     ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|
+                     ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground);
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.92f,.92f,.92f,1));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1,1,1,1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.78f,.78f,.80f,1));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.06f,.06f,.07f,1));
-        if(ImGui::Button("Open Scanner  >##open",ImVec2(210,45))) {
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.08f,.08f,.08f,1));
+        if(ImGui::Button("Open Scanner  >##open",ImVec2(220,48))){
             syncOpeningState=1;
             syncOpeningStarted=now;
         }
         ImGui::PopStyleColor(4);
         ImGui::End();
-        ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(2);
     } else {
-        // First phase: quiet title fade. Second phase: animated monochrome ring.
-        const float appear=syncEase((elapsed-0.5f)/0.5f);
-        const char* label="Opening scanner";
-        ImVec2 t=ImGui::CalcTextSize(label);
-        draw->AddText(ImVec2(center.x-t.x/2,center.y+63),
-                      IM_COL32(190,190,194,static_cast<int>(220*appear)),label);
-        const float radius=34.0f+4.0f*std::sin(elapsed*3.5f);
-        draw->AddCircle(center,radius,IM_COL32(85,85,89,170),64,1.5f);
-        const float start=elapsed*2.6f;
-        const int segments=50;
-        for(int i=0;i<segments;i++){
-            const float a=start+static_cast<float>(i)*2.3f/segments;
-            const float b=start+static_cast<float>(i+1)*2.3f/segments;
-            draw->AddLine(ImVec2(center.x+std::cos(a)*radius,center.y+std::sin(a)*radius),
-                          ImVec2(center.x+std::cos(b)*radius,center.y+std::sin(b)*radius),
-                          IM_COL32(235,235,237,static_cast<int>(235.0f*(i+1)/segments)),2.6f);
-        }
-        // Fade the black overlay away to reveal the actual scanner UI.
-        if(elapsed>1.55f) {
-            const float reveal=syncEase((elapsed-1.55f)/1.2f);
-            // Actual scanner is rendered underneath during this interval.
-            // This alpha is used by the main loop's foreground overlay instead.
-            (void)reveal;
-        }
+        // A real UI transition, not a fabricated scan/progress indicator.
+        const float dissolve=1.f-syncEase((elapsed-.15f)/.65f);
+        const float pulse=1.f+.025f*std::sin(elapsed*5.f);
+        const float radius=42.f*pulse;
+        d->AddCircle(emblem,radius,IM_COL32(235,235,235,int(160*dissolve)),80,1.8f);
+        centered("SYNC PC CHECKER",center.y-2,
+                 IM_COL32(245,245,245,int(250*dissolve)));
+        const float labelAlpha=syncEase((elapsed-.45f)/.45f)*
+                               (1.f-syncEase((elapsed-1.65f)/.55f));
+        centered("Opening scanner",center.y+40,
+                 IM_COL32(170,170,175,int(230*labelAlpha)));
+        // A moving thin line gives the reveal a subtle cinematic feel.
+        const float lineProgress=syncEase((elapsed-.3f)/1.55f);
+        const float lineY=center.y+82.f;
+        d->AddLine(ImVec2(center.x-105.f,lineY),
+                   ImVec2(center.x-105.f+210.f*lineProgress,lineY),
+                   IM_COL32(226,226,226,int(175*labelAlpha)),1.5f);
     }
 }
 
