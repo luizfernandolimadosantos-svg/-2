@@ -23818,7 +23818,7 @@ static void scanSubkeys(std::vector<Record>& out,const Scope& scope) {
     if(RegOpenKeyExW(scope.root,scope.key,0,KEY_READ,&key)!=ERROR_SUCCESS)return;
     DWORD count=0,maxName=0;
     if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,&count,&maxName,
-        nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS){
+        nullptr,nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS){
         RegCloseKey(key);return;
     }
     std::vector<wchar_t> name(std::min<DWORD>(maxName+2,32768),0);
