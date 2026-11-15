@@ -17859,53 +17859,61 @@ static void applyTheme() {
     st.ItemInnerSpacing=ImVec2(9,7);
     st.CellPadding=ImVec2(16.f,densityIndex==0?11.f:densityIndex==2?16.f:13.f);
     st.ScrollbarSize=scrollbarWidth==0?7.f:scrollbarWidth==1?10.f:15.f;
+    // Consistent graphite / ivory design system. Keep alert colors elsewhere intact.
+    st.WindowRounding=15.f;
+    st.ChildRounding=12.f;
+    st.PopupRounding=12.f;
+    st.TabRounding=9.f;
+    st.ScrollbarRounding=7.f;
+    st.GrabRounding=6.f;
+    st.WindowPadding=ImVec2(22.f,19.f);
+    st.ItemInnerSpacing=ImVec2(9.f,7.f);
     auto& c=st.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(.035f,.047f,.067f,1);
-    c[ImGuiCol_ChildBg]=ImVec4(.055f,.070f,.095f,1);
-    c[ImGuiCol_PopupBg]=ImVec4(.073f,.092f,.122f,1);
-    c[ImGuiCol_Border]=ImVec4(.19f,.25f,.31f,1);
-    c[ImGuiCol_Separator]=ImVec4(.16f,.22f,.28f,1);
-    c[ImGuiCol_Text]=ImVec4(.94f,.97f,.98f,1);
-    c[ImGuiCol_TextDisabled]=ImVec4(.64f,.72f,.78f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(.095f,.12f,.15f,1);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.14f,.20f,.23f,1);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.18f,.25f,.28f,1);
-    c[ImGuiCol_Button]=ImVec4(.095f,.14f,.17f,1);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.13f,.23f,.23f,1);
-    c[ImGuiCol_ButtonActive]=ImVec4(.13f,.32f,.28f,1);
-    c[ImGuiCol_Header]=ImVec4(.12f,.19f,.22f,1);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.15f,.26f,.27f,1);
-    c[ImGuiCol_HeaderActive]=ImVec4(.16f,.33f,.29f,1);
-    c[ImGuiCol_CheckMark]=ImVec4(.34f,.91f,.69f,1);
-    c[ImGuiCol_SliderGrab]=ImVec4(.32f,.76f,.60f,1);
-    c[ImGuiCol_SliderGrabActive]=ImVec4(.44f,.94f,.75f,1);
-    c[ImGuiCol_Tab]=ImVec4(.09f,.14f,.18f,1);
-    c[ImGuiCol_TabHovered]=ImVec4(.15f,.26f,.27f,1);
-    c[ImGuiCol_TabSelected]=ImVec4(.13f,.29f,.27f,1);
-    c[ImGuiCol_TabDimmed]=ImVec4(.055f,.085f,.11f,1);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.09f,.15f,.18f,1);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.21f,.29f,.33f,1);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.14f,.20f,.24f,1);
-    c[ImGuiCol_TableRowBg]=ImVec4(.055f,.075f,.098f,1);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.072f,.097f,.123f,1);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(.19f,.58f,.46f,.40f);
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.045f,.065f,.084f,1);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.22f,.33f,.37f,1);
-    c[ImGuiCol_NavHighlight]=ImVec4(.34f,.90f,.70f,1);
-    c[ImGuiCol_TitleBg]=ImVec4(.035f,.035f,.035f,1.f);
-    c[ImGuiCol_TitleBgActive]=ImVec4(.055f,.055f,.055f,1.f);
-    c[ImGuiCol_MenuBarBg]=ImVec4(.055f,.055f,.055f,1.f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.072f,.097f,.123f,1);
-    c[ImGuiCol_PlotLines]=ImVec4(.74f,.74f,.74f,1.f);
-    c[ImGuiCol_PlotHistogram]=ImVec4(.82f,.82f,.82f,1.f);
-    c[ImGuiCol_ResizeGrip]=ImVec4(.40f,.40f,.40f,.40f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(.65f,.65f,.65f,.65f);
-    c[ImGuiCol_ResizeGripActive]=ImVec4(.88f,.88f,.88f,.90f);
+    c[ImGuiCol_WindowBg]=ImVec4(.039f,.041f,.047f,1.f);
+    c[ImGuiCol_ChildBg]=ImVec4(.063f,.066f,.073f,1.f);
+    c[ImGuiCol_PopupBg]=ImVec4(.090f,.093f,.103f,1.f);
+    c[ImGuiCol_Border]=ImVec4(.23f,.24f,.26f,.83f);
+    c[ImGuiCol_Separator]=ImVec4(.20f,.21f,.23f,.78f);
+    c[ImGuiCol_Text]=ImVec4(.94f,.94f,.95f,1.f);
+    c[ImGuiCol_TextDisabled]=ImVec4(.59f,.60f,.63f,1.f);
+    c[ImGuiCol_FrameBg]=ImVec4(.12f,.125f,.137f,1.f);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.18f,.185f,.20f,1.f);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.22f,.225f,.24f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.16f,.165f,.18f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.24f,.245f,.26f,1.f);
+    c[ImGuiCol_ButtonActive]=ImVec4(.31f,.315f,.33f,1.f);
+    c[ImGuiCol_Header]=ImVec4(.15f,.155f,.17f,1.f);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.22f,.225f,.24f,1.f);
+    c[ImGuiCol_HeaderActive]=ImVec4(.27f,.275f,.29f,1.f);
+    c[ImGuiCol_CheckMark]=ImVec4(.90f,.90f,.92f,1.f);
+    c[ImGuiCol_SliderGrab]=ImVec4(.76f,.77f,.79f,1.f);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.95f,.95f,.96f,1.f);
+    c[ImGuiCol_Tab]=ImVec4(.095f,.10f,.11f,1.f);
+    c[ImGuiCol_TabHovered]=ImVec4(.19f,.195f,.21f,1.f);
+    c[ImGuiCol_TabSelected]=ImVec4(.23f,.235f,.25f,1.f);
+    c[ImGuiCol_TabDimmed]=ImVec4(.07f,.073f,.08f,1.f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.12f,.125f,.14f,1.f);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.27f,.275f,.29f,1.f);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.19f,.195f,.21f,1.f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.065f,.068f,.077f,1.f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.09f,.093f,.103f,1.f);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.56f,.57f,.60f,.34f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.065f,.068f,.075f,1.f);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.30f,.31f,.33f,1.f);
+    c[ImGuiCol_NavHighlight]=ImVec4(.80f,.81f,.83f,1.f);
+    c[ImGuiCol_TitleBg]=ImVec4(.045f,.047f,.053f,1.f);
+    c[ImGuiCol_TitleBgActive]=ImVec4(.072f,.075f,.083f,1.f);
+    c[ImGuiCol_MenuBarBg]=ImVec4(.065f,.068f,.076f,1.f);
+    c[ImGuiCol_PlotLines]=ImVec4(.75f,.76f,.78f,1.f);
+    c[ImGuiCol_PlotHistogram]=ImVec4(.87f,.87f,.89f,1.f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(.42f,.43f,.45f,.35f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(.67f,.68f,.70f,.60f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(.92f,.92f,.93f,.85f);
 }
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::Dummy(ImVec2(0,9));
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::TextUnformatted(title);
+    ImGui::SetWindowFontScale(1.10f);
+    ImGui::TextColored(ImVec4(.94f,.94f,.95f,1.f),"%s",title);
     ImGui::SetWindowFontScale(1.f);
     if(description)ImGui::TextDisabled("%s",description);
     ImGui::Dummy(ImVec2(0,3));
@@ -19651,24 +19659,29 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     const ImVec2 q(p.x+width,p.y+height);
     ImDrawList* dl=ImGui::GetWindowDrawList();
     fraction=std::clamp(fraction,0.f,1.f);
-    dl->AddRectFilled(p,q,IM_COL32(27,27,27,255),6.f);
-    dl->AddRect(p,q,IM_COL32(82,82,82,190),6.f);
-    if(fraction>0.f){
-        const float w=width*fraction;
-        dl->AddRectFilled(ImVec2(p.x+2.f,p.y+2.f),
-            ImVec2((std::min)(q.x-2.f,p.x+(std::max)(2.f,w)),q.y-2.f),
-            IM_COL32(215,215,215,255),4.f);
-        if(w>14.f)
-            dl->AddRectFilled(ImVec2(p.x+3.f,p.y+3.f),
-                ImVec2((std::min)(q.x-3.f,p.x+w-3.f),p.y+4.f),
-                IM_COL32(248,248,248,220),1.f);
+    const float radius=height*.5f;
+    // Soft outer border and a recessed track, in the same visual language as the cards.
+    dl->AddRectFilled(p,q,IM_COL32(23,24,27,255),radius);
+    dl->AddRect(p,q,IM_COL32(83,85,90,185),radius,0,1.f);
+    const float inset=2.f;
+    const float innerWidth=(std::max)(0.f,width-2.f*inset);
+    const float filled=innerWidth*fraction;
+    if(filled>0.5f){
+        const ImVec2 a(p.x+inset,p.y+inset);
+        const ImVec2 b((std::min)(q.x-inset,a.x+filled),q.y-inset);
+        const float r=(std::min)(radius-2.f,(b.x-a.x)*.5f);
+        dl->AddRectFilled(a,b,IM_COL32(224,225,228,255),(std::max)(0.f,r));
+        if(filled>18.f){
+            dl->AddLine(ImVec2(a.x+7.f,a.y+1.f),
+                        ImVec2(b.x-7.f,a.y+1.f),IM_COL32(255,255,255,115),1.f);
+        }
     }
     if(compact){
         char pct[16]{};
         std::snprintf(pct,sizeof(pct),"%.0f%%",fraction*100.f);
         const ImVec2 sz=ImGui::CalcTextSize(pct);
-        dl->AddText(ImVec2(p.x+width-sz.x-9.f,p.y+(height-sz.y)*.5f),
-                    IM_COL32(250,250,250,255),pct);
+        dl->AddText(ImVec2(q.x-sz.x-10.f,p.y+(height-sz.y)*.5f),
+                    IM_COL32(246,246,247,255),pct);
     }
     ImGui::Dummy(ImVec2(width,height));
     ImGui::PopID();
