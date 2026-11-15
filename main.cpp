@@ -18123,15 +18123,15 @@ static void extendedUserAutorunReview(std::vector<Record>& out) {
         const char* label;
     };
     const Location locations[]={
-        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows\CurrentVersion\Run","User Run"},
-        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows\CurrentVersion\RunOnce","User RunOnce"},
-        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows\CurrentVersion\Run","Machine Run"},
-        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows\CurrentVersion\RunOnce","Machine RunOnce"},
-        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows NT\CurrentVersion\Windows","User Windows"},
-        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Windows","Machine Windows"},
-        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Winlogon","Winlogon"},
-        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows NT\CurrentVersion\Winlogon","User Winlogon"},
-        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options","IFEO root"}
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run","User Run"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce","User RunOnce"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run","Machine Run"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce","Machine RunOnce"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows","User Windows"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows","Machine Windows"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon","Winlogon"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon","User Winlogon"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options","IFEO root"}
     };
     size_t reported=0;
     for(const auto& loc:locations) {
@@ -19141,6 +19141,11 @@ static void auditUserWinRMBasic(std::vector<Record>& out) {
 }
 
 
+// Forward declaration: the implementation is defined below the audit batches.
+static void auditExtraRegistryValue(std::vector<Record>& out, HKEY root,
+    const wchar_t* key, const wchar_t* value, DWORD match,
+    const wchar_t* label, const char* explanation, const char* category);
+
 // Batch of 100 independent registry policy audit methods.
 // Audit 001: read-only Windows policy telemetry, not a cheat verdict.
 static void auditBatch100Kernel001(std::vector<Record>& out) {
@@ -19850,7 +19855,7 @@ static void checkAdditionalService001(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WinDefend", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService001", "REVIEW ONLY | WinDefend service is explicitly disabled; review applicability"});
@@ -19863,7 +19868,7 @@ static void checkAdditionalService002(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WdNisSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService002", "REVIEW ONLY | WdNisSvc service is explicitly disabled; review applicability"});
@@ -19876,7 +19881,7 @@ static void checkAdditionalService003(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Sense", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService003", "REVIEW ONLY | Sense service is explicitly disabled; review applicability"});
@@ -19889,7 +19894,7 @@ static void checkAdditionalService004(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\SecurityHealthService", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService004", "REVIEW ONLY | SecurityHealthService service is explicitly disabled; review applicability"});
@@ -19902,7 +19907,7 @@ static void checkAdditionalService005(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\wscsvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService005", "REVIEW ONLY | wscsvc service is explicitly disabled; review applicability"});
@@ -19915,7 +19920,7 @@ static void checkAdditionalService006(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\mpssvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService006", "REVIEW ONLY | mpssvc service is explicitly disabled; review applicability"});
@@ -19928,7 +19933,7 @@ static void checkAdditionalService007(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\BFE", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService007", "REVIEW ONLY | BFE service is explicitly disabled; review applicability"});
@@ -19941,7 +19946,7 @@ static void checkAdditionalService008(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\EventLog", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService008", "REVIEW ONLY | EventLog service is explicitly disabled; review applicability"});
@@ -19954,7 +19959,7 @@ static void checkAdditionalService009(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Schedule", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService009", "REVIEW ONLY | Schedule service is explicitly disabled; review applicability"});
@@ -19967,7 +19972,7 @@ static void checkAdditionalService010(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Winmgmt", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService010", "REVIEW ONLY | Winmgmt service is explicitly disabled; review applicability"});
@@ -19980,7 +19985,7 @@ static void checkAdditionalService011(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\RpcSs", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService011", "REVIEW ONLY | RpcSs service is explicitly disabled; review applicability"});
@@ -19993,7 +19998,7 @@ static void checkAdditionalService012(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\DcomLaunch", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService012", "REVIEW ONLY | DcomLaunch service is explicitly disabled; review applicability"});
@@ -20006,7 +20011,7 @@ static void checkAdditionalService013(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\RpcEptMapper", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService013", "REVIEW ONLY | RpcEptMapper service is explicitly disabled; review applicability"});
@@ -20019,7 +20024,7 @@ static void checkAdditionalService014(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\PlugPlay", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService014", "REVIEW ONLY | PlugPlay service is explicitly disabled; review applicability"});
@@ -20032,7 +20037,7 @@ static void checkAdditionalService015(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\CryptSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService015", "REVIEW ONLY | CryptSvc service is explicitly disabled; review applicability"});
@@ -20045,7 +20050,7 @@ static void checkAdditionalService016(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\TrustedInstaller", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService016", "REVIEW ONLY | TrustedInstaller service is explicitly disabled; review applicability"});
@@ -20058,7 +20063,7 @@ static void checkAdditionalService017(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\wuauserv", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService017", "REVIEW ONLY | wuauserv service is explicitly disabled; review applicability"});
@@ -20071,7 +20076,7 @@ static void checkAdditionalService018(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\UsoSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService018", "REVIEW ONLY | UsoSvc service is explicitly disabled; review applicability"});
@@ -20084,7 +20089,7 @@ static void checkAdditionalService019(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\bits", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService019", "REVIEW ONLY | bits service is explicitly disabled; review applicability"});
@@ -20097,7 +20102,7 @@ static void checkAdditionalService020(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WaaSMedicSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService020", "REVIEW ONLY | WaaSMedicSvc service is explicitly disabled; review applicability"});
@@ -20110,7 +20115,7 @@ static void checkAdditionalService021(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\SgrmBroker", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService021", "REVIEW ONLY | SgrmBroker service is explicitly disabled; review applicability"});
@@ -20123,7 +20128,7 @@ static void checkAdditionalService022(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\SamSs", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService022", "REVIEW ONLY | SamSs service is explicitly disabled; review applicability"});
@@ -20136,7 +20141,7 @@ static void checkAdditionalService023(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService023", "REVIEW ONLY | LanmanWorkstation service is explicitly disabled; review applicability"});
@@ -20149,7 +20154,7 @@ static void checkAdditionalService024(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService024", "REVIEW ONLY | LanmanServer service is explicitly disabled; review applicability"});
@@ -20162,7 +20167,7 @@ static void checkAdditionalService025(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Netlogon", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService025", "REVIEW ONLY | Netlogon service is explicitly disabled; review applicability"});
@@ -20175,7 +20180,7 @@ static void checkAdditionalService026(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Dhcp", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService026", "REVIEW ONLY | Dhcp service is explicitly disabled; review applicability"});
@@ -20188,7 +20193,7 @@ static void checkAdditionalService027(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Dnscache", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService027", "REVIEW ONLY | Dnscache service is explicitly disabled; review applicability"});
@@ -20201,7 +20206,7 @@ static void checkAdditionalService028(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\NlaSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService028", "REVIEW ONLY | NlaSvc service is explicitly disabled; review applicability"});
@@ -20214,7 +20219,7 @@ static void checkAdditionalService029(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\W32Time", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService029", "REVIEW ONLY | W32Time service is explicitly disabled; review applicability"});
@@ -20227,7 +20232,7 @@ static void checkAdditionalService030(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WinHttpAutoProxySvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService030", "REVIEW ONLY | WinHttpAutoProxySvc service is explicitly disabled; review applicability"});
@@ -20240,7 +20245,7 @@ static void checkAdditionalService031(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\ProfSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService031", "REVIEW ONLY | ProfSvc service is explicitly disabled; review applicability"});
@@ -20253,7 +20258,7 @@ static void checkAdditionalService032(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\gpsvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService032", "REVIEW ONLY | gpsvc service is explicitly disabled; review applicability"});
@@ -20266,7 +20271,7 @@ static void checkAdditionalService033(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Appinfo", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService033", "REVIEW ONLY | Appinfo service is explicitly disabled; review applicability"});
@@ -20279,7 +20284,7 @@ static void checkAdditionalService034(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\TokenBroker", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService034", "REVIEW ONLY | TokenBroker service is explicitly disabled; review applicability"});
@@ -20292,7 +20297,7 @@ static void checkAdditionalService035(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\KeyIso", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService035", "REVIEW ONLY | KeyIso service is explicitly disabled; review applicability"});
@@ -20305,7 +20310,7 @@ static void checkAdditionalService036(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\VaultSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService036", "REVIEW ONLY | VaultSvc service is explicitly disabled; review applicability"});
@@ -20318,7 +20323,7 @@ static void checkAdditionalService037(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\NgcSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService037", "REVIEW ONLY | NgcSvc service is explicitly disabled; review applicability"});
@@ -20331,7 +20336,7 @@ static void checkAdditionalService038(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\NgcCtnrSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService038", "REVIEW ONLY | NgcCtnrSvc service is explicitly disabled; review applicability"});
@@ -20344,7 +20349,7 @@ static void checkAdditionalService039(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WbioSrvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService039", "REVIEW ONLY | WbioSrvc service is explicitly disabled; review applicability"});
@@ -20357,7 +20362,7 @@ static void checkAdditionalService040(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\DeviceAssociationService", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService040", "REVIEW ONLY | DeviceAssociationService service is explicitly disabled; review applicability"});
@@ -20370,7 +20375,7 @@ static void checkAdditionalService041(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\DeviceInstall", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService041", "REVIEW ONLY | DeviceInstall service is explicitly disabled; review applicability"});
@@ -20383,7 +20388,7 @@ static void checkAdditionalService042(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\DsmSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService042", "REVIEW ONLY | DsmSvc service is explicitly disabled; review applicability"});
@@ -20396,7 +20401,7 @@ static void checkAdditionalService043(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\PolicyAgent", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService043", "REVIEW ONLY | PolicyAgent service is explicitly disabled; review applicability"});
@@ -20409,7 +20414,7 @@ static void checkAdditionalService044(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\IKEEXT", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService044", "REVIEW ONLY | IKEEXT service is explicitly disabled; review applicability"});
@@ -20422,7 +20427,7 @@ static void checkAdditionalService045(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\iphlpsvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService045", "REVIEW ONLY | iphlpsvc service is explicitly disabled; review applicability"});
@@ -20435,7 +20440,7 @@ static void checkAdditionalService046(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\TermService", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService046", "REVIEW ONLY | TermService service is explicitly disabled; review applicability"});
@@ -20448,7 +20453,7 @@ static void checkAdditionalService047(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\SessionEnv", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService047", "REVIEW ONLY | SessionEnv service is explicitly disabled; review applicability"});
@@ -20461,7 +20466,7 @@ static void checkAdditionalService048(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\UmRdpService", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService048", "REVIEW ONLY | UmRdpService service is explicitly disabled; review applicability"});
@@ -20474,7 +20479,7 @@ static void checkAdditionalService049(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService049", "REVIEW ONLY | RemoteRegistry service is explicitly disabled; review applicability"});
@@ -20487,7 +20492,7 @@ static void checkAdditionalService050(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WinRM", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService050", "REVIEW ONLY | WinRM service is explicitly disabled; review applicability"});
@@ -20500,7 +20505,7 @@ static void checkAdditionalService051(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\sshd", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService051", "REVIEW ONLY | sshd service is explicitly disabled; review applicability"});
@@ -20513,7 +20518,7 @@ static void checkAdditionalService052(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Spooler", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService052", "REVIEW ONLY | Spooler service is explicitly disabled; review applicability"});
@@ -20526,7 +20531,7 @@ static void checkAdditionalService053(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WerSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService053", "REVIEW ONLY | WerSvc service is explicitly disabled; review applicability"});
@@ -20539,7 +20544,7 @@ static void checkAdditionalService054(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Wecsvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService054", "REVIEW ONLY | Wecsvc service is explicitly disabled; review applicability"});
@@ -20552,7 +20557,7 @@ static void checkAdditionalService055(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\EventSystem", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService055", "REVIEW ONLY | EventSystem service is explicitly disabled; review applicability"});
@@ -20565,7 +20570,7 @@ static void checkAdditionalService056(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\COMSysApp", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService056", "REVIEW ONLY | COMSysApp service is explicitly disabled; review applicability"});
@@ -20578,7 +20583,7 @@ static void checkAdditionalService057(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\MSDTC", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService057", "REVIEW ONLY | MSDTC service is explicitly disabled; review applicability"});
@@ -20591,7 +20596,7 @@ static void checkAdditionalService058(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Browser", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService058", "REVIEW ONLY | Browser service is explicitly disabled; review applicability"});
@@ -20604,7 +20609,7 @@ static void checkAdditionalService059(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\lmhosts", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService059", "REVIEW ONLY | lmhosts service is explicitly disabled; review applicability"});
@@ -20617,7 +20622,7 @@ static void checkAdditionalService060(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Netman", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService060", "REVIEW ONLY | Netman service is explicitly disabled; review applicability"});
@@ -20630,7 +20635,7 @@ static void checkAdditionalService061(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\nsi", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService061", "REVIEW ONLY | nsi service is explicitly disabled; review applicability"});
@@ -20643,7 +20648,7 @@ static void checkAdditionalService062(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\WlanSvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService062", "REVIEW ONLY | WlanSvc service is explicitly disabled; review applicability"});
@@ -20656,7 +20661,7 @@ static void checkAdditionalService063(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\dot3svc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService063", "REVIEW ONLY | dot3svc service is explicitly disabled; review applicability"});
@@ -20669,7 +20674,7 @@ static void checkAdditionalService064(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\Wcmsvc", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService064", "REVIEW ONLY | Wcmsvc service is explicitly disabled; review applicability"});
@@ -20682,7 +20687,7 @@ static void checkAdditionalService065(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SYSTEM\\CurrentControlSet\\Services\\ShellHWDetection", L"Start",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 4u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalService065", "REVIEW ONLY | ShellHWDetection service is explicitly disabled; review applicability"});
@@ -20695,7 +20700,7 @@ static void checkAdditionalPolicy001(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableSmartScreen",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy001", "REVIEW ONLY | SmartScreen policy disabled"});
@@ -20708,7 +20713,7 @@ static void checkAdditionalPolicy002(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"BlockUserFromShowingAccountDetailsOnSignin",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy002", "REVIEW ONLY | Sign-in account detail restriction not enabled"});
@@ -20721,7 +20726,7 @@ static void checkAdditionalPolicy003(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DontDisplayNetworkSelectionUI",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy003", "REVIEW ONLY | Network selection restriction not enabled"});
@@ -20734,7 +20739,7 @@ static void checkAdditionalPolicy004(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DisableCMD",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy004", "REVIEW ONLY | Command prompt restriction not enabled"});
@@ -20747,7 +20752,7 @@ static void checkAdditionalPolicy005(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", L"EnableScriptBlockLogging",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy005", "REVIEW ONLY | PowerShell script block logging disabled"});
@@ -20760,7 +20765,7 @@ static void checkAdditionalPolicy006(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", L"EnableScriptBlockInvocationLogging",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy006", "REVIEW ONLY | PowerShell invocation logging disabled"});
@@ -20773,7 +20778,7 @@ static void checkAdditionalPolicy007(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging", L"EnableModuleLogging",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy007", "REVIEW ONLY | PowerShell module logging disabled"});
@@ -20786,7 +20791,7 @@ static void checkAdditionalPolicy008(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription", L"EnableTranscripting",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy008", "REVIEW ONLY | PowerShell transcription disabled"});
@@ -20799,7 +20804,7 @@ static void checkAdditionalPolicy009(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription", L"EnableInvocationHeader",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy009", "REVIEW ONLY | PowerShell transcription invocation header disabled"});
@@ -20812,7 +20817,7 @@ static void checkAdditionalPolicy010(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableRealtimeMonitoring",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy010", "REVIEW ONLY | Defender real-time monitoring disabled by policy"});
@@ -20825,7 +20830,7 @@ static void checkAdditionalPolicy011(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableBehaviorMonitoring",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy011", "REVIEW ONLY | Defender behavior monitoring disabled by policy"});
@@ -20838,7 +20843,7 @@ static void checkAdditionalPolicy012(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableOnAccessProtection",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy012", "REVIEW ONLY | Defender on-access protection disabled by policy"});
@@ -20851,7 +20856,7 @@ static void checkAdditionalPolicy013(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableScanOnRealtimeEnable",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy013", "REVIEW ONLY | Defender initial real-time scan disabled by policy"});
@@ -20864,7 +20869,7 @@ static void checkAdditionalPolicy014(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SpynetReporting",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy014", "REVIEW ONLY | Defender cloud reporting disabled by policy"});
@@ -20877,7 +20882,7 @@ static void checkAdditionalPolicy015(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SubmitSamplesConsent",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 2u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy015", "REVIEW ONLY | Defender sample submission disabled by policy"});
@@ -20890,7 +20895,7 @@ static void checkAdditionalPolicy016(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEnablePus",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy016", "REVIEW ONLY | Defender PUA blocking disabled by policy"});
@@ -20903,7 +20908,7 @@ static void checkAdditionalPolicy017(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableRemovableDriveScanning",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy017", "REVIEW ONLY | Removable drive scanning disabled"});
@@ -20916,7 +20921,7 @@ static void checkAdditionalPolicy018(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableArchiveScanning",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy018", "REVIEW ONLY | Archive scanning disabled"});
@@ -20929,7 +20934,7 @@ static void checkAdditionalPolicy019(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableEmailScanning",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy019", "REVIEW ONLY | Email scanning disabled"});
@@ -20942,7 +20947,7 @@ static void checkAdditionalPolicy020(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableScanningNetworkFiles",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy020", "REVIEW ONLY | Network file scanning disabled"});
@@ -20955,7 +20960,7 @@ static void checkAdditionalPolicy021(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableHeuristics",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy021", "REVIEW ONLY | Heuristic scanning disabled"});
@@ -20968,7 +20973,7 @@ static void checkAdditionalPolicy022(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisablePackedExeScanning",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy022", "REVIEW ONLY | Packed executable scanning disabled"});
@@ -20981,7 +20986,7 @@ static void checkAdditionalPolicy023(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupFullScan",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy023", "REVIEW ONLY | Catchup full scan disabled"});
@@ -20994,7 +20999,7 @@ static void checkAdditionalPolicy024(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupQuickScan",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy024", "REVIEW ONLY | Catchup quick scan disabled"});
@@ -21007,7 +21012,7 @@ static void checkAdditionalPolicy025(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCpuThrottleOnIdleScans",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy025", "REVIEW ONLY | Idle scan CPU throttling disabled"});
@@ -21020,7 +21025,7 @@ static void checkAdditionalPolicy026(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableUpdateOnStartupWithoutEngine",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy026", "REVIEW ONLY | Signature updates without engine disabled"});
@@ -21033,7 +21038,7 @@ static void checkAdditionalPolicy027(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableScanOnUpdate",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy027", "REVIEW ONLY | Scan on signature update disabled"});
@@ -21046,7 +21051,7 @@ static void checkAdditionalPolicy028(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"ForceUpdateFromMU",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy028", "REVIEW ONLY | Microsoft Update signature source not enforced"});
@@ -21059,7 +21064,7 @@ static void checkAdditionalPolicy029(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", L"NoAutoUpdate",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy029", "REVIEW ONLY | Automatic updates disabled"});
@@ -21072,7 +21077,7 @@ static void checkAdditionalPolicy030(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", L"AUOptions",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy030", "REVIEW ONLY | Windows Update policy set to notify only"});
@@ -21085,7 +21090,7 @@ static void checkAdditionalPolicy031(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"DisableWindowsUpdateAccess",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy031", "REVIEW ONLY | Windows Update access disabled"});
@@ -21098,7 +21103,7 @@ static void checkAdditionalPolicy032(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"DoNotConnectToWindowsUpdateInternetLocations",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy032", "REVIEW ONLY | Windows Update Internet locations blocked"});
@@ -21111,7 +21116,7 @@ static void checkAdditionalPolicy033(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"SetDisableUXWUAccess",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy033", "REVIEW ONLY | Windows Update UI access disabled"});
@@ -21124,7 +21129,7 @@ static void checkAdditionalPolicy034(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowToGetHelp",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy034", "REVIEW ONLY | Remote Assistance policy enabled"});
@@ -21137,7 +21142,7 @@ static void checkAdditionalPolicy035(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowUnsolicited",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy035", "REVIEW ONLY | Unsolicited remote assistance allowed"});
@@ -21150,7 +21155,7 @@ static void checkAdditionalPolicy036(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowUnsolicitedFullControl",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy036", "REVIEW ONLY | Unsolicited full-control assistance allowed"});
@@ -21163,7 +21168,7 @@ static void checkAdditionalPolicy037(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableCdm",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy037", "REVIEW ONLY | Remote drive redirection allowed by policy"});
@@ -21176,7 +21181,7 @@ static void checkAdditionalPolicy038(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableClip",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy038", "REVIEW ONLY | Remote clipboard redirection allowed by policy"});
@@ -21189,7 +21194,7 @@ static void checkAdditionalPolicy039(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableLPT",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy039", "REVIEW ONLY | Remote printer-port redirection allowed"});
@@ -21202,7 +21207,7 @@ static void checkAdditionalPolicy040(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableCcm",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy040", "REVIEW ONLY | Remote COM port redirection allowed"});
@@ -21215,7 +21220,7 @@ static void checkAdditionalPolicy041(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"UserAuthentication",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy041", "REVIEW ONLY | Remote Desktop NLA disabled by policy"});
@@ -21228,7 +21233,7 @@ static void checkAdditionalPolicy042(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"SecurityLayer",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy042", "REVIEW ONLY | Remote Desktop native security layer selected"});
@@ -21241,7 +21246,7 @@ static void checkAdditionalPolicy043(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"MinEncryptionLevel",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy043", "REVIEW ONLY | Remote Desktop low encryption selected"});
@@ -21254,7 +21259,7 @@ static void checkAdditionalPolicy044(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fPromptForPassword",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy044", "REVIEW ONLY | Remote Desktop password prompt disabled"});
@@ -21267,7 +21272,7 @@ static void checkAdditionalPolicy045(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fEncryptRPCTraffic",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy045", "REVIEW ONLY | Remote Desktop RPC encryption not required"});
@@ -21280,7 +21285,7 @@ static void checkAdditionalPolicy046(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowDefaultCredentials",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy046", "REVIEW ONLY | Default credentials delegation enabled"});
@@ -21293,7 +21298,7 @@ static void checkAdditionalPolicy047(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowFreshCredentials",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy047", "REVIEW ONLY | Fresh credentials delegation enabled"});
@@ -21306,7 +21311,7 @@ static void checkAdditionalPolicy048(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowSavedCredentials",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy048", "REVIEW ONLY | Saved credentials delegation enabled"});
@@ -21319,7 +21324,7 @@ static void checkAdditionalPolicy049(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowFreshCredentialsWhenNTLMOnly",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy049", "REVIEW ONLY | Fresh credentials delegation via NTLM enabled"});
@@ -21332,7 +21337,7 @@ static void checkAdditionalPolicy050(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowSavedCredentialsWhenNTLMOnly",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy050", "REVIEW ONLY | Saved credentials delegation via NTLM enabled"});
@@ -21345,7 +21350,7 @@ static void checkAdditionalPolicy051(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowDefaultCredentialsWhenNTLMOnly",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy051", "REVIEW ONLY | Default credentials delegation via NTLM enabled"});
@@ -21358,7 +21363,7 @@ static void checkAdditionalPolicy052(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"AlwaysInstallElevated",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy052", "REVIEW ONLY | Elevated MSI installation enabled for machine"});
@@ -21371,7 +21376,7 @@ static void checkAdditionalPolicy053(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_CURRENT_USER,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"AlwaysInstallElevated",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"User policy review",
                        "checkAdditionalPolicy053", "REVIEW ONLY | Elevated MSI installation enabled for user"});
@@ -21384,7 +21389,7 @@ static void checkAdditionalPolicy054(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"EnableUserControl",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy054", "REVIEW ONLY | Windows Installer user control enabled"});
@@ -21397,7 +21402,7 @@ static void checkAdditionalPolicy055(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableMSI",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy055", "REVIEW ONLY | MSI installation permitted by policy"});
@@ -21410,7 +21415,7 @@ static void checkAdditionalPolicy056(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisablePatch",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy056", "REVIEW ONLY | Windows Installer patching disabled"});
@@ -21423,7 +21428,7 @@ static void checkAdditionalPolicy057(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableLUAPatching",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy057", "REVIEW ONLY | Windows Installer least-privilege patching disabled"});
@@ -21436,7 +21441,7 @@ static void checkAdditionalPolicy058(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableRollback",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 1u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy058", "REVIEW ONLY | Windows Installer rollback disabled"});
@@ -21449,7 +21454,7 @@ static void checkAdditionalPolicy059(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableLUA",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy059", "REVIEW ONLY | UAC policy disabled"});
@@ -21462,7 +21467,7 @@ static void checkAdditionalPolicy060(std::vector<Record>& out) {
     DWORD valueSize = sizeof(observed);
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableLUA",
-                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     RRF_RT_REG_DWORD, nullptr, &observed,
                      &valueSize) == ERROR_SUCCESS && observed == 0u) {
         out.push_back({"Kernel policy review",
                        "checkAdditionalPolicy060", "REVIEW ONLY | UAC disabled"});
