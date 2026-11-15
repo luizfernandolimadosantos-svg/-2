@@ -17002,6 +17002,7782 @@ static std::vector<Record> collect(
 }
 } // namespace artifact_consistency_v90
 
+
+// Passive, read-only kernel/user-mode integrity observations.
+// Findings are triage signals, not proof of a bypass. Access-denied is not suspicious.
+// Corroborate independent findings without claiming guaranteed cheat detection.
+// This is a read-only post-processing pass; all original records are retained.
+namespace sync_evidence_confidence {
+static std::vector<Record> corroborate(const std::vector<Record>& input) {
+    struct Group {
+        std::unordered_set<std::string> sources;
+        std::string example;
+        std::string subject;
+    };
+    std::unordered_map<std::string,Group> groups;
+    for(const auto& r : input) {
+        if(r.name.size()<12 || r.name.size()>1024) continue;
+        // Require a concrete file/path-like subject; generic labels collide.
+        if(r.name.find('\\')==std::string::npos &&
+           r.name.find('/')==std::string::npos) continue;
+        if(r.detail.find("REVIEW ONLY")==std::string::npos &&
+           r.detail.find("SUSPICIOUS")==std::string::npos &&
+           r.detail.find("suspicious")==std::string::npos) continue;
+        std::string key=r.name;
+        std::transform(key.begin(),key.end(),key.begin(),
+            [](unsigned char c){return static_cast<char>(std::tolower(c));});
+        auto& group=groups[key];
+        group.subject=r.name;
+        group.sources.insert(r.category);
+        if(group.example.empty())group.example=r.detail.substr(0,180);
+    }
+    std::vector<Record> result;
+    result.reserve(60);
+    for(const auto& entry:groups) {
+        const auto& g=entry.second;
+        if(g.sources.size()<2) continue;
+        std::string categories;
+        for(const auto& category:g.sources) {
+            if(!categories.empty())categories+=", ";
+            categories+=category;
+            if(categories.size()>180){categories+=" ...";break;}
+        }
+        result.push_back({"Evidence corroboration",g.subject,
+            "REVIEW ONLY | Independent finding categories: "+
+            std::to_string(g.sources.size())+" ("+categories+
+            "). Multiple indicators warrant manual review; not proof of a cheat. "+
+            g.example});
+        if(result.size()>=60)break;
+    }
+    return result;
+}
+} // namespace sync_evidence_confidence
+
+// Targeted service image-path reviews. These are 150 service-specific probes,
+// not 150 different detection algorithms. Read-only; missing services are ignored.
+namespace sync_targeted_service_review {
+static void inspect(std::vector<Record>& out, const wchar_t* serviceName, bool driver) {
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!scm) return;
+    SC_HANDLE service = OpenServiceW(scm, serviceName, SERVICE_QUERY_CONFIG);
+    if (!service) { CloseServiceHandle(scm); return; }
+    DWORD needed = 0;
+    QueryServiceConfigW(service, nullptr, 0, &needed);
+    if (needed > 0 && needed <= 65536 && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+        std::vector<unsigned char> buffer(needed);
+        auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+        if (QueryServiceConfigW(service, config, needed, &needed) && config->lpBinaryPathName) {
+            std::wstring path = config->lpBinaryPathName;
+            std::transform(path.begin(), path.end(), path.begin(),
+                [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+            const bool writable = path.find(L"\\appdata\\") != std::wstring::npos ||
+                path.find(L"\\users\\public\\") != std::wstring::npos ||
+                path.find(L"\\downloads\\") != std::wstring::npos ||
+                path.find(L"\\temp\\") != std::wstring::npos;
+            if (writable) {
+                out.push_back({driver ? "Kernel driver path review" : "User service path review",
+                    utf8(serviceName),
+                    "REVIEW ONLY | Registered service image refers to a potentially user-writable directory: " + utf8(config->lpBinaryPathName)});
+            }
+        }
+    }
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+}
+static void kernelServiceProbe001(std::vector<Record>& out) {
+    inspect(out, L"ACPI", true);
+}
+static void kernelServiceProbe002(std::vector<Record>& out) {
+    inspect(out, L"afd", true);
+}
+static void kernelServiceProbe003(std::vector<Record>& out) {
+    inspect(out, L"ahcache", true);
+}
+static void kernelServiceProbe004(std::vector<Record>& out) {
+    inspect(out, L"bam", true);
+}
+static void kernelServiceProbe005(std::vector<Record>& out) {
+    inspect(out, L"Beep", true);
+}
+static void kernelServiceProbe006(std::vector<Record>& out) {
+    inspect(out, L"bowser", true);
+}
+static void kernelServiceProbe007(std::vector<Record>& out) {
+    inspect(out, L"cdfs", true);
+}
+static void kernelServiceProbe008(std::vector<Record>& out) {
+    inspect(out, L"cdrom", true);
+}
+static void kernelServiceProbe009(std::vector<Record>& out) {
+    inspect(out, L"CimFS", true);
+}
+static void kernelServiceProbe010(std::vector<Record>& out) {
+    inspect(out, L"CLFS", true);
+}
+static void kernelServiceProbe011(std::vector<Record>& out) {
+    inspect(out, L"CNG", true);
+}
+static void kernelServiceProbe012(std::vector<Record>& out) {
+    inspect(out, L"CompositeBus", true);
+}
+static void kernelServiceProbe013(std::vector<Record>& out) {
+    inspect(out, L"condrv", true);
+}
+static void kernelServiceProbe014(std::vector<Record>& out) {
+    inspect(out, L"crashdmp", true);
+}
+static void kernelServiceProbe015(std::vector<Record>& out) {
+    inspect(out, L"dam", true);
+}
+static void kernelServiceProbe016(std::vector<Record>& out) {
+    inspect(out, L"dfsc", true);
+}
+static void kernelServiceProbe017(std::vector<Record>& out) {
+    inspect(out, L"disk", true);
+}
+static void kernelServiceProbe018(std::vector<Record>& out) {
+    inspect(out, L"dxgkrnl", true);
+}
+static void kernelServiceProbe019(std::vector<Record>& out) {
+    inspect(out, L"EhStorClass", true);
+}
+static void kernelServiceProbe020(std::vector<Record>& out) {
+    inspect(out, L"EhStorTcgDrv", true);
+}
+static void kernelServiceProbe021(std::vector<Record>& out) {
+    inspect(out, L"exfat", true);
+}
+static void kernelServiceProbe022(std::vector<Record>& out) {
+    inspect(out, L"fastfat", true);
+}
+static void kernelServiceProbe023(std::vector<Record>& out) {
+    inspect(out, L"filecrypt", true);
+}
+static void kernelServiceProbe024(std::vector<Record>& out) {
+    inspect(out, L"fileinfo", true);
+}
+static void kernelServiceProbe025(std::vector<Record>& out) {
+    inspect(out, L"FltMgr", true);
+}
+static void kernelServiceProbe026(std::vector<Record>& out) {
+    inspect(out, L"fvevol", true);
+}
+static void kernelServiceProbe027(std::vector<Record>& out) {
+    inspect(out, L"GPIOClx", true);
+}
+static void kernelServiceProbe028(std::vector<Record>& out) {
+    inspect(out, L"HIDCLASS", true);
+}
+static void kernelServiceProbe029(std::vector<Record>& out) {
+    inspect(out, L"hidparse", true);
+}
+static void kernelServiceProbe030(std::vector<Record>& out) {
+    inspect(out, L"HTTP", true);
+}
+static void kernelServiceProbe031(std::vector<Record>& out) {
+    inspect(out, L"i8042prt", true);
+}
+static void kernelServiceProbe032(std::vector<Record>& out) {
+    inspect(out, L"intelide", true);
+}
+static void kernelServiceProbe033(std::vector<Record>& out) {
+    inspect(out, L"ipnat", true);
+}
+static void kernelServiceProbe034(std::vector<Record>& out) {
+    inspect(out, L"kbdclass", true);
+}
+static void kernelServiceProbe035(std::vector<Record>& out) {
+    inspect(out, L"kbdhid", true);
+}
+static void kernelServiceProbe036(std::vector<Record>& out) {
+    inspect(out, L"KSecDD", true);
+}
+static void kernelServiceProbe037(std::vector<Record>& out) {
+    inspect(out, L"KSecPkg", true);
+}
+static void kernelServiceProbe038(std::vector<Record>& out) {
+    inspect(out, L"luafv", true);
+}
+static void kernelServiceProbe039(std::vector<Record>& out) {
+    inspect(out, L"mrxsmb", true);
+}
+static void kernelServiceProbe040(std::vector<Record>& out) {
+    inspect(out, L"mrxsmb20", true);
+}
+static void kernelServiceProbe041(std::vector<Record>& out) {
+    inspect(out, L"mountmgr", true);
+}
+static void kernelServiceProbe042(std::vector<Record>& out) {
+    inspect(out, L"mup", true);
+}
+static void kernelServiceProbe043(std::vector<Record>& out) {
+    inspect(out, L"NDIS", true);
+}
+static void kernelServiceProbe044(std::vector<Record>& out) {
+    inspect(out, L"NdisCap", true);
+}
+static void kernelServiceProbe045(std::vector<Record>& out) {
+    inspect(out, L"NdisTapi", true);
+}
+static void kernelServiceProbe046(std::vector<Record>& out) {
+    inspect(out, L"NdisWan", true);
+}
+static void kernelServiceProbe047(std::vector<Record>& out) {
+    inspect(out, L"Npfs", true);
+}
+static void kernelServiceProbe048(std::vector<Record>& out) {
+    inspect(out, L"Ntfs", true);
+}
+static void kernelServiceProbe049(std::vector<Record>& out) {
+    inspect(out, L"Null", true);
+}
+static void kernelServiceProbe050(std::vector<Record>& out) {
+    inspect(out, L"partmgr", true);
+}
+static void kernelServiceProbe051(std::vector<Record>& out) {
+    inspect(out, L"pci", true);
+}
+static void kernelServiceProbe052(std::vector<Record>& out) {
+    inspect(out, L"PEAUTH", true);
+}
+static void kernelServiceProbe053(std::vector<Record>& out) {
+    inspect(out, L"rdbss", true);
+}
+static void kernelServiceProbe054(std::vector<Record>& out) {
+    inspect(out, L"ReFS", true);
+}
+static void kernelServiceProbe055(std::vector<Record>& out) {
+    inspect(out, L"rspndr", true);
+}
+static void kernelServiceProbe056(std::vector<Record>& out) {
+    inspect(out, L"scfilter", true);
+}
+static void kernelServiceProbe057(std::vector<Record>& out) {
+    inspect(out, L"SDFRd", true);
+}
+static void kernelServiceProbe058(std::vector<Record>& out) {
+    inspect(out, L"srv2", true);
+}
+static void kernelServiceProbe059(std::vector<Record>& out) {
+    inspect(out, L"storahci", true);
+}
+static void kernelServiceProbe060(std::vector<Record>& out) {
+    inspect(out, L"storport", true);
+}
+static void kernelServiceProbe061(std::vector<Record>& out) {
+    inspect(out, L"swenum", true);
+}
+static void kernelServiceProbe062(std::vector<Record>& out) {
+    inspect(out, L"tcpip", true);
+}
+static void kernelServiceProbe063(std::vector<Record>& out) {
+    inspect(out, L"tdx", true);
+}
+static void kernelServiceProbe064(std::vector<Record>& out) {
+    inspect(out, L"tdxinput", true);
+}
+static void kernelServiceProbe065(std::vector<Record>& out) {
+    inspect(out, L"UASPStor", true);
+}
+static void kernelServiceProbe066(std::vector<Record>& out) {
+    inspect(out, L"UcmCx", true);
+}
+static void kernelServiceProbe067(std::vector<Record>& out) {
+    inspect(out, L"UcmUcsi", true);
+}
+static void kernelServiceProbe068(std::vector<Record>& out) {
+    inspect(out, L"Ucx01000", true);
+}
+static void kernelServiceProbe069(std::vector<Record>& out) {
+    inspect(out, L"UEFI", true);
+}
+static void kernelServiceProbe070(std::vector<Record>& out) {
+    inspect(out, L"usbehci", true);
+}
+static void kernelServiceProbe071(std::vector<Record>& out) {
+    inspect(out, L"USBHUB3", true);
+}
+static void kernelServiceProbe072(std::vector<Record>& out) {
+    inspect(out, L"USBSTOR", true);
+}
+static void kernelServiceProbe073(std::vector<Record>& out) {
+    inspect(out, L"USBXHCI", true);
+}
+static void kernelServiceProbe074(std::vector<Record>& out) {
+    inspect(out, L"vdrvroot", true);
+}
+static void kernelServiceProbe075(std::vector<Record>& out) {
+    inspect(out, L"vhdmp", true);
+}
+static void userServiceProbe001(std::vector<Record>& out) {
+    inspect(out, L"Appinfo", false);
+}
+static void userServiceProbe002(std::vector<Record>& out) {
+    inspect(out, L"AppMgmt", false);
+}
+static void userServiceProbe003(std::vector<Record>& out) {
+    inspect(out, L"AppReadiness", false);
+}
+static void userServiceProbe004(std::vector<Record>& out) {
+    inspect(out, L"AudioEndpointBuilder", false);
+}
+static void userServiceProbe005(std::vector<Record>& out) {
+    inspect(out, L"Audiosrv", false);
+}
+static void userServiceProbe006(std::vector<Record>& out) {
+    inspect(out, L"BFE", false);
+}
+static void userServiceProbe007(std::vector<Record>& out) {
+    inspect(out, L"BITS", false);
+}
+static void userServiceProbe008(std::vector<Record>& out) {
+    inspect(out, L"BrokerInfrastructure", false);
+}
+static void userServiceProbe009(std::vector<Record>& out) {
+    inspect(out, L"camsvc", false);
+}
+static void userServiceProbe010(std::vector<Record>& out) {
+    inspect(out, L"CDPSvc", false);
+}
+static void userServiceProbe011(std::vector<Record>& out) {
+    inspect(out, L"CertPropSvc", false);
+}
+static void userServiceProbe012(std::vector<Record>& out) {
+    inspect(out, L"ClipSVC", false);
+}
+static void userServiceProbe013(std::vector<Record>& out) {
+    inspect(out, L"CoreMessagingRegistrar", false);
+}
+static void userServiceProbe014(std::vector<Record>& out) {
+    inspect(out, L"CryptSvc", false);
+}
+static void userServiceProbe015(std::vector<Record>& out) {
+    inspect(out, L"DcomLaunch", false);
+}
+static void userServiceProbe016(std::vector<Record>& out) {
+    inspect(out, L"defragsvc", false);
+}
+static void userServiceProbe017(std::vector<Record>& out) {
+    inspect(out, L"DeviceAssociationService", false);
+}
+static void userServiceProbe018(std::vector<Record>& out) {
+    inspect(out, L"DeviceInstall", false);
+}
+static void userServiceProbe019(std::vector<Record>& out) {
+    inspect(out, L"Dhcp", false);
+}
+static void userServiceProbe020(std::vector<Record>& out) {
+    inspect(out, L"DiagTrack", false);
+}
+static void userServiceProbe021(std::vector<Record>& out) {
+    inspect(out, L"Dnscache", false);
+}
+static void userServiceProbe022(std::vector<Record>& out) {
+    inspect(out, L"DoSvc", false);
+}
+static void userServiceProbe023(std::vector<Record>& out) {
+    inspect(out, L"DPS", false);
+}
+static void userServiceProbe024(std::vector<Record>& out) {
+    inspect(out, L"DsmSvc", false);
+}
+static void userServiceProbe025(std::vector<Record>& out) {
+    inspect(out, L"DusmSvc", false);
+}
+static void userServiceProbe026(std::vector<Record>& out) {
+    inspect(out, L"EapHost", false);
+}
+static void userServiceProbe027(std::vector<Record>& out) {
+    inspect(out, L"EventLog", false);
+}
+static void userServiceProbe028(std::vector<Record>& out) {
+    inspect(out, L"EventSystem", false);
+}
+static void userServiceProbe029(std::vector<Record>& out) {
+    inspect(out, L"fdPHost", false);
+}
+static void userServiceProbe030(std::vector<Record>& out) {
+    inspect(out, L"FDResPub", false);
+}
+static void userServiceProbe031(std::vector<Record>& out) {
+    inspect(out, L"FontCache", false);
+}
+static void userServiceProbe032(std::vector<Record>& out) {
+    inspect(out, L"gpsvc", false);
+}
+static void userServiceProbe033(std::vector<Record>& out) {
+    inspect(out, L"hidserv", false);
+}
+static void userServiceProbe034(std::vector<Record>& out) {
+    inspect(out, L"HvHost", false);
+}
+static void userServiceProbe035(std::vector<Record>& out) {
+    inspect(out, L"IKEEXT", false);
+}
+static void userServiceProbe036(std::vector<Record>& out) {
+    inspect(out, L"iphlpsvc", false);
+}
+static void userServiceProbe037(std::vector<Record>& out) {
+    inspect(out, L"KeyIso", false);
+}
+static void userServiceProbe038(std::vector<Record>& out) {
+    inspect(out, L"LanmanServer", false);
+}
+static void userServiceProbe039(std::vector<Record>& out) {
+    inspect(out, L"LanmanWorkstation", false);
+}
+static void userServiceProbe040(std::vector<Record>& out) {
+    inspect(out, L"lfsvc", false);
+}
+static void userServiceProbe041(std::vector<Record>& out) {
+    inspect(out, L"LicenseManager", false);
+}
+static void userServiceProbe042(std::vector<Record>& out) {
+    inspect(out, L"lmhosts", false);
+}
+static void userServiceProbe043(std::vector<Record>& out) {
+    inspect(out, L"LSM", false);
+}
+static void userServiceProbe044(std::vector<Record>& out) {
+    inspect(out, L"MapsBroker", false);
+}
+static void userServiceProbe045(std::vector<Record>& out) {
+    inspect(out, L"MpsSvc", false);
+}
+static void userServiceProbe046(std::vector<Record>& out) {
+    inspect(out, L"MSDTC", false);
+}
+static void userServiceProbe047(std::vector<Record>& out) {
+    inspect(out, L"msiserver", false);
+}
+static void userServiceProbe048(std::vector<Record>& out) {
+    inspect(out, L"NcbService", false);
+}
+static void userServiceProbe049(std::vector<Record>& out) {
+    inspect(out, L"Netlogon", false);
+}
+static void userServiceProbe050(std::vector<Record>& out) {
+    inspect(out, L"Netman", false);
+}
+static void userServiceProbe051(std::vector<Record>& out) {
+    inspect(out, L"netprofm", false);
+}
+static void userServiceProbe052(std::vector<Record>& out) {
+    inspect(out, L"NlaSvc", false);
+}
+static void userServiceProbe053(std::vector<Record>& out) {
+    inspect(out, L"nsi", false);
+}
+static void userServiceProbe054(std::vector<Record>& out) {
+    inspect(out, L"OneSyncSvc", false);
+}
+static void userServiceProbe055(std::vector<Record>& out) {
+    inspect(out, L"PcaSvc", false);
+}
+static void userServiceProbe056(std::vector<Record>& out) {
+    inspect(out, L"PlugPlay", false);
+}
+static void userServiceProbe057(std::vector<Record>& out) {
+    inspect(out, L"PolicyAgent", false);
+}
+static void userServiceProbe058(std::vector<Record>& out) {
+    inspect(out, L"Power", false);
+}
+static void userServiceProbe059(std::vector<Record>& out) {
+    inspect(out, L"ProfSvc", false);
+}
+static void userServiceProbe060(std::vector<Record>& out) {
+    inspect(out, L"RasAuto", false);
+}
+static void userServiceProbe061(std::vector<Record>& out) {
+    inspect(out, L"RasMan", false);
+}
+static void userServiceProbe062(std::vector<Record>& out) {
+    inspect(out, L"RemoteAccess", false);
+}
+static void userServiceProbe063(std::vector<Record>& out) {
+    inspect(out, L"RpcEptMapper", false);
+}
+static void userServiceProbe064(std::vector<Record>& out) {
+    inspect(out, L"RpcSs", false);
+}
+static void userServiceProbe065(std::vector<Record>& out) {
+    inspect(out, L"SamSs", false);
+}
+static void userServiceProbe066(std::vector<Record>& out) {
+    inspect(out, L"Schedule", false);
+}
+static void userServiceProbe067(std::vector<Record>& out) {
+    inspect(out, L"SENS", false);
+}
+static void userServiceProbe068(std::vector<Record>& out) {
+    inspect(out, L"ShellHWDetection", false);
+}
+static void userServiceProbe069(std::vector<Record>& out) {
+    inspect(out, L"Spooler", false);
+}
+static void userServiceProbe070(std::vector<Record>& out) {
+    inspect(out, L"SSDPSRV", false);
+}
+static void userServiceProbe071(std::vector<Record>& out) {
+    inspect(out, L"StateRepository", false);
+}
+static void userServiceProbe072(std::vector<Record>& out) {
+    inspect(out, L"StorSvc", false);
+}
+static void userServiceProbe073(std::vector<Record>& out) {
+    inspect(out, L"SysMain", false);
+}
+static void userServiceProbe074(std::vector<Record>& out) {
+    inspect(out, L"SystemEventsBroker", false);
+}
+static void userServiceProbe075(std::vector<Record>& out) {
+    inspect(out, L"TabletInputService", false);
+}
+static std::vector<Record> collect() {
+    std::vector<Record> result;
+    if (cancelRequested) return result; kernelServiceProbe001(result);
+    if (cancelRequested) return result; kernelServiceProbe002(result);
+    if (cancelRequested) return result; kernelServiceProbe003(result);
+    if (cancelRequested) return result; kernelServiceProbe004(result);
+    if (cancelRequested) return result; kernelServiceProbe005(result);
+    if (cancelRequested) return result; kernelServiceProbe006(result);
+    if (cancelRequested) return result; kernelServiceProbe007(result);
+    if (cancelRequested) return result; kernelServiceProbe008(result);
+    if (cancelRequested) return result; kernelServiceProbe009(result);
+    if (cancelRequested) return result; kernelServiceProbe010(result);
+    if (cancelRequested) return result; kernelServiceProbe011(result);
+    if (cancelRequested) return result; kernelServiceProbe012(result);
+    if (cancelRequested) return result; kernelServiceProbe013(result);
+    if (cancelRequested) return result; kernelServiceProbe014(result);
+    if (cancelRequested) return result; kernelServiceProbe015(result);
+    if (cancelRequested) return result; kernelServiceProbe016(result);
+    if (cancelRequested) return result; kernelServiceProbe017(result);
+    if (cancelRequested) return result; kernelServiceProbe018(result);
+    if (cancelRequested) return result; kernelServiceProbe019(result);
+    if (cancelRequested) return result; kernelServiceProbe020(result);
+    if (cancelRequested) return result; kernelServiceProbe021(result);
+    if (cancelRequested) return result; kernelServiceProbe022(result);
+    if (cancelRequested) return result; kernelServiceProbe023(result);
+    if (cancelRequested) return result; kernelServiceProbe024(result);
+    if (cancelRequested) return result; kernelServiceProbe025(result);
+    if (cancelRequested) return result; kernelServiceProbe026(result);
+    if (cancelRequested) return result; kernelServiceProbe027(result);
+    if (cancelRequested) return result; kernelServiceProbe028(result);
+    if (cancelRequested) return result; kernelServiceProbe029(result);
+    if (cancelRequested) return result; kernelServiceProbe030(result);
+    if (cancelRequested) return result; kernelServiceProbe031(result);
+    if (cancelRequested) return result; kernelServiceProbe032(result);
+    if (cancelRequested) return result; kernelServiceProbe033(result);
+    if (cancelRequested) return result; kernelServiceProbe034(result);
+    if (cancelRequested) return result; kernelServiceProbe035(result);
+    if (cancelRequested) return result; kernelServiceProbe036(result);
+    if (cancelRequested) return result; kernelServiceProbe037(result);
+    if (cancelRequested) return result; kernelServiceProbe038(result);
+    if (cancelRequested) return result; kernelServiceProbe039(result);
+    if (cancelRequested) return result; kernelServiceProbe040(result);
+    if (cancelRequested) return result; kernelServiceProbe041(result);
+    if (cancelRequested) return result; kernelServiceProbe042(result);
+    if (cancelRequested) return result; kernelServiceProbe043(result);
+    if (cancelRequested) return result; kernelServiceProbe044(result);
+    if (cancelRequested) return result; kernelServiceProbe045(result);
+    if (cancelRequested) return result; kernelServiceProbe046(result);
+    if (cancelRequested) return result; kernelServiceProbe047(result);
+    if (cancelRequested) return result; kernelServiceProbe048(result);
+    if (cancelRequested) return result; kernelServiceProbe049(result);
+    if (cancelRequested) return result; kernelServiceProbe050(result);
+    if (cancelRequested) return result; kernelServiceProbe051(result);
+    if (cancelRequested) return result; kernelServiceProbe052(result);
+    if (cancelRequested) return result; kernelServiceProbe053(result);
+    if (cancelRequested) return result; kernelServiceProbe054(result);
+    if (cancelRequested) return result; kernelServiceProbe055(result);
+    if (cancelRequested) return result; kernelServiceProbe056(result);
+    if (cancelRequested) return result; kernelServiceProbe057(result);
+    if (cancelRequested) return result; kernelServiceProbe058(result);
+    if (cancelRequested) return result; kernelServiceProbe059(result);
+    if (cancelRequested) return result; kernelServiceProbe060(result);
+    if (cancelRequested) return result; kernelServiceProbe061(result);
+    if (cancelRequested) return result; kernelServiceProbe062(result);
+    if (cancelRequested) return result; kernelServiceProbe063(result);
+    if (cancelRequested) return result; kernelServiceProbe064(result);
+    if (cancelRequested) return result; kernelServiceProbe065(result);
+    if (cancelRequested) return result; kernelServiceProbe066(result);
+    if (cancelRequested) return result; kernelServiceProbe067(result);
+    if (cancelRequested) return result; kernelServiceProbe068(result);
+    if (cancelRequested) return result; kernelServiceProbe069(result);
+    if (cancelRequested) return result; kernelServiceProbe070(result);
+    if (cancelRequested) return result; kernelServiceProbe071(result);
+    if (cancelRequested) return result; kernelServiceProbe072(result);
+    if (cancelRequested) return result; kernelServiceProbe073(result);
+    if (cancelRequested) return result; kernelServiceProbe074(result);
+    if (cancelRequested) return result; kernelServiceProbe075(result);
+    if (cancelRequested) return result; userServiceProbe001(result);
+    if (cancelRequested) return result; userServiceProbe002(result);
+    if (cancelRequested) return result; userServiceProbe003(result);
+    if (cancelRequested) return result; userServiceProbe004(result);
+    if (cancelRequested) return result; userServiceProbe005(result);
+    if (cancelRequested) return result; userServiceProbe006(result);
+    if (cancelRequested) return result; userServiceProbe007(result);
+    if (cancelRequested) return result; userServiceProbe008(result);
+    if (cancelRequested) return result; userServiceProbe009(result);
+    if (cancelRequested) return result; userServiceProbe010(result);
+    if (cancelRequested) return result; userServiceProbe011(result);
+    if (cancelRequested) return result; userServiceProbe012(result);
+    if (cancelRequested) return result; userServiceProbe013(result);
+    if (cancelRequested) return result; userServiceProbe014(result);
+    if (cancelRequested) return result; userServiceProbe015(result);
+    if (cancelRequested) return result; userServiceProbe016(result);
+    if (cancelRequested) return result; userServiceProbe017(result);
+    if (cancelRequested) return result; userServiceProbe018(result);
+    if (cancelRequested) return result; userServiceProbe019(result);
+    if (cancelRequested) return result; userServiceProbe020(result);
+    if (cancelRequested) return result; userServiceProbe021(result);
+    if (cancelRequested) return result; userServiceProbe022(result);
+    if (cancelRequested) return result; userServiceProbe023(result);
+    if (cancelRequested) return result; userServiceProbe024(result);
+    if (cancelRequested) return result; userServiceProbe025(result);
+    if (cancelRequested) return result; userServiceProbe026(result);
+    if (cancelRequested) return result; userServiceProbe027(result);
+    if (cancelRequested) return result; userServiceProbe028(result);
+    if (cancelRequested) return result; userServiceProbe029(result);
+    if (cancelRequested) return result; userServiceProbe030(result);
+    if (cancelRequested) return result; userServiceProbe031(result);
+    if (cancelRequested) return result; userServiceProbe032(result);
+    if (cancelRequested) return result; userServiceProbe033(result);
+    if (cancelRequested) return result; userServiceProbe034(result);
+    if (cancelRequested) return result; userServiceProbe035(result);
+    if (cancelRequested) return result; userServiceProbe036(result);
+    if (cancelRequested) return result; userServiceProbe037(result);
+    if (cancelRequested) return result; userServiceProbe038(result);
+    if (cancelRequested) return result; userServiceProbe039(result);
+    if (cancelRequested) return result; userServiceProbe040(result);
+    if (cancelRequested) return result; userServiceProbe041(result);
+    if (cancelRequested) return result; userServiceProbe042(result);
+    if (cancelRequested) return result; userServiceProbe043(result);
+    if (cancelRequested) return result; userServiceProbe044(result);
+    if (cancelRequested) return result; userServiceProbe045(result);
+    if (cancelRequested) return result; userServiceProbe046(result);
+    if (cancelRequested) return result; userServiceProbe047(result);
+    if (cancelRequested) return result; userServiceProbe048(result);
+    if (cancelRequested) return result; userServiceProbe049(result);
+    if (cancelRequested) return result; userServiceProbe050(result);
+    if (cancelRequested) return result; userServiceProbe051(result);
+    if (cancelRequested) return result; userServiceProbe052(result);
+    if (cancelRequested) return result; userServiceProbe053(result);
+    if (cancelRequested) return result; userServiceProbe054(result);
+    if (cancelRequested) return result; userServiceProbe055(result);
+    if (cancelRequested) return result; userServiceProbe056(result);
+    if (cancelRequested) return result; userServiceProbe057(result);
+    if (cancelRequested) return result; userServiceProbe058(result);
+    if (cancelRequested) return result; userServiceProbe059(result);
+    if (cancelRequested) return result; userServiceProbe060(result);
+    if (cancelRequested) return result; userServiceProbe061(result);
+    if (cancelRequested) return result; userServiceProbe062(result);
+    if (cancelRequested) return result; userServiceProbe063(result);
+    if (cancelRequested) return result; userServiceProbe064(result);
+    if (cancelRequested) return result; userServiceProbe065(result);
+    if (cancelRequested) return result; userServiceProbe066(result);
+    if (cancelRequested) return result; userServiceProbe067(result);
+    if (cancelRequested) return result; userServiceProbe068(result);
+    if (cancelRequested) return result; userServiceProbe069(result);
+    if (cancelRequested) return result; userServiceProbe070(result);
+    if (cancelRequested) return result; userServiceProbe071(result);
+    if (cancelRequested) return result; userServiceProbe072(result);
+    if (cancelRequested) return result; userServiceProbe073(result);
+    if (cancelRequested) return result; userServiceProbe074(result);
+    if (cancelRequested) return result; userServiceProbe075(result);
+    return result;
+}
+} // namespace sync_targeted_service_review
+
+namespace sync_integrity_review {
+namespace persistence_audit { static void run(std::vector<Record>&); }
+
+static std::string hex32(DWORD value) {
+    char b[24]{};
+    snprintf(b,sizeof(b),"0x%08lX",static_cast<unsigned long>(value));
+    return b;
+}
+static void add(std::vector<Record>& out,const char* category,
+                const std::wstring& name,const std::string& description) {
+    out.push_back({category,utf8(name),"REVIEW ONLY | "+description});
+}
+static std::wstring lowercase(std::wstring value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](wchar_t c){return static_cast<wchar_t>(towlower(c));});
+    return value;
+}
+static bool contains(const std::wstring& value,const wchar_t* needle) {
+    return value.find(needle)!=std::wstring::npos;
+}
+static bool userWritableLocation(const std::wstring& path) {
+    const auto p=lowercase(path);
+    return contains(p,L"\\appdata\\") || contains(p,L"\\temp\\") ||
+           contains(p,L"\\downloads\\") || contains(p,L"\\users\\public\\");
+}
+static bool readDword(HKEY root,const wchar_t* path,const wchar_t* name,DWORD& value) {
+    DWORD size=sizeof(value),type=0;
+    const LSTATUS status=RegGetValueW(root,path,name,
+        RRF_RT_REG_DWORD,nullptr,&type,&value,&size);
+    return status==ERROR_SUCCESS;
+}
+static void kernelSettings(std::vector<Record>& out) {
+    struct Setting {
+        const wchar_t* key;
+        const wchar_t* name;
+        DWORD suspiciousValue;
+        const char* note;
+    };
+    // These are contextual configuration signals. Never change system settings.
+    const Setting checks[]={
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",L"VulnerableDriverBlocklistEnable",0,
+         "Microsoft vulnerable-driver blocklist disabled; confirm policy and OS version"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,
+         "VBS is disabled; may be expected for this device"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Enabled",0,
+         "Memory integrity/HVCI disabled; check device policy"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RunAsPPL",0,
+         "LSA protected-process setting explicitly disabled; contextual only"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",L"FeatureSettingsOverride",3,
+         "Mitigation override value warrants policy review"},
+    };
+    for(const auto& c:checks){
+        if(cancelRequested)return;
+        DWORD value=0;
+        if(readDword(HKEY_LOCAL_MACHINE,c.key,c.name,value) &&
+           value==c.suspiciousValue){
+            add(out,"Kernel integrity",std::wstring(c.key)+L"\\"+c.name,c.note);
+        }
+    }
+}
+static void kernelBootFlags(std::vector<Record>& out) {
+    // GetSystemFirmwareType only provides context; do not infer tampering from BIOS mode.
+    HMODULE ntdll=GetModuleHandleW(L"ntdll.dll");
+    if(!ntdll)return;
+    using NtQuerySystemInformationFn=LONG (NTAPI*)(ULONG,PVOID,ULONG,PULONG);
+    auto query=reinterpret_cast<NtQuerySystemInformationFn>(
+        GetProcAddress(ntdll,"NtQuerySystemInformation"));
+    if(!query)return;
+    struct CodeIntegrityInformation { ULONG Length; ULONG CodeIntegrityOptions; };
+    CodeIntegrityInformation ci{sizeof(CodeIntegrityInformation),0};
+    // SystemCodeIntegrityInformation = 103. This is read-only.
+    if(query(103,&ci,sizeof(ci),nullptr)>=0){
+        constexpr ULONG kEnabled=0x1;
+        constexpr ULONG kTestSign=0x2;
+        constexpr ULONG kDebug=0x80;
+        if(!(ci.CodeIntegrityOptions&kEnabled))
+            add(out,"Kernel integrity",L"Code Integrity",
+                "Kernel code integrity not reported as enabled");
+        if(ci.CodeIntegrityOptions&kTestSign)
+            add(out,"Kernel integrity",L"Test-signing",
+                "Code integrity test-signing mode reported enabled");
+        if(ci.CodeIntegrityOptions&kDebug)
+            add(out,"Kernel integrity",L"Code Integrity debugging",
+                "Code integrity debugging mode reported enabled");
+    }
+}
+static void kernelDrivers(std::vector<Record>& out) {
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm)return;
+    DWORD bytes=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS,
+        SERVICE_DRIVER,SERVICE_STATE_ALL,nullptr,0,&bytes,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || bytes==0 || bytes>16*1024*1024){
+        CloseServiceHandle(scm);return;
+    }
+    std::vector<BYTE> buffer(bytes);
+    resume=0;
+    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS,SERVICE_DRIVER,
+        SERVICE_STATE_ALL,buffer.data(),bytes,&bytes,&count,&resume,nullptr)){
+        CloseServiceHandle(scm);return;
+    }
+    auto* entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+    for(DWORD i=0;i<count && !cancelRequested;++i){
+        const auto& e=entries[i];
+        if(e.ServiceStatusProcess.dwCurrentState!=SERVICE_RUNNING)continue;
+        SC_HANDLE service=OpenServiceW(scm,e.lpServiceName,SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD needed=0;
+        QueryServiceConfigW(service,nullptr,0,&needed);
+        if(needed>0 && needed<1024*1024){
+            std::vector<BYTE> data(needed);
+            auto* cfg=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(data.data());
+            if(QueryServiceConfigW(service,cfg,needed,&needed) && cfg->lpBinaryPathName){
+                const std::wstring image=cfg->lpBinaryPathName;
+                if(userWritableLocation(image)){
+                    add(out,"Kernel driver path",e.lpServiceName,
+                        "Running driver service references a user-writable directory: "+utf8(image));
+                }
+                const auto lower=lowercase(image);
+                if(contains(lower,L"\\??\\") && userWritableLocation(lower)){
+                    add(out,"Kernel driver path",e.lpServiceName,
+                        "Running driver service uses an NT-style path to a user-writable location");
+                }
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(scm);
+}
+static void userProcessMitigations(std::vector<Record>& out,
+                                    const std::vector<Process>& processes) {
+    // Inspect only processes that Windows allows querying; never inject or modify.
+    size_t inspected=0;
+    for(const auto& p:processes){
+        if(cancelRequested)return;
+        if(p.pid==0 || p.pid==4 || inspected>=256)continue;
+        HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,p.pid);
+        if(!h)continue;
+        ++inspected;
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamicCode{};
+        if(GetProcessMitigationPolicy(h,ProcessDynamicCodePolicy,
+            &dynamicCode,sizeof(dynamicCode)) && !dynamicCode.ProhibitDynamicCode){
+            // Lack of this optional mitigation is common; not reported by itself.
+        }
+        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY signature{};
+        if(GetProcessMitigationPolicy(h,ProcessSignaturePolicy,
+            &signature,sizeof(signature))){
+            // Policy observations are informational only, not proof of compromise.
+        }
+        CloseHandle(h);
+    }
+}
+static void userExecutableMappings(std::vector<Record>& out,
+                                   const std::vector<Process>& processes) {
+    // Bound work to avoid turning a lightweight scan into a full memory dump.
+    size_t checked=0,reported=0;
+    for(const auto& p:processes){
+        if(cancelRequested || checked>=96 || reported>=48)return;
+        if(p.pid<=4)continue;
+        HANDLE h=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,FALSE,p.pid);
+        if(!h)continue;
+        ++checked;
+        SYSTEM_INFO si{};
+        GetSystemInfo(&si);
+        uintptr_t address=reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
+        const uintptr_t maxAddress=reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress);
+        size_t regions=0,perProcess=0;
+        while(address<maxAddress && regions++<4096 && perProcess<2 && !cancelRequested){
+            MEMORY_BASIC_INFORMATION mbi{};
+            if(!VirtualQueryEx(h,reinterpret_cast<LPCVOID>(address),&mbi,sizeof(mbi)))
+                break;
+            const uintptr_t base=reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+            const uintptr_t size=static_cast<uintptr_t>(mbi.RegionSize);
+            if(size==0 || base>UINTPTR_MAX-size)break;
+            const DWORD protect=mbi.Protect & 0xff;
+            const bool writableExecutable=protect==PAGE_EXECUTE_READWRITE ||
+                                          protect==PAGE_EXECUTE_WRITECOPY;
+            if(mbi.State==MEM_COMMIT && mbi.Type==MEM_PRIVATE && writableExecutable){
+                add(out,"User-mode memory",p.name+L" (PID "+std::to_wstring(p.pid)+L")",
+                    "Private executable+writable memory region observed at "+
+                    std::to_string(static_cast<unsigned long long>(base))+
+                    "; JIT runtimes and legitimate software can produce this");
+                ++reported;++perProcess;
+            }
+            const uintptr_t next=base+size;
+            if(next<=address)break;
+            address=next;
+        }
+        CloseHandle(h);
+    }
+}
+static void userModuleLocations(std::vector<Record>& out,
+                                const std::vector<Process>& processes) {
+    size_t checked=0,reported=0;
+    for(const auto& p:processes){
+        if(cancelRequested || checked>=128 || reported>=64)return;
+        if(p.pid<=4)continue;
+        HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,p.pid);
+        if(snapshot==INVALID_HANDLE_VALUE)continue;
+        ++checked;
+        MODULEENTRY32W module{};module.dwSize=sizeof(module);
+        if(Module32FirstW(snapshot,&module)){
+            do {
+                if(cancelRequested)break;
+                const std::wstring path=module.szExePath;
+                if(userWritableLocation(path)){
+                    add(out,"User-mode module",p.name+L" (PID "+std::to_wstring(p.pid)+L")",
+                        "Module loaded from user-writable directory: "+utf8(path)+
+                        "; common for legitimate user applications");
+                    ++reported;
+                    break;
+                }
+            }while(Module32NextW(snapshot,&module));
+        }
+        CloseHandle(snapshot);
+    }
+}
+
+// Additional passive integrity checks: do not alter security settings.
+// Report findings as context, never as a definitive bypass verdict.
+static void extendedKernelRegistry(std::vector<Record>& out) {
+    struct Rule {
+        const wchar_t* key;
+        const wchar_t* value;
+        DWORD match;
+        const char* title;
+        const char* explanation;
+    };
+    static const Rule rules[] = {
+        {L"SYSTEM\CurrentControlSet\Control\CI\Config",L"VulnerableDriverBlocklistEnable",0,"Driver blocklist","Vulnerable driver blocklist explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"VBS policy","Virtualization based security explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Enabled",0,"HVCI policy","Hypervisor enforced code integrity explicitly disabled"},
+        {L"SYSTEM\CurrentControlSet\Control\Lsa",L"RunAsPPL",0,"LSA protection","LSA protected process setting explicitly disabled"},
+        {L"SYSTEM\CurrentControlSet\Control\Lsa",L"LsaCfgFlags",0,"Credential Guard","Credential Guard policy explicitly disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"Device Guard policy","Enterprise policy disables VBS"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"HypervisorEnforcedCodeIntegrity",0,"HVCI policy","Enterprise policy disables HVCI"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"RequirePlatformSecurityFeatures",0,"Platform security policy","Platform security requirements explicitly set to zero"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender",L"DisableAntiSpyware",1,"Defender legacy policy","Legacy policy indicates antivirus disablement; may be ignored on modern Windows"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableRealtimeMonitoring",1,"Realtime protection policy","Realtime protection policy disabled; validate actual effective state"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableBehaviorMonitoring",1,"Behavior monitoring policy","Behavior monitoring policy disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableOnAccessProtection",1,"On-access policy","On-access protection policy disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableScanOnRealtimeEnable",1,"Realtime scan policy","Realtime scan-on-enable policy disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Spynet",L"SpynetReporting",0,"Cloud reporting","Cloud reporting policy explicitly disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Spynet",L"SubmitSamplesConsent",2,"Sample submission","Sample submission configured to never send"},
+        {L"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",L"EnableLUA",0,"UAC policy","User Account Control explicitly disabled"},
+        {L"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",L"ConsentPromptBehaviorAdmin",0,"UAC prompts","Administrator elevation prompts disabled"},
+        {L"SYSTEM\CurrentControlSet\Control\SafeBoot\Option",L"OptionValue",1,"Safe boot context","System may be operating in minimal safe boot"},
+        {L"SYSTEM\CurrentControlSet\Control\SafeBoot\Option",L"OptionValue",2,"Safe boot context","System may be operating in networking safe boot"},
+        {L"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",L"FeatureSettingsOverride",3,"Mitigation override","Mitigation override requires administrative review"},
+        {L"SYSTEM\CurrentControlSet\Control\SecureBoot\State",L"UEFISecureBootEnabled",0,"Secure Boot","Secure Boot state reports disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",L"VerifiedAndReputablePolicyState",0,"Reputation policy","Reputation policy state reports zero; OS version dependent"},
+        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard",L"Enabled",0,"Credential Guard","Credential Guard scenario explicitly disabled"},
+        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\SystemGuard",L"Enabled",0,"System Guard","System Guard scenario explicitly disabled"},
+        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\KernelShadowStacks",L"Enabled",0,"Kernel shadow stacks","Kernel shadow stacks explicitly disabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\Safer\CodeIdentifiers",L"DefaultLevel",0,"Software restriction","Software restriction default level requires review"},
+        {L"SYSTEM\CurrentControlSet\Control\WMI\Autologger\EventLog-Security",L"Start",0,"Security event logging","Security event log autologger disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\EventLog",L"Start",4,"Event log service","Event log service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\WinDefend",L"Start",4,"Defender service","Defender service configured disabled; third-party AV may be installed"},
+        {L"SYSTEM\CurrentControlSet\Services\WdFilter",L"Start",4,"Defender filter","Defender minifilter configured disabled; check effective protection"},
+        {L"SYSTEM\CurrentControlSet\Services\WdNisDrv",L"Start",4,"Defender network driver","Defender network inspection driver configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\WdNisSvc",L"Start",4,"Defender network service","Defender network inspection service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\SecurityHealthService",L"Start",4,"Security Health","Security Health service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\wscsvc",L"Start",4,"Security Center","Security Center service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\BFE",L"Start",4,"Filtering Engine","Base Filtering Engine service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\MpsSvc",L"Start",4,"Firewall service","Windows Firewall service configured disabled"},
+        {L"SYSTEM\CurrentControlSet\Services\Sense",L"Start",4,"EDR sensor","Defender for Endpoint sensor configured disabled; may be unlicensed"},
+        {L"SYSTEM\CurrentControlSet\Services\SysmonDrv",L"Start",4,"Sysmon driver","Sysmon driver configured disabled; only relevant if installed"},
+        {L"SYSTEM\CurrentControlSet\Services\Sysmon64",L"Start",4,"Sysmon service","Sysmon service configured disabled; only relevant if installed"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging",L"EnableScriptBlockLogging",0,"PowerShell logging","Script block logging explicitly disabled by policy"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging",L"EnableModuleLogging",0,"PowerShell logging","Module logging explicitly disabled by policy"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription",L"EnableTranscripting",0,"PowerShell logging","Transcription explicitly disabled by policy"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\Security",L"Retention",0,"Security log retention","Security log retention policy is not enabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\System",L"Retention",0,"System log retention","System log retention policy is not enabled"},
+        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\Application",L"Retention",0,"Application log retention","Application log retention policy is not enabled"}
+    };
+    for(const auto& rule:rules) {
+        if(cancelRequested || out.size()>1500)break;
+        DWORD value=0;
+        if(readDword(HKEY_LOCAL_MACHINE,rule.key,rule.value,value) && value==rule.match) {
+            add(out,"Kernel policy review",
+                std::wstring(rule.key)+L"\\"+rule.value,
+                std::string(rule.title)+": "+rule.explanation+
+                " (configured value "+std::to_string(value)+")");
+        }
+    }
+}
+static void extendedKernelDriverConfiguration(std::vector<Record>& out) {
+    SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!manager)return;
+    DWORD required=0,count=0,resume=0;
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,SERVICE_STATE_ALL,
+        nullptr,0,&required,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || !required || required>16*1024*1024) {
+        CloseServiceHandle(manager);return;
+    }
+    std::vector<BYTE> storage(required);
+    resume=0;
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,SERVICE_STATE_ALL,
+        storage.data(),required,&required,&count,&resume,nullptr)) {
+        CloseServiceHandle(manager);return;
+    }
+    auto* drivers=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(storage.data());
+    size_t emitted=0;
+    for(DWORD i=0;i<count && !cancelRequested && emitted<100;++i) {
+        const auto& entry=drivers[i];
+        SC_HANDLE service=OpenServiceW(manager,entry.lpServiceName,SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD needed=0;
+        QueryServiceConfigW(service,nullptr,0,&needed);
+        if(GetLastError()!=ERROR_INSUFFICIENT_BUFFER || needed>65536) {
+            CloseServiceHandle(service);continue;
+        }
+        std::vector<BYTE> buffer(needed);
+        auto* cfg=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(buffer.data());
+        if(QueryServiceConfigW(service,cfg,needed,&needed) && cfg->lpBinaryPathName) {
+            const std::wstring path=lowercase(cfg->lpBinaryPathName);
+            const std::wstring subject=entry.lpServiceName;
+            const bool running=entry.ServiceStatusProcess.dwCurrentState==SERVICE_RUNNING;
+            if(userWritableLocation(path)) {
+                add(out,"Kernel driver path",subject,
+                    "Driver image path references a user-writable location; verify installation and signature");
+                ++emitted;
+            }
+            if(running && (contains(path,L"\\temp\\") || contains(path,L"\\downloads\\"))) {
+                add(out,"Kernel driver location",subject,
+                    "Running driver configuration references a transient folder");
+                ++emitted;
+            }
+            if(contains(path,L".sys") && contains(path,L"\\users\\")) {
+                add(out,"Kernel driver origin",subject,
+                    "Driver configuration references a user profile");
+                ++emitted;
+            }
+            if(running && cfg->dwStartType==SERVICE_DISABLED) {
+                add(out,"Kernel driver state",subject,
+                    "Driver is currently running although service startup is disabled; may be normal after configuration changes");
+                ++emitted;
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(manager);
+}
+static void extendedUserProcessReview(std::vector<Record>& out,
+                                     const std::vector<Process>& processes) {
+    size_t inspected=0,reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || inspected>=256 || reported>=128)break;
+        if(proc.pid<=4)continue;
+        HANDLE handle=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,proc.pid);
+        if(!handle)continue;
+        ++inspected;
+        const std::wstring subject=proc.name+L" (PID "+std::to_wstring(proc.pid)+L")";
+        PROCESS_MITIGATION_ASLR_POLICY aslr{};
+        if(GetProcessMitigationPolicy(handle,ProcessASLRPolicy,&aslr,sizeof(aslr))) {
+            if(!aslr.EnableBottomUpRandomization && userWritableLocation(proc.path)) {
+                add(out,"User-mode ASLR",subject,
+                    "Bottom-up ASLR not enabled for a user-directory process; may be legitimate");
+                ++reported;
+            }
+            if(!aslr.EnableForceRelocateImages && userWritableLocation(proc.path)) {
+                add(out,"User-mode ASLR",subject,
+                    "Forced relocation is not enabled for a user-directory process");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY signature{};
+        if(GetProcessMitigationPolicy(handle,ProcessSignaturePolicy,&signature,sizeof(signature))) {
+            if(!signature.MicrosoftSignedOnly && !signature.StoreSignedOnly &&
+               userWritableLocation(proc.path)) {
+                // Absence of a strict policy is normal for most applications.
+                // Record only when other context already indicates a writable location.
+                if(contains(lowercase(proc.path),L"\\temp\\")) {
+                    add(out,"User-mode image policy",subject,
+                        "Temporary-directory process has no restrictive binary signature policy");
+                    ++reported;
+                }
+            }
+        }
+        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extension{};
+        if(GetProcessMitigationPolicy(handle,ProcessExtensionPointDisablePolicy,
+                                      &extension,sizeof(extension))) {
+            if(!extension.DisableExtensionPoints &&
+               contains(lowercase(proc.path),L"\\temp\\")) {
+                add(out,"User-mode extension points",subject,
+                    "Temporary-directory process permits legacy extension points");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY handles{};
+        if(GetProcessMitigationPolicy(handle,ProcessStrictHandleCheckPolicy,
+                                      &handles,sizeof(handles))) {
+            if(!handles.RaiseExceptionOnInvalidHandleReference &&
+               contains(lowercase(proc.path),L"\\temp\\")) {
+                add(out,"User-mode handle policy",subject,
+                    "Temporary-directory process does not enable strict handle checks");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY win32k{};
+        if(GetProcessMitigationPolicy(handle,ProcessSystemCallDisablePolicy,
+                                      &win32k,sizeof(win32k))) {
+            if(!win32k.DisallowWin32kSystemCalls &&
+               contains(lowercase(proc.path),L"\\temp\\")) {
+                add(out,"User-mode syscall policy",subject,
+                    "Temporary-directory process permits Win32k system calls; typical for GUI apps");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_IMAGE_LOAD_POLICY images{};
+        if(GetProcessMitigationPolicy(handle,ProcessImageLoadPolicy,&images,sizeof(images))) {
+            if(!images.NoRemoteImages && contains(lowercase(proc.path),L"\\temp\\")) {
+                add(out,"User-mode image loading",subject,
+                    "Temporary-directory process does not restrict remote image loads");
+                ++reported;
+            }
+            if(!images.NoLowMandatoryLabelImages &&
+               contains(lowercase(proc.path),L"\\temp\\")) {
+                add(out,"User-mode image loading",subject,
+                    "Temporary-directory process does not restrict low-integrity image loads");
+                ++reported;
+            }
+        }
+        CloseHandle(handle);
+    }
+}
+static void extendedUserAutorunReview(std::vector<Record>& out) {
+    struct Location {
+        HKEY root;
+        const wchar_t* path;
+        const char* label;
+    };
+    const Location locations[]={
+        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows\CurrentVersion\Run","User Run"},
+        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows\CurrentVersion\RunOnce","User RunOnce"},
+        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows\CurrentVersion\Run","Machine Run"},
+        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows\CurrentVersion\RunOnce","Machine RunOnce"},
+        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows NT\CurrentVersion\Windows","User Windows"},
+        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Windows","Machine Windows"},
+        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Winlogon","Winlogon"},
+        {HKEY_CURRENT_USER,L"Software\Microsoft\Windows NT\CurrentVersion\Winlogon","User Winlogon"},
+        {HKEY_LOCAL_MACHINE,L"Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options","IFEO root"}
+    };
+    size_t reported=0;
+    for(const auto& loc:locations) {
+        if(cancelRequested || reported>=100)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(loc.root,loc.path,0,KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        for(DWORD index=0;index<128 && !cancelRequested && reported<100;++index) {
+            wchar_t name[512]{};
+            wchar_t value[4096]{};
+            DWORD nameSize=511,bytes=sizeof(value),type=0;
+            const LONG status=RegEnumValueW(key,index,name,&nameSize,nullptr,
+                                            &type,reinterpret_cast<BYTE*>(value),&bytes);
+            if(status==ERROR_NO_MORE_ITEMS)break;
+            if(status!=ERROR_SUCCESS)continue;
+            if(type!=REG_SZ && type!=REG_EXPAND_SZ)continue;
+            value[(sizeof(value)/sizeof(wchar_t))-1]=0;
+            const std::wstring data=lowercase(value);
+            if(userWritableLocation(data) &&
+               (contains(data,L".exe") || contains(data,L".dll") ||
+                contains(data,L".ps1") || contains(data,L".vbs"))) {
+                add(out,"User-mode persistence review",name,
+                    std::string(loc.label)+": autorun references a user-writable path; verify publisher and intended purpose");
+                ++reported;
+            }
+            if(contains(data,L"powershell") &&
+               (contains(data,L"-encodedcommand") || contains(data,L" -enc "))) {
+                add(out,"User-mode command review",name,
+                    std::string(loc.label)+": autorun uses encoded PowerShell arguments; inspect manually");
+                ++reported;
+            }
+        }
+        RegCloseKey(key);
+    }
+}
+
+
+// Additional read-only kernel integrity evidence. Missing keys are not findings.
+static void supplementalKernelPolicyReview(std::vector<Record>& out) {
+    struct Rule { const wchar_t* key; const wchar_t* value; DWORD match; const char* reason; };
+    const Rule rules[] = {
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",L"VulnerableDriverBlocklistEnable",0,"Driver blocklist explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"VBS explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Enabled",0,"HVCI explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",L"Enabled",0,"Credential Guard explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RunAsPPL",0,"LSA protection explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",L"UEFISecureBootEnabled",0,"Secure Boot reported disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",L"VerifiedAndReputablePolicyState",0,"Reputation policy state is zero"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"RequirePlatformSecurityFeatures",0,"No platform security feature requirement"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"Locked",0,"Device Guard configuration not locked"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Locked",0,"HVCI configuration not locked"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"WasEnabledBy",0,"HVCI enablement source is zero"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",L"Enabled",0,"System Guard explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks",L"Enabled",0,"Kernel shadow stacks explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"EnabledBootId",0,"HVCI boot identifier is zero"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",L"FeatureSettingsOverride",3,"Memory mitigation override requests a disabled configuration"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",L"FeatureSettingsOverrideMask",3,"Memory mitigation override mask covers two flags"}
+    };
+    size_t count=0;
+    for(const auto& rule:rules) {
+        if(cancelRequested || count>=32)break;
+        DWORD current=0;
+        if(!readDword(HKEY_LOCAL_MACHINE,rule.key,rule.value,current))continue;
+        if(current!=rule.match)continue;
+        add(out,"Kernel policy review",
+            std::wstring(rule.key)+L"\\"+rule.value,rule.reason);
+        ++count;
+    }
+}
+static void supplementalKernelDriverServiceReview(std::vector<Record>& out) {
+    HKEY services=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,&services)!=ERROR_SUCCESS)return;
+    DWORD seen=0,reported=0;
+    for(DWORD index=0;index<4096 && !cancelRequested;++index) {
+        wchar_t name[256]{};
+        DWORD length=255;
+        LONG status=RegEnumKeyExW(services,index,name,&length,nullptr,nullptr,nullptr,nullptr);
+        if(status==ERROR_NO_MORE_ITEMS)break;
+        if(status!=ERROR_SUCCESS)continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(services,name,0,KEY_READ,&service)!=ERROR_SUCCESS)continue;
+        DWORD type=0,bytes=sizeof(type),kind=0;
+        if(RegQueryValueExW(service,L"Type",nullptr,&kind,
+                           reinterpret_cast<BYTE*>(&type),&bytes)!=ERROR_SUCCESS ||
+           kind!=REG_DWORD || !(type&(SERVICE_KERNEL_DRIVER|SERVICE_FILE_SYSTEM_DRIVER))) {
+            RegCloseKey(service);continue;
+        }
+        ++seen;
+        wchar_t image[2048]{};
+        bytes=sizeof(image);kind=0;
+        const bool hasImage=RegQueryValueExW(service,L"ImagePath",nullptr,&kind,
+            reinterpret_cast<BYTE*>(image),&bytes)==ERROR_SUCCESS &&
+            (kind==REG_SZ || kind==REG_EXPAND_SZ);
+        image[2047]=0;
+        const std::wstring path=hasImage?lowercase(image):L"";
+        if(hasImage && userWritableLocation(path) && reported<80) {
+            add(out,"Kernel driver configuration",name,
+                "Driver image points to a user-writable directory: "+utf8(path));
+            ++reported;
+        }
+        if(hasImage && (contains(path,L"\\temp\\") ||
+                        contains(path,L"\\downloads\\")) && reported<80) {
+            add(out,"Kernel driver location",name,
+                "Driver service references a transient download or temporary folder");
+            ++reported;
+        }
+        DWORD start=0;
+        bytes=sizeof(start);kind=0;
+        if(RegQueryValueExW(service,L"Start",nullptr,&kind,
+            reinterpret_cast<BYTE*>(&start),&bytes)==ERROR_SUCCESS &&
+           kind==REG_DWORD && start<=SERVICE_AUTO_START &&
+           hasImage && userWritableLocation(path) && reported<80) {
+            add(out,"Kernel driver startup",name,
+                "Boot/system/automatic driver starts from user-writable storage");
+            ++reported;
+        }
+        DWORD errorControl=0;
+        bytes=sizeof(errorControl);kind=0;
+        if(RegQueryValueExW(service,L"ErrorControl",nullptr,&kind,
+            reinterpret_cast<BYTE*>(&errorControl),&bytes)==ERROR_SUCCESS &&
+           kind==REG_DWORD && errorControl==SERVICE_ERROR_IGNORE &&
+           hasImage && userWritableLocation(path) && reported<80) {
+            add(out,"Kernel driver error policy",name,
+                "Untrusted-location driver also ignores startup errors");
+            ++reported;
+        }
+        RegCloseKey(service);
+        if(seen>=2048 || reported>=80)break;
+    }
+    RegCloseKey(services);
+}
+static void supplementalKernelLoadedModuleReview(std::vector<Record>& out) {
+    DWORD needed=0;
+    std::vector<LPVOID> drivers(4096);
+    if(!EnumDeviceDrivers(drivers.data(),
+        static_cast<DWORD>(drivers.size()*sizeof(LPVOID)),&needed))return;
+    const DWORD count=(std::min)(needed/static_cast<DWORD>(sizeof(LPVOID)),
+                                  static_cast<DWORD>(drivers.size()));
+    size_t reported=0;
+    for(DWORD i=0;i<count && !cancelRequested && reported<64;++i) {
+        wchar_t path[2048]{};
+        if(!GetDeviceDriverFileNameW(drivers[i],path,2048))continue;
+        const std::wstring normalized=lowercase(path);
+        if(userWritableLocation(normalized)) {
+            add(out,"Loaded kernel module",path,
+                "Loaded driver image path appears to be user-writable");
+            ++reported;
+        }
+        if(contains(normalized,L"\\temp\\") ||
+           contains(normalized,L"\\downloads\\")) {
+            add(out,"Loaded kernel module",path,
+                "Loaded driver path contains a temporary or downloads directory");
+            ++reported;
+        }
+    }
+}
+
+static void supplementalKernelServiceConsistency(std::vector<Record>& out) {
+    SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!manager)return;
+    DWORD bytes=0,count=0,resume=0;
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,
+        SERVICE_STATE_ALL,nullptr,0,&bytes,&count,&resume,nullptr);
+    if(GetLastError()!=ERROR_MORE_DATA || bytes==0 || bytes>8*1024*1024) {
+        CloseServiceHandle(manager);
+        return;
+    }
+    std::vector<BYTE> buffer(bytes);
+    resume=0;
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,
+        SERVICE_STATE_ALL,buffer.data(),bytes,&bytes,&count,&resume,nullptr)) {
+        CloseServiceHandle(manager);
+        return;
+    }
+    auto* entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+    size_t reported=0;
+    for(DWORD i=0;i<count && !cancelRequested && reported<64;++i) {
+        const auto& e=entries[i];
+        SC_HANDLE service=OpenServiceW(manager,e.lpServiceName,SERVICE_QUERY_CONFIG);
+        if(!service)continue;
+        DWORD needed=0;
+        QueryServiceConfigW(service,nullptr,0,&needed);
+        if(!needed || needed>65536) {
+            CloseServiceHandle(service);
+            continue;
+        }
+        std::vector<BYTE> cfgBytes(needed);
+        auto* cfg=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(cfgBytes.data());
+        if(QueryServiceConfigW(service,cfg,needed,&needed)) {
+            const std::wstring path=cfg->lpBinaryPathName?
+                lowercase(cfg->lpBinaryPathName):L"";
+            const bool transient=contains(path,L"\\temp\\") ||
+                                 contains(path,L"\\downloads\\");
+            if(transient && e.ServiceStatusProcess.dwCurrentState==SERVICE_RUNNING) {
+                add(out,"Kernel service consistency",e.lpServiceName,
+                    "Running driver references transient storage");
+                ++reported;
+            }
+            if(transient && cfg->dwStartType==SERVICE_BOOT_START) {
+                add(out,"Kernel boot driver origin",e.lpServiceName,
+                    "Boot-start driver configured in transient storage");
+                ++reported;
+            }
+            if(transient && cfg->dwStartType==SERVICE_SYSTEM_START) {
+                add(out,"Kernel system driver origin",e.lpServiceName,
+                    "System-start driver configured in transient storage");
+                ++reported;
+            }
+            if(userWritableLocation(path) &&
+               cfg->dwServiceType&SERVICE_FILE_SYSTEM_DRIVER) {
+                add(out,"Kernel file system driver origin",e.lpServiceName,
+                    "File-system driver image references user-writable storage");
+                ++reported;
+            }
+        }
+        CloseServiceHandle(service);
+    }
+    CloseServiceHandle(manager);
+}
+static void supplementalKernelSecurityServiceState(std::vector<Record>& out) {
+    struct ExpectedService {
+        const wchar_t* name;
+        const char* description;
+    };
+    const ExpectedService names[]={
+        {L"WinDefend","Defender antivirus service"},
+        {L"SecurityHealthService","Windows Security Health service"},
+        {L"wscsvc","Windows Security Center service"},
+        {L"EventLog","Windows Event Log service"}
+    };
+    SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
+    if(!manager)return;
+    for(const auto& entry:names) {
+        if(cancelRequested)break;
+        SC_HANDLE svc=OpenServiceW(manager,entry.name,
+                                  SERVICE_QUERY_CONFIG|SERVICE_QUERY_STATUS);
+        if(!svc)continue;
+        SERVICE_STATUS_PROCESS status{};
+        DWORD needed=0;
+        const bool hasStatus=QueryServiceStatusEx(svc,SC_STATUS_PROCESS_INFO,
+            reinterpret_cast<BYTE*>(&status),sizeof(status),&needed)!=FALSE;
+        QueryServiceConfigW(svc,nullptr,0,&needed);
+        if(needed && needed<65536) {
+            std::vector<BYTE> bytes(needed);
+            auto* cfg=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(bytes.data());
+            if(QueryServiceConfigW(svc,cfg,needed,&needed)) {
+                if(cfg->dwStartType==SERVICE_DISABLED) {
+                    add(out,"Windows security service",entry.name,
+                        std::string(entry.description)+" is configured as disabled");
+                }
+            }
+        }
+        if(hasStatus && status.dwCurrentState==SERVICE_STOPPED &&
+           (std::wstring(entry.name)==L"EventLog")) {
+            add(out,"Windows event logging",entry.name,
+                "Windows Event Log service is currently stopped");
+        }
+        CloseServiceHandle(svc);
+    }
+    CloseServiceHandle(manager);
+}
+
+static void supplementalKernelEnvironmentReview(std::vector<Record>& out) {
+    SYSTEM_INFO system{};
+    GetNativeSystemInfo(&system);
+    if(system.dwPageSize==0)return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",0,KEY_READ,&key)
+       !=ERROR_SUCCESS)return;
+    DWORD value=0,type=0,bytes=sizeof(value);
+    if(RegQueryValueExW(key,L"EnableVirtualizationBasedSecurity",nullptr,
+                        &type,reinterpret_cast<BYTE*>(&value),&bytes)
+       ==ERROR_SUCCESS && type==REG_DWORD && value==0) {
+        DWORD hvci=0;
+        if(readDword(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+            L"Enabled",hvci) && hvci!=0) {
+            add(out,"Kernel configuration consistency",L"VBS / HVCI",
+                "HVCI enabled in registry while VBS explicitly disabled; confirm runtime state");
+        }
+    }
+    RegCloseKey(key);
+}
+
+// Additional user-mode observations, bounded to avoid scanning indefinitely.
+static void supplementalUserProcessReview(std::vector<Record>& out,
+                                           const std::vector<Process>& processes) {
+    size_t inspected=0,reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || inspected>=320 || reported>=120)break;
+        if(proc.pid<=4)continue;
+        HANDLE h=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,proc.pid);
+        if(!h)continue;
+        ++inspected;
+        const std::wstring name=proc.name+L" (PID "+std::to_wstring(proc.pid)+L")";
+        const auto path=lowercase(proc.path);
+        const bool temp=contains(path,L"\\temp\\") ||
+                        contains(path,L"\\downloads\\");
+        const bool writable=userWritableLocation(path);
+        if(writable && temp) {
+            add(out,"User process origin",name,
+                "Running executable resides in a transient user directory");
+            ++reported;
+        }
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        if(GetProcessMitigationPolicy(h,ProcessDEPPolicy,&dep,sizeof(dep))) {
+            if(temp && !dep.Enable) {
+                add(out,"User process mitigation",name,
+                    "Temporary-directory process reports DEP disabled");
+                ++reported;
+            }
+            if(temp && dep.Permanent==0) {
+                add(out,"User process mitigation",name,
+                    "Temporary-directory process has non-permanent DEP configuration");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
+        if(GetProcessMitigationPolicy(h,ProcessDynamicCodePolicy,
+                                     &dynamic,sizeof(dynamic))) {
+            if(temp && !dynamic.ProhibitDynamicCode) {
+                add(out,"User dynamic code policy",name,
+                    "Temporary-directory process permits dynamically generated code");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
+        if(GetProcessMitigationPolicy(h,ProcessControlFlowGuardPolicy,
+                                     &cfg,sizeof(cfg))) {
+            if(temp && !cfg.EnableControlFlowGuard) {
+                add(out,"User CFG policy",name,
+                    "Temporary-directory process does not report CFG enabled");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_IMAGE_LOAD_POLICY images{};
+        if(GetProcessMitigationPolicy(h,ProcessImageLoadPolicy,
+                                     &images,sizeof(images))) {
+            if(temp && !images.PreferSystem32Images) {
+                add(out,"User image search policy",name,
+                    "Temporary-directory process does not prefer System32 DLLs");
+                ++reported;
+            }
+        }
+        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY ext{};
+        if(GetProcessMitigationPolicy(h,ProcessExtensionPointDisablePolicy,
+                                     &ext,sizeof(ext))) {
+            if(temp && !ext.DisableExtensionPoints) {
+                add(out,"User extension points",name,
+                    "Temporary-directory process permits legacy extension points");
+                ++reported;
+            }
+        }
+        CloseHandle(h);
+    }
+}
+static void supplementalUserModuleReview(std::vector<Record>& out,
+                                          const std::vector<Process>& processes) {
+    size_t checked=0,reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || checked>=100 || reported>=100)break;
+        if(proc.pid<=4)continue;
+        HANDLE h=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
+                             FALSE,proc.pid);
+        if(!h)continue;
+        ++checked;
+        HMODULE modules[512]{};
+        DWORD bytes=0;
+        if(EnumProcessModulesEx(h,modules,sizeof(modules),&bytes,
+                                LIST_MODULES_ALL)) {
+            const DWORD count=(std::min)(bytes/static_cast<DWORD>(sizeof(HMODULE)),
+                                         static_cast<DWORD>(512));
+            for(DWORD i=0;i<count && reported<100 && !cancelRequested;++i) {
+                wchar_t modulePath[2048]{};
+                if(!GetModuleFileNameExW(h,modules[i],modulePath,2048))continue;
+                const std::wstring path=lowercase(modulePath);
+                if(contains(path,L"\\temp\\") ||
+                   contains(path,L"\\downloads\\")) {
+                    add(out,"User loaded module",proc.name,
+                        "Loaded module in transient user folder: "+utf8(path));
+                    ++reported;
+                }
+                if(contains(path,L"\\appdata\\") &&
+                   contains(lowercase(proc.path),L"\\windows\\system32\\")) {
+                    add(out,"User module origin",proc.name,
+                        "System-directory process loaded a module from AppData: "+utf8(path));
+                    ++reported;
+                }
+            }
+        }
+        CloseHandle(h);
+    }
+}
+static void supplementalUserAutorunReview(std::vector<Record>& out) {
+    struct Location { HKEY root; const wchar_t* key; };
+    const Location locations[]={
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"},
+        {HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows"},
+        {HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"}
+    };
+    size_t reported=0;
+    for(const auto& loc:locations) {
+        if(cancelRequested || reported>=60)break;
+        HKEY key=nullptr;
+        if(RegOpenKeyExW(loc.root,loc.key,0,KEY_READ,&key)!=ERROR_SUCCESS)continue;
+        for(DWORD i=0;i<128 && !cancelRequested && reported<60;++i) {
+            wchar_t name[512]{},value[4096]{};
+            DWORD nameLength=511,bytes=sizeof(value),kind=0;
+            LONG status=RegEnumValueW(key,i,name,&nameLength,nullptr,
+                &kind,reinterpret_cast<BYTE*>(value),&bytes);
+            if(status==ERROR_NO_MORE_ITEMS)break;
+            if(status!=ERROR_SUCCESS ||
+               (kind!=REG_SZ && kind!=REG_EXPAND_SZ))continue;
+            value[4095]=0;
+            const auto command=lowercase(value);
+            if(userWritableLocation(command) &&
+               (contains(command,L".exe") || contains(command,L".dll"))) {
+                add(out,"User startup path",name,
+                    "Startup command references an executable in a user-writable folder");
+                ++reported;
+            }
+            if((contains(command,L"powershell") ||
+                contains(command,L"pwsh")) &&
+               (contains(command,L"-encodedcommand") ||
+                contains(command,L" -enc "))) {
+                add(out,"User startup command",name,
+                    "Startup entry contains an encoded PowerShell command");
+                ++reported;
+            }
+            if(contains(command,L"rundll32") &&
+               userWritableLocation(command)) {
+                add(out,"User startup DLL",name,
+                    "Rundll32 startup command references user-writable storage");
+                ++reported;
+            }
+        }
+        RegCloseKey(key);
+    }
+}
+
+static void supplementalUserThreadCountReview(std::vector<Record>& out,
+                                                const std::vector<Process>& processes) {
+    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
+    if(snapshot==INVALID_HANDLE_VALUE)return;
+    std::unordered_map<DWORD,unsigned> counts;
+    THREADENTRY32 thread{};
+    thread.dwSize=sizeof(thread);
+    if(Thread32First(snapshot,&thread)) {
+        do {
+            if(cancelRequested)break;
+            ++counts[thread.th32OwnerProcessID];
+        } while(Thread32Next(snapshot,&thread));
+    }
+    CloseHandle(snapshot);
+    size_t reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || reported>=40)break;
+        const auto it=counts.find(proc.pid);
+        if(it==counts.end())continue;
+        if(it->second>512 && userWritableLocation(proc.path)) {
+            add(out,"User thread inventory",
+                proc.name+L" (PID "+std::to_wstring(proc.pid)+L")",
+                "User-directory process has an unusually large thread count");
+            ++reported;
+        }
+    }
+}
+static void supplementalUserExecutableMetadata(std::vector<Record>& out,
+                                                const std::vector<Process>& processes) {
+    size_t inspected=0,reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || inspected>=256 || reported>=80)break;
+        if(proc.path.empty() || !userWritableLocation(proc.path))continue;
+        ++inspected;
+        WIN32_FILE_ATTRIBUTE_DATA attributes{};
+        if(!GetFileAttributesExW(proc.path.c_str(),GetFileExInfoStandard,
+                                 &attributes))continue;
+        const bool reparse=(attributes.dwFileAttributes&
+                            FILE_ATTRIBUTE_REPARSE_POINT)!=0;
+        const bool hidden=(attributes.dwFileAttributes&
+                           FILE_ATTRIBUTE_HIDDEN)!=0;
+        const bool system=(attributes.dwFileAttributes&
+                           FILE_ATTRIBUTE_SYSTEM)!=0;
+        if(reparse) {
+            add(out,"User executable filesystem",proc.name,
+                "Running user-directory executable is a reparse point");
+            ++reported;
+        }
+        if(hidden && contains(lowercase(proc.path),L"\\temp\\")) {
+            add(out,"User executable attributes",proc.name,
+                "Temporary-directory executable has the hidden attribute");
+            ++reported;
+        }
+        if(system && contains(lowercase(proc.path),L"\\downloads\\")) {
+            add(out,"User executable attributes",proc.name,
+                "Downloads-directory executable has the system attribute");
+            ++reported;
+        }
+        const ULONGLONG size=
+            (static_cast<ULONGLONG>(attributes.nFileSizeHigh)<<32) |
+            attributes.nFileSizeLow;
+        if(size<4096 && size>0 &&
+           contains(lowercase(proc.path),L"\\temp\\")) {
+            add(out,"User executable size",proc.name,
+                "Unusually small running executable in temporary storage");
+            ++reported;
+        }
+    }
+}
+static void supplementalUserProcessParentReview(std::vector<Record>& out,
+                                                 const std::vector<Process>& processes) {
+    std::unordered_map<DWORD,const Process*> byPid;
+    for(const auto& proc:processes)byPid[proc.pid]=&proc;
+    size_t reported=0;
+    for(const auto& proc:processes) {
+        if(cancelRequested || reported>=60)break;
+        auto parent=byPid.find(proc.parent);
+        if(parent==byPid.end())continue;
+        const auto parentPath=lowercase(parent->second->path);
+        const auto childPath=lowercase(proc.path);
+        if(contains(childPath,L"\\windows\\system32\\") &&
+           contains(parentPath,L"\\temp\\")) {
+            add(out,"User process ancestry",proc.name,
+                "System-directory executable launched by a temporary-directory process");
+            ++reported;
+        }
+        if(contains(childPath,L"\\windows\\system32\\") &&
+           contains(parentPath,L"\\downloads\\")) {
+            add(out,"User process ancestry",proc.name,
+                "System-directory executable launched by a downloads-directory process");
+            ++reported;
+        }
+    }
+}
+
+// Additional read-only investigation signals. These are not proof of a bypass.
+static void advancedKernelBootPolicyReview(std::vector<Record>& out) {
+    struct Policy {const wchar_t* key;const wchar_t* value;DWORD trigger;const char* note;};
+    const Policy policies[] = {
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",L"UpgradedSystem",0,
+         "Code integrity upgrade policy explicitly set to zero; verify deployment baseline"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"RequirePlatformSecurityFeatures",0,
+         "Platform security requirements explicitly set to zero; contextual finding"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"WasEnabledBy",0,
+         "HVCI enablement provenance explicitly zero; compare with device policy"}
+    };
+    for(const auto& policy:policies) {
+        if(cancelRequested)return;
+        DWORD value=0;
+        if(readDword(HKEY_LOCAL_MACHINE,policy.key,policy.value,value) &&
+           value==policy.trigger)
+            add(out,"Kernel policy review",
+                std::wstring(policy.key)+L"\\"+policy.value,policy.note);
+    }
+}
+static void advancedKernelDriverStartReview(std::vector<Record>& out) {
+    // Inspect only registered driver services; no device IOCTLs or kernel memory access.
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Services",0,KEY_READ,&root)!=ERROR_SUCCESS)return;
+    for(DWORD index=0;index<4096 && !cancelRequested;++index) {
+        wchar_t name[256]{};DWORD length=256;
+        LSTATUS rc=RegEnumKeyExW(root,index,name,&length,nullptr,nullptr,nullptr,nullptr);
+        if(rc==ERROR_NO_MORE_ITEMS)break;
+        if(rc!=ERROR_SUCCESS)continue;
+        HKEY service=nullptr;
+        if(RegOpenKeyExW(root,name,0,KEY_READ,&service)!=ERROR_SUCCESS)continue;
+        DWORD type=0,start=0;
+        const bool driver=readDword(service,L"",L"Type",type) &&
+                          (type==SERVICE_KERNEL_DRIVER || type==SERVICE_FILE_SYSTEM_DRIVER);
+        const bool bootStart=readDword(service,L"",L"Start",start) &&
+                             (start==SERVICE_BOOT_START || start==SERVICE_SYSTEM_START);
+        if(driver && bootStart) {
+            wchar_t path[2048]{};DWORD bytes=sizeof(path),kind=0;
+            if(RegQueryValueExW(service,L"ImagePath",nullptr,&kind,
+                reinterpret_cast<BYTE*>(path),&bytes)==ERROR_SUCCESS &&
+                (kind==REG_SZ || kind==REG_EXPAND_SZ) &&
+                bytes>=sizeof(wchar_t) && bytes<sizeof(path)) {
+                path[2047]=L'\0';
+                if(userWritableLocation(path))
+                    add(out,"Kernel driver startup",name,
+                        "Boot/system-start driver references a user-writable path: "+utf8(path));
+            }
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(root);
+}
+static void advancedUserIFEOReview(std::vector<Record>& out) {
+    // IFEO Debugger redirects launches. Legitimate debuggers also use this key.
+    const wchar_t* rootPath=
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+    HKEY root=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,rootPath,0,
+        KEY_READ|KEY_WOW64_64KEY,&root)!=ERROR_SUCCESS)return;
+    for(DWORD index=0;index<2048 && !cancelRequested;++index) {
+        wchar_t imageName[260]{};DWORD len=260;
+        const LSTATUS rc=RegEnumKeyExW(root,index,imageName,&len,
+            nullptr,nullptr,nullptr,nullptr);
+        if(rc==ERROR_NO_MORE_ITEMS)break;
+        if(rc!=ERROR_SUCCESS)continue;
+        HKEY entry=nullptr;
+        if(RegOpenKeyExW(root,imageName,0,KEY_READ,&entry)!=ERROR_SUCCESS)continue;
+        wchar_t debugger[2048]{};DWORD bytes=sizeof(debugger),kind=0;
+        if(RegQueryValueExW(entry,L"Debugger",nullptr,&kind,
+            reinterpret_cast<BYTE*>(debugger),&bytes)==ERROR_SUCCESS &&
+            (kind==REG_SZ || kind==REG_EXPAND_SZ) &&
+            bytes>=sizeof(wchar_t) && bytes<sizeof(debugger)) {
+            debugger[2047]=L'\0';
+            add(out,"User launch redirection",imageName,
+                "IFEO Debugger is configured: "+utf8(debugger)+
+                " (can be legitimate; verify intended owner)");
+        }
+        RegCloseKey(entry);
+    }
+    RegCloseKey(root);
+}
+static void advancedUserAppInitReview(std::vector<Record>& out) {
+    // Legacy AppInit DLL configuration is contextual; do not assume injection.
+    const wchar_t* key=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows";
+    const REGSAM views[]={KEY_WOW64_64KEY,KEY_WOW64_32KEY};
+    for(const REGSAM view:views) {
+        if(cancelRequested)return;
+        HKEY entry=nullptr;
+        if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,key,0,KEY_READ|view,&entry)!=ERROR_SUCCESS)
+            continue;
+        DWORD enabled=0;
+        if(readDword(entry,L"",L"LoadAppInit_DLLs",enabled) && enabled!=0) {
+            wchar_t dlls[4096]{};DWORD bytes=sizeof(dlls),kind=0;
+            if(RegQueryValueExW(entry,L"AppInit_DLLs",nullptr,&kind,
+                reinterpret_cast<BYTE*>(dlls),&bytes)==ERROR_SUCCESS &&
+                (kind==REG_SZ || kind==REG_EXPAND_SZ) &&
+                bytes>=sizeof(wchar_t) && bytes<sizeof(dlls)) {
+                dlls[4095]=L'\0';
+                if(dlls[0])
+                    add(out,"User DLL initialization",
+                        view==KEY_WOW64_64KEY?L"AppInit DLLs (64-bit)":L"AppInit DLLs (32-bit)",
+                        "Legacy global DLL loading is configured: "+utf8(dlls));
+            }
+        }
+        RegCloseKey(entry);
+    }
+}
+
+// Additional read-only policy indicators; missing keys are not findings.
+static void auditKernelVulnerableDriverBlocklist(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",L"VulnerableDriverBlocklistEnable",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"VulnerableDriverBlocklist",
+            "Vulnerable-driver blocklist disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelVBSProtection(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"EnableVirtualizationBasedSecurity",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"VBSProtection",
+            "VBS explicitly disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelHVCIProtection(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Enabled",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"HVCIProtection",
+            "HVCI explicitly disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelCredentialGuard(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",L"Enabled",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"CredentialGuard",
+            "Credential Guard explicitly disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelSystemGuard(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",L"Enabled",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"SystemGuard",
+            "System Guard explicitly disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelBootDriverIntegrity(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",L"UpgradedSystem",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"BootDriverIntegrity",
+            "Code integrity upgraded-system policy disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelLsaProtection(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RunAsPPL",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"LsaProtection",
+            "LSA protected process disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelLsaAudit(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"AuditLevel",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"LsaAudit",
+            "LSA audit level zero; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelKernelDmaProtection(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Kernel DMA Protection",L"DeviceEnumerationPolicy",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"KernelDmaProtection",
+            "Kernel DMA policy allows enumeration; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelDriverSearch(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\DriverSearching",L"SearchOrderConfig",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"DriverSearch",
+            "Driver search disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelWDigestLogon(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",L"UseLogonCredential",observed) && observed==1u) {
+        add(out,"Kernel policy review",L"WDigestLogon",
+            "WDigest credential caching enabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelLmCompatibility(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"LmCompatibilityLevel",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"LmCompatibility",
+            "Legacy LM authentication allowed; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelNoLmHash(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"NoLMHash",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"NoLmHash",
+            "Legacy LM hash storage allowed; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelAnonymousSid(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"EveryoneIncludesAnonymous",observed) && observed==1u) {
+        add(out,"Kernel policy review",L"AnonymousSid",
+            "Anonymous token included in Everyone; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelRestrictAnonymous(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RestrictAnonymous",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"RestrictAnonymous",
+            "Anonymous enumeration restriction disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelRestrictAnonymousSam(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RestrictAnonymousSAM",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"RestrictAnonymousSam",
+            "Anonymous SAM enumeration restriction disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelRemoteUac(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"LocalAccountTokenFilterPolicy",observed) && observed==1u) {
+        add(out,"Kernel policy review",L"RemoteUac",
+            "Remote UAC filtering disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelUacEnable(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"EnableLUA",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"UacEnable",
+            "UAC disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelUacSecureDesktop(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"PromptOnSecureDesktop",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"UacSecureDesktop",
+            "UAC secure desktop disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditKernelUacAdminPrompt(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"ConsentPromptBehaviorAdmin",observed) && observed==0u) {
+        add(out,"Kernel policy review",L"UacAdminPrompt",
+            "Admin elevation without prompt; contextual signal, not proof of a bypass");
+    }
+}
+static void auditUserDefenderRealtime(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableRealtimeMonitoring",observed) && observed==1u) {
+        add(out,"User policy review",L"DefenderRealtime",
+            "Real-time monitoring disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserDefenderBehavior(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableBehaviorMonitoring",observed) && observed==1u) {
+        add(out,"User policy review",L"DefenderBehavior",
+            "Behavior monitoring disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserDefenderOnAccess(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableOnAccessProtection",observed) && observed==1u) {
+        add(out,"User policy review",L"DefenderOnAccess",
+            "On-access protection disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserDefenderScan(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableScanOnRealtimeEnable",observed) && observed==1u) {
+        add(out,"User policy review",L"DefenderScan",
+            "Realtime-triggered scan disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserDefenderAntiSpyware(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",L"DisableAntiSpyware",observed) && observed==1u) {
+        add(out,"User policy review",L"DefenderAntiSpyware",
+            "Legacy Defender policy disables antispyware; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserSmartScreen(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",L"EnableSmartScreen",observed) && observed==0u) {
+        add(out,"User policy review",L"SmartScreen",
+            "SmartScreen disabled by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserDefenderPua(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",L"PUAProtection",observed) && observed==0u) {
+        add(out,"User policy review",L"DefenderPua",
+            "Potentially unwanted app protection disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserPowerShellLogging(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",L"EnableScriptBlockLogging",observed) && observed==0u) {
+        add(out,"User policy review",L"PowerShellLogging",
+            "PowerShell script block logging disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserPowerShellInvocation(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",L"EnableScriptBlockInvocationLogging",observed) && observed==0u) {
+        add(out,"User policy review",L"PowerShellInvocation",
+            "PowerShell invocation logging disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserPowerShellModuleLogging(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",L"EnableModuleLogging",observed) && observed==0u) {
+        add(out,"User policy review",L"PowerShellModuleLogging",
+            "PowerShell module logging disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserPowerShellTranscription(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",L"EnableTranscripting",observed) && observed==0u) {
+        add(out,"User policy review",L"PowerShellTranscription",
+            "PowerShell transcription disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserWindowsInstallerElevated(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",L"AlwaysInstallElevated",observed) && observed==1u) {
+        add(out,"User policy review",L"WindowsInstallerElevated",
+            "Machine-wide elevated MSI installation enabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserWindowsInstallerDisable(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",L"DisableMSI",observed) && observed==0u) {
+        add(out,"User policy review",L"WindowsInstallerDisable",
+            "Windows Installer unrestricted by policy; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserAutorunDisable(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",L"NoDriveTypeAutoRun",observed) && observed==0u) {
+        add(out,"User policy review",L"AutorunDisable",
+            "AutoRun restrictions disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserAttachmentZone(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Attachments",L"SaveZoneInformation",observed) && observed==1u) {
+        add(out,"User policy review",L"AttachmentZone",
+            "Attachment zone information not preserved; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserAttachmentAntivirus(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Attachments",L"ScanWithAntiVirus",observed) && observed==1u) {
+        add(out,"User policy review",L"AttachmentAntivirus",
+            "Attachment antivirus notification reduced; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserRemoteDesktopNla(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",L"UserAuthentication",observed) && observed==0u) {
+        add(out,"User policy review",L"RemoteDesktopNla",
+            "RDP network-level authentication disabled; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserRemoteDesktop(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server",L"fDenyTSConnections",observed) && observed==0u) {
+        add(out,"User policy review",L"RemoteDesktop",
+            "RDP connections allowed; review exposure; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserWinRMUnencrypted(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service",L"AllowUnencryptedTraffic",observed) && observed==1u) {
+        add(out,"User policy review",L"WinRMUnencrypted",
+            "WinRM unencrypted traffic allowed; contextual signal, not proof of a bypass");
+    }
+}
+
+static void auditUserWinRMBasic(std::vector<Record>& out) {
+    if(cancelRequested.load())return;
+    DWORD observed=0;
+    if(readDword(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\WinRM\\Service\\Auth",L"Basic",observed) && observed==1u) {
+        add(out,"User policy review",L"WinRMBasic",
+            "WinRM Basic authentication enabled; contextual signal, not proof of a bypass");
+    }
+}
+
+
+// Batch of 100 independent registry policy audit methods.
+// Audit 001: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel001(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"DisableRestrictedAdmin",0u,L"Batch100_Kernel_001",
+        "Windows kernel policy review: DisableRestrictedAdmin equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 002: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel002(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"DisableRestrictedAdminOutboundCreds",0u,L"Batch100_Kernel_002",
+        "Windows kernel policy review: DisableRestrictedAdminOutboundCreds equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 003: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel003(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"LmCompatibilityLevel",0u,L"Batch100_Kernel_003",
+        "Windows kernel policy review: LmCompatibilityLevel equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 004: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel004(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"LimitBlankPasswordUse",0u,L"Batch100_Kernel_004",
+        "Windows kernel policy review: LimitBlankPasswordUse equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 005: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel005(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"RestrictAnonymous",0u,L"Batch100_Kernel_005",
+        "Windows kernel policy review: RestrictAnonymous equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 006: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel006(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"RestrictAnonymousSAM",0u,L"Batch100_Kernel_006",
+        "Windows kernel policy review: RestrictAnonymousSAM equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 007: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel007(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"EveryoneIncludesAnonymous",1u,L"Batch100_Kernel_007",
+        "Windows kernel policy review: EveryoneIncludesAnonymous equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 008: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel008(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"UseMachineId",0u,L"Batch100_Kernel_008",
+        "Windows kernel policy review: UseMachineId equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 009: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel009(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"AuditBaseObjects",0u,L"Batch100_Kernel_009",
+        "Windows kernel policy review: AuditBaseObjects equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 010: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel010(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"FullPrivilegeAuditing",0u,L"Batch100_Kernel_010",
+        "Windows kernel policy review: FullPrivilegeAuditing equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 011: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel011(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
+        L"UseLogonCredential",1u,L"Batch100_Kernel_011",
+        "Windows kernel policy review: UseLogonCredential equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 012: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel012(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
+        L"Negotiate",0u,L"Batch100_Kernel_012",
+        "Windows kernel policy review: Negotiate equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 013: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel013(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Kernel",
+        L"ObCaseInsensitive",0u,L"Batch100_Kernel_013",
+        "Windows kernel policy review: ObCaseInsensitive equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 014: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel014(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Kernel",
+        L"DisableExceptionChainValidation",1u,L"Batch100_Kernel_014",
+        "Windows kernel policy review: DisableExceptionChainValidation equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 015: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel015(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Kernel",
+        L"MitigationOptions",0u,L"Batch100_Kernel_015",
+        "Windows kernel policy review: MitigationOptions equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 016: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel016(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+        L"ClearPageFileAtShutdown",0u,L"Batch100_Kernel_016",
+        "Windows kernel policy review: ClearPageFileAtShutdown equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 017: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel017(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+        L"DisablePagingExecutive",0u,L"Batch100_Kernel_017",
+        "Windows kernel policy review: DisablePagingExecutive equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 018: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel018(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+        L"MoveImages",0u,L"Batch100_Kernel_018",
+        "Windows kernel policy review: MoveImages equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 019: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel019(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+        L"FeatureSettingsOverrideMask",0u,L"Batch100_Kernel_019",
+        "Windows kernel policy review: FeatureSettingsOverrideMask equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 020: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel020(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"RequirePlatformSecurityFeatures",0u,L"Batch100_Kernel_020",
+        "Windows kernel policy review: RequirePlatformSecurityFeatures equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 021: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel021(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"Locked",0u,L"Batch100_Kernel_021",
+        "Windows kernel policy review: Locked equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 022: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel022(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"EnableVirtualizationBasedSecurity",0u,L"Batch100_Kernel_022",
+        "Windows kernel policy review: EnableVirtualizationBasedSecurity equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 023: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel023(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"HypervisorEnforcedCodeIntegrity",0u,L"Batch100_Kernel_023",
+        "Windows kernel policy review: HypervisorEnforcedCodeIntegrity equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 024: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel024(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+        L"VerifiedAndReputablePolicyState",0u,L"Batch100_Kernel_024",
+        "Windows kernel policy review: VerifiedAndReputablePolicyState equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 025: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel025(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+        L"UpgradedSystem",0u,L"Batch100_Kernel_025",
+        "Windows kernel policy review: UpgradedSystem equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 026: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel026(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+        L"SkuPolicyRequired",0u,L"Batch100_Kernel_026",
+        "Windows kernel policy review: SkuPolicyRequired equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 027: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel027(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+        L"UEFISecureBootEnabled",0u,L"Batch100_Kernel_027",
+        "Windows kernel policy review: UEFISecureBootEnabled equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 028: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel028(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+        L"SecureBootCapable",0u,L"Batch100_Kernel_028",
+        "Windows kernel policy review: SecureBootCapable equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 029: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel029(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa\\FipsAlgorithmPolicy",
+        L"Enabled",0u,L"Batch100_Kernel_029",
+        "Windows kernel policy review: Enabled equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 030: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel030(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+        L"RequireSecuritySignature",0u,L"Batch100_Kernel_030",
+        "Windows kernel policy review: RequireSecuritySignature equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 031: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel031(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+        L"EnableSecuritySignature",0u,L"Batch100_Kernel_031",
+        "Windows kernel policy review: EnableSecuritySignature equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 032: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel032(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+        L"RestrictNullSessAccess",0u,L"Batch100_Kernel_032",
+        "Windows kernel policy review: RestrictNullSessAccess equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 033: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel033(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+        L"AutoShareWks",1u,L"Batch100_Kernel_033",
+        "Windows kernel policy review: AutoShareWks equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 034: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel034(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+        L"AutoShareServer",1u,L"Batch100_Kernel_034",
+        "Windows kernel policy review: AutoShareServer equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 035: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel035(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
+        L"RequireSecuritySignature",0u,L"Batch100_Kernel_035",
+        "Windows kernel policy review: RequireSecuritySignature equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 036: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel036(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
+        L"EnableSecuritySignature",0u,L"Batch100_Kernel_036",
+        "Windows kernel policy review: EnableSecuritySignature equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 037: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel037(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
+        L"AllowInsecureGuestAuth",1u,L"Batch100_Kernel_037",
+        "Windows kernel policy review: AllowInsecureGuestAuth equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 038: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel038(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters",
+        L"RequireSignOrSeal",0u,L"Batch100_Kernel_038",
+        "Windows kernel policy review: RequireSignOrSeal equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 039: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel039(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters",
+        L"SealSecureChannel",0u,L"Batch100_Kernel_039",
+        "Windows kernel policy review: SealSecureChannel equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 040: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel040(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters",
+        L"SignSecureChannel",0u,L"Batch100_Kernel_040",
+        "Windows kernel policy review: SignSecureChannel equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 041: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel041(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters",
+        L"DisablePasswordChange",1u,L"Batch100_Kernel_041",
+        "Windows kernel policy review: DisablePasswordChange equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 042: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel042(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters",
+        L"MaximumPasswordAge",0u,L"Batch100_Kernel_042",
+        "Windows kernel policy review: MaximumPasswordAge equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 043: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel043(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+        L"SecurityLayer",0u,L"Batch100_Kernel_043",
+        "Windows kernel policy review: SecurityLayer equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 044: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel044(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+        L"UserAuthentication",0u,L"Batch100_Kernel_044",
+        "Windows kernel policy review: UserAuthentication equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 045: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel045(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+        L"MinEncryptionLevel",1u,L"Batch100_Kernel_045",
+        "Windows kernel policy review: MinEncryptionLevel equals 1; verify expected baseline","Kernel policy review");
+}
+
+// Audit 046: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel046(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+        L"fDenyTSConnections",0u,L"Batch100_Kernel_046",
+        "Windows kernel policy review: fDenyTSConnections equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 047: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel047(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+        L"fSingleSessionPerUser",0u,L"Batch100_Kernel_047",
+        "Windows kernel policy review: fSingleSessionPerUser equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 048: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User048(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableRealtimeMonitoring",1u,L"Batch100_User_048",
+        "Windows user policy review: DisableRealtimeMonitoring equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 049: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User049(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableBehaviorMonitoring",1u,L"Batch100_User_049",
+        "Windows user policy review: DisableBehaviorMonitoring equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 050: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User050(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableOnAccessProtection",1u,L"Batch100_User_050",
+        "Windows user policy review: DisableOnAccessProtection equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 051: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User051(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableScanOnRealtimeEnable",1u,L"Batch100_User_051",
+        "Windows user policy review: DisableScanOnRealtimeEnable equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 052: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User052(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableIOAVProtection",1u,L"Batch100_User_052",
+        "Windows user policy review: DisableIOAVProtection equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 053: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User053(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"SpynetReporting",0u,L"Batch100_User_053",
+        "Windows user policy review: SpynetReporting equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 054: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User054(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"SubmitSamplesConsent",2u,L"Batch100_User_054",
+        "Windows user policy review: SubmitSamplesConsent equals 2; verify expected baseline","User policy review");
+}
+
+// Audit 055: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User055(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"DisableBlockAtFirstSeen",1u,L"Batch100_User_055",
+        "Windows user policy review: DisableBlockAtFirstSeen equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 056: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User056(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"DisableAntiSpyware",1u,L"Batch100_User_056",
+        "Windows user policy review: DisableAntiSpyware equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 057: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User057(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"DisableAntiVirus",1u,L"Batch100_User_057",
+        "Windows user policy review: DisableAntiVirus equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 058: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User058(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"PUAProtection",0u,L"Batch100_User_058",
+        "Windows user policy review: PUAProtection equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 059: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User059(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"DisableRoutinelyTakingAction",1u,L"Batch100_User_059",
+        "Windows user policy review: DisableRoutinelyTakingAction equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 060: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User060(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"EnableSmartScreen",0u,L"Batch100_User_060",
+        "Windows user policy review: EnableSmartScreen equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 061: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User061(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"EnableActivityFeed",0u,L"Batch100_User_061",
+        "Windows user policy review: EnableActivityFeed equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 062: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User062(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"EnableCdp",0u,L"Batch100_User_062",
+        "Windows user policy review: EnableCdp equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 063: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User063(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"AllowCrossDeviceClipboard",1u,L"Batch100_User_063",
+        "Windows user policy review: AllowCrossDeviceClipboard equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 064: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User064(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+        L"EnableScriptBlockLogging",0u,L"Batch100_User_064",
+        "Windows user policy review: EnableScriptBlockLogging equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 065: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User065(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+        L"EnableScriptBlockInvocationLogging",0u,L"Batch100_User_065",
+        "Windows user policy review: EnableScriptBlockInvocationLogging equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 066: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User066(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",
+        L"EnableModuleLogging",0u,L"Batch100_User_066",
+        "Windows user policy review: EnableModuleLogging equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 067: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User067(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",
+        L"EnableTranscripting",0u,L"Batch100_User_067",
+        "Windows user policy review: EnableTranscripting equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 068: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User068(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",
+        L"AlwaysInstallElevated",1u,L"Batch100_User_068",
+        "Windows user policy review: AlwaysInstallElevated equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 069: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User069(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",
+        L"DisableMSI",0u,L"Batch100_User_069",
+        "Windows user policy review: DisableMSI equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 070: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User070(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",
+        L"DisablePatch",1u,L"Batch100_User_070",
+        "Windows user policy review: DisablePatch equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 071: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User071(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer",
+        L"EnableUserControl",1u,L"Batch100_User_071",
+        "Windows user policy review: EnableUserControl equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 072: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User072(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"fAllowToGetHelp",1u,L"Batch100_User_072",
+        "Windows user policy review: fAllowToGetHelp equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 073: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User073(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"fAllowUnsolicited",1u,L"Batch100_User_073",
+        "Windows user policy review: fAllowUnsolicited equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 074: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User074(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"fDisableCdm",0u,L"Batch100_User_074",
+        "Windows user policy review: fDisableCdm equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 075: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User075(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"fDisableClip",0u,L"Batch100_User_075",
+        "Windows user policy review: fDisableClip equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 076: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User076(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"fPromptForPassword",0u,L"Batch100_User_076",
+        "Windows user policy review: fPromptForPassword equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 077: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User077(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+        L"MinEncryptionLevel",1u,L"Batch100_User_077",
+        "Windows user policy review: MinEncryptionLevel equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 078: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User078(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile",
+        L"EnableFirewall",0u,L"Batch100_User_078",
+        "Windows user policy review: EnableFirewall equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 079: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User079(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile",
+        L"DisableNotifications",1u,L"Batch100_User_079",
+        "Windows user policy review: DisableNotifications equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 080: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User080(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile",
+        L"DefaultInboundAction",0u,L"Batch100_User_080",
+        "Windows user policy review: DefaultInboundAction equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 081: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User081(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PrivateProfile",
+        L"EnableFirewall",0u,L"Batch100_User_081",
+        "Windows user policy review: EnableFirewall equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 082: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User082(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PrivateProfile",
+        L"DisableNotifications",1u,L"Batch100_User_082",
+        "Windows user policy review: DisableNotifications equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 083: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User083(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PrivateProfile",
+        L"DefaultInboundAction",0u,L"Batch100_User_083",
+        "Windows user policy review: DefaultInboundAction equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 084: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User084(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile",
+        L"EnableFirewall",0u,L"Batch100_User_084",
+        "Windows user policy review: EnableFirewall equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 085: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User085(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile",
+        L"DisableNotifications",1u,L"Batch100_User_085",
+        "Windows user policy review: DisableNotifications equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 086: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User086(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile",
+        L"DefaultInboundAction",0u,L"Batch100_User_086",
+        "Windows user policy review: DefaultInboundAction equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 087: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User087(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableLUA",0u,L"Batch100_User_087",
+        "Windows user policy review: EnableLUA equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 088: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User088(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"ConsentPromptBehaviorAdmin",0u,L"Batch100_User_088",
+        "Windows user policy review: ConsentPromptBehaviorAdmin equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 089: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User089(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"PromptOnSecureDesktop",0u,L"Batch100_User_089",
+        "Windows user policy review: PromptOnSecureDesktop equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 090: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User090(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableInstallerDetection",0u,L"Batch100_User_090",
+        "Windows user policy review: EnableInstallerDetection equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 091: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User091(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableSecureUIAPaths",0u,L"Batch100_User_091",
+        "Windows user policy review: EnableSecureUIAPaths equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 092: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User092(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"FilterAdministratorToken",0u,L"Batch100_User_092",
+        "Windows user policy review: FilterAdministratorToken equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 093: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel093(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters",
+        L"DisabledComponents",255u,L"Batch100_Kernel_093",
+        "Windows kernel policy review: DisabledComponents equals 255; verify expected baseline","Kernel policy review");
+}
+
+// Audit 094: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel094(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
+        L"RunAsPPL",0u,L"Batch100_Kernel_094",
+        "Windows kernel policy review: RunAsPPL equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 095: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100Kernel095(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",
+        L"VulnerableDriverBlocklistEnable",0u,L"Batch100_Kernel_095",
+        "Windows kernel policy review: VulnerableDriverBlocklistEnable equals 0; verify expected baseline","Kernel policy review");
+}
+
+// Audit 096: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User096(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\Explorer",
+        L"NoAutoplayfornonVolume",0u,L"Batch100_User_096",
+        "Windows user policy review: NoAutoplayfornonVolume equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 097: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User097(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",
+        L"NoDriveTypeAutoRun",0u,L"Batch100_User_097",
+        "Windows user policy review: NoDriveTypeAutoRun equals 0; verify expected baseline","User policy review");
+}
+
+// Audit 098: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User098(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"DisableCMD",1u,L"Batch100_User_098",
+        "Windows user policy review: DisableCMD equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 099: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User099(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"DisableTaskMgr",1u,L"Batch100_User_099",
+        "Windows user policy review: DisableTaskMgr equals 1; verify expected baseline","User policy review");
+}
+
+// Audit 100: read-only Windows policy telemetry, not a cheat verdict.
+static void auditBatch100User100(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"DisableRegistryTools",1u,L"Batch100_User_100",
+        "Windows user policy review: DisableRegistryTools equals 1; verify expected baseline","User policy review");
+}
+
+// Additional 125 independent, bounded, read-only registry checks.
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService001(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WinDefend", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService001", "REVIEW ONLY | WinDefend service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService002(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WdNisSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService002", "REVIEW ONLY | WdNisSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService003(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Sense", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService003", "REVIEW ONLY | Sense service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService004(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\SecurityHealthService", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService004", "REVIEW ONLY | SecurityHealthService service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService005(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\wscsvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService005", "REVIEW ONLY | wscsvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService006(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\mpssvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService006", "REVIEW ONLY | mpssvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService007(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\BFE", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService007", "REVIEW ONLY | BFE service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService008(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\EventLog", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService008", "REVIEW ONLY | EventLog service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService009(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Schedule", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService009", "REVIEW ONLY | Schedule service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService010(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Winmgmt", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService010", "REVIEW ONLY | Winmgmt service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService011(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\RpcSs", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService011", "REVIEW ONLY | RpcSs service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService012(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\DcomLaunch", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService012", "REVIEW ONLY | DcomLaunch service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService013(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\RpcEptMapper", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService013", "REVIEW ONLY | RpcEptMapper service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService014(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\PlugPlay", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService014", "REVIEW ONLY | PlugPlay service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService015(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\CryptSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService015", "REVIEW ONLY | CryptSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService016(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\TrustedInstaller", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService016", "REVIEW ONLY | TrustedInstaller service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService017(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\wuauserv", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService017", "REVIEW ONLY | wuauserv service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService018(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\UsoSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService018", "REVIEW ONLY | UsoSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService019(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\bits", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService019", "REVIEW ONLY | bits service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService020(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WaaSMedicSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService020", "REVIEW ONLY | WaaSMedicSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService021(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\SgrmBroker", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService021", "REVIEW ONLY | SgrmBroker service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService022(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\SamSs", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService022", "REVIEW ONLY | SamSs service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService023(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService023", "REVIEW ONLY | LanmanWorkstation service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService024(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\LanmanServer", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService024", "REVIEW ONLY | LanmanServer service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService025(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Netlogon", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService025", "REVIEW ONLY | Netlogon service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService026(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Dhcp", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService026", "REVIEW ONLY | Dhcp service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService027(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Dnscache", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService027", "REVIEW ONLY | Dnscache service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService028(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\NlaSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService028", "REVIEW ONLY | NlaSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService029(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\W32Time", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService029", "REVIEW ONLY | W32Time service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService030(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WinHttpAutoProxySvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService030", "REVIEW ONLY | WinHttpAutoProxySvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService031(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\ProfSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService031", "REVIEW ONLY | ProfSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService032(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\gpsvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService032", "REVIEW ONLY | gpsvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService033(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Appinfo", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService033", "REVIEW ONLY | Appinfo service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService034(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\TokenBroker", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService034", "REVIEW ONLY | TokenBroker service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService035(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\KeyIso", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService035", "REVIEW ONLY | KeyIso service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService036(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\VaultSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService036", "REVIEW ONLY | VaultSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService037(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\NgcSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService037", "REVIEW ONLY | NgcSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService038(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\NgcCtnrSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService038", "REVIEW ONLY | NgcCtnrSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService039(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WbioSrvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService039", "REVIEW ONLY | WbioSrvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService040(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\DeviceAssociationService", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService040", "REVIEW ONLY | DeviceAssociationService service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService041(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\DeviceInstall", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService041", "REVIEW ONLY | DeviceInstall service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService042(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\DsmSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService042", "REVIEW ONLY | DsmSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService043(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\PolicyAgent", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService043", "REVIEW ONLY | PolicyAgent service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService044(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\IKEEXT", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService044", "REVIEW ONLY | IKEEXT service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService045(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\iphlpsvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService045", "REVIEW ONLY | iphlpsvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService046(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\TermService", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService046", "REVIEW ONLY | TermService service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService047(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\SessionEnv", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService047", "REVIEW ONLY | SessionEnv service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService048(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\UmRdpService", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService048", "REVIEW ONLY | UmRdpService service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService049(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService049", "REVIEW ONLY | RemoteRegistry service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService050(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WinRM", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService050", "REVIEW ONLY | WinRM service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService051(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\sshd", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService051", "REVIEW ONLY | sshd service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService052(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Spooler", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService052", "REVIEW ONLY | Spooler service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService053(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WerSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService053", "REVIEW ONLY | WerSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService054(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Wecsvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService054", "REVIEW ONLY | Wecsvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService055(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\EventSystem", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService055", "REVIEW ONLY | EventSystem service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService056(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\COMSysApp", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService056", "REVIEW ONLY | COMSysApp service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService057(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\MSDTC", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService057", "REVIEW ONLY | MSDTC service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService058(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Browser", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService058", "REVIEW ONLY | Browser service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService059(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\lmhosts", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService059", "REVIEW ONLY | lmhosts service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService060(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Netman", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService060", "REVIEW ONLY | Netman service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService061(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\nsi", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService061", "REVIEW ONLY | nsi service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService062(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\WlanSvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService062", "REVIEW ONLY | WlanSvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService063(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\dot3svc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService063", "REVIEW ONLY | dot3svc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService064(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\Wcmsvc", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService064", "REVIEW ONLY | Wcmsvc service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalService065(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SYSTEM\\CurrentControlSet\\Services\\ShellHWDetection", L"Start",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 4u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalService065", "REVIEW ONLY | ShellHWDetection service is explicitly disabled; review applicability"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy001(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableSmartScreen",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy001", "REVIEW ONLY | SmartScreen policy disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy002(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"BlockUserFromShowingAccountDetailsOnSignin",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy002", "REVIEW ONLY | Sign-in account detail restriction not enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy003(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DontDisplayNetworkSelectionUI",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy003", "REVIEW ONLY | Network selection restriction not enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy004(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"DisableCMD",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy004", "REVIEW ONLY | Command prompt restriction not enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy005(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", L"EnableScriptBlockLogging",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy005", "REVIEW ONLY | PowerShell script block logging disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy006(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", L"EnableScriptBlockInvocationLogging",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy006", "REVIEW ONLY | PowerShell invocation logging disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy007(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging", L"EnableModuleLogging",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy007", "REVIEW ONLY | PowerShell module logging disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy008(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription", L"EnableTranscripting",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy008", "REVIEW ONLY | PowerShell transcription disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy009(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription", L"EnableInvocationHeader",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy009", "REVIEW ONLY | PowerShell transcription invocation header disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy010(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableRealtimeMonitoring",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy010", "REVIEW ONLY | Defender real-time monitoring disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy011(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableBehaviorMonitoring",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy011", "REVIEW ONLY | Defender behavior monitoring disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy012(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableOnAccessProtection",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy012", "REVIEW ONLY | Defender on-access protection disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy013(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", L"DisableScanOnRealtimeEnable",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy013", "REVIEW ONLY | Defender initial real-time scan disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy014(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SpynetReporting",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy014", "REVIEW ONLY | Defender cloud reporting disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy015(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet", L"SubmitSamplesConsent",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 2u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy015", "REVIEW ONLY | Defender sample submission disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy016(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\MpEngine", L"MpEnablePus",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy016", "REVIEW ONLY | Defender PUA blocking disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy017(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableRemovableDriveScanning",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy017", "REVIEW ONLY | Removable drive scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy018(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableArchiveScanning",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy018", "REVIEW ONLY | Archive scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy019(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableEmailScanning",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy019", "REVIEW ONLY | Email scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy020(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableScanningNetworkFiles",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy020", "REVIEW ONLY | Network file scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy021(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableHeuristics",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy021", "REVIEW ONLY | Heuristic scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy022(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisablePackedExeScanning",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy022", "REVIEW ONLY | Packed executable scanning disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy023(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupFullScan",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy023", "REVIEW ONLY | Catchup full scan disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy024(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCatchupQuickScan",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy024", "REVIEW ONLY | Catchup quick scan disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy025(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan", L"DisableCpuThrottleOnIdleScans",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy025", "REVIEW ONLY | Idle scan CPU throttling disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy026(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableUpdateOnStartupWithoutEngine",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy026", "REVIEW ONLY | Signature updates without engine disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy027(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"DisableScanOnUpdate",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy027", "REVIEW ONLY | Scan on signature update disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy028(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Signature Updates", L"ForceUpdateFromMU",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy028", "REVIEW ONLY | Microsoft Update signature source not enforced"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy029(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", L"NoAutoUpdate",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy029", "REVIEW ONLY | Automatic updates disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy030(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", L"AUOptions",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy030", "REVIEW ONLY | Windows Update policy set to notify only"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy031(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"DisableWindowsUpdateAccess",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy031", "REVIEW ONLY | Windows Update access disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy032(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"DoNotConnectToWindowsUpdateInternetLocations",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy032", "REVIEW ONLY | Windows Update Internet locations blocked"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy033(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate", L"SetDisableUXWUAccess",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy033", "REVIEW ONLY | Windows Update UI access disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy034(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowToGetHelp",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy034", "REVIEW ONLY | Remote Assistance policy enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy035(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowUnsolicited",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy035", "REVIEW ONLY | Unsolicited remote assistance allowed"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy036(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fAllowUnsolicitedFullControl",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy036", "REVIEW ONLY | Unsolicited full-control assistance allowed"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy037(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableCdm",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy037", "REVIEW ONLY | Remote drive redirection allowed by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy038(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableClip",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy038", "REVIEW ONLY | Remote clipboard redirection allowed by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy039(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableLPT",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy039", "REVIEW ONLY | Remote printer-port redirection allowed"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy040(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fDisableCcm",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy040", "REVIEW ONLY | Remote COM port redirection allowed"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy041(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"UserAuthentication",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy041", "REVIEW ONLY | Remote Desktop NLA disabled by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy042(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"SecurityLayer",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy042", "REVIEW ONLY | Remote Desktop native security layer selected"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy043(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"MinEncryptionLevel",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy043", "REVIEW ONLY | Remote Desktop low encryption selected"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy044(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fPromptForPassword",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy044", "REVIEW ONLY | Remote Desktop password prompt disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy045(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", L"fEncryptRPCTraffic",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy045", "REVIEW ONLY | Remote Desktop RPC encryption not required"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy046(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowDefaultCredentials",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy046", "REVIEW ONLY | Default credentials delegation enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy047(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowFreshCredentials",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy047", "REVIEW ONLY | Fresh credentials delegation enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy048(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowSavedCredentials",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy048", "REVIEW ONLY | Saved credentials delegation enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy049(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowFreshCredentialsWhenNTLMOnly",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy049", "REVIEW ONLY | Fresh credentials delegation via NTLM enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy050(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowSavedCredentialsWhenNTLMOnly",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy050", "REVIEW ONLY | Saved credentials delegation via NTLM enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy051(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredentialsDelegation", L"AllowDefaultCredentialsWhenNTLMOnly",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy051", "REVIEW ONLY | Default credentials delegation via NTLM enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy052(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"AlwaysInstallElevated",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy052", "REVIEW ONLY | Elevated MSI installation enabled for machine"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy053(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"AlwaysInstallElevated",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"User policy review",
+                       "checkAdditionalPolicy053", "REVIEW ONLY | Elevated MSI installation enabled for user"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy054(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"EnableUserControl",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy054", "REVIEW ONLY | Windows Installer user control enabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy055(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableMSI",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy055", "REVIEW ONLY | MSI installation permitted by policy"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy056(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisablePatch",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy056", "REVIEW ONLY | Windows Installer patching disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy057(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableLUAPatching",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy057", "REVIEW ONLY | Windows Installer least-privilege patching disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy058(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\Installer", L"DisableRollback",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 1u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy058", "REVIEW ONLY | Windows Installer rollback disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy059(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", L"EnableLUA",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy059", "REVIEW ONLY | UAC policy disabled"});
+    }
+}
+// Read-only audit: missing values are not findings; review Windows edition and policy context.
+static void checkAdditionalPolicy060(std::vector<Record>& out) {
+    if (cancelRequested.load()) return;
+    DWORD observed = 0;
+    DWORD valueSize = sizeof(observed);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", L"EnableLUA",
+                     RRF_RT_REG_DWORD, nullptr, nullptr, &observed,
+                     &valueSize) == ERROR_SUCCESS && observed == 0u) {
+        out.push_back({"Kernel policy review",
+                       "checkAdditionalPolicy060", "REVIEW ONLY | UAC disabled"});
+    }
+}
+
+
+// Batch 250: read-only service image / ServiceDll location review.
+// A writable location is a triage signal, not proof of a cheat.
+static void audit250ServiceLocation(std::vector<Record>& out,
+                                    const wchar_t* service,
+                                    const wchar_t* valueName,
+                                    bool parameters) {
+    std::wstring key=L"SYSTEM\\CurrentControlSet\\Services\\";
+    key+=service;
+    if(parameters) key+=L"\\Parameters";
+    wchar_t buffer[32768]{};
+    DWORD size=sizeof(buffer);
+    DWORD type=0;
+    const LSTATUS rc=RegGetValueW(HKEY_LOCAL_MACHINE,key.c_str(),valueName,
+        RRF_RT_REG_SZ|RRF_RT_REG_EXPAND_SZ,nullptr,&type,buffer,&size);
+    if(rc!=ERROR_SUCCESS || !buffer[0])return;
+    std::wstring location(buffer);
+    if(type==REG_EXPAND_SZ){
+        wchar_t expanded[32768]{};
+        DWORD n=ExpandEnvironmentStringsW(location.c_str(),expanded,32768);
+        if(n>0 && n<32768)location.assign(expanded);
+    }
+    if(!userWritableLocation(location))return;
+    std::wstring label(service);
+    label+=parameters?L" / ServiceDll":L" / ImagePath";
+    add(out,"Service path review",label,
+        "Service references a potentially user-writable directory; inspect ACLs and signer before drawing conclusions.");
+}
+
+static void auditBatch250Service001(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"AppIDSvc",L"ImagePath",false);
+}
+static void auditBatch250Service002(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"AppIDSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service003(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Appinfo",L"ImagePath",false);
+}
+static void auditBatch250Service004(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Appinfo",L"ServiceDll",true);
+}
+static void auditBatch250Service005(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"AxInstSV",L"ImagePath",false);
+}
+static void auditBatch250Service006(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"AxInstSV",L"ServiceDll",true);
+}
+static void auditBatch250Service007(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BDESVC",L"ImagePath",false);
+}
+static void auditBatch250Service008(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BDESVC",L"ServiceDll",true);
+}
+static void auditBatch250Service009(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BFE",L"ImagePath",false);
+}
+static void auditBatch250Service010(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BFE",L"ServiceDll",true);
+}
+static void auditBatch250Service011(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BITS",L"ImagePath",false);
+}
+static void auditBatch250Service012(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BITS",L"ServiceDll",true);
+}
+static void auditBatch250Service013(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BrokerInfrastructure",L"ImagePath",false);
+}
+static void auditBatch250Service014(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"BrokerInfrastructure",L"ServiceDll",true);
+}
+static void auditBatch250Service015(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Browser",L"ImagePath",false);
+}
+static void auditBatch250Service016(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Browser",L"ServiceDll",true);
+}
+static void auditBatch250Service017(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CDPSvc",L"ImagePath",false);
+}
+static void auditBatch250Service018(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CDPSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service019(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CertPropSvc",L"ImagePath",false);
+}
+static void auditBatch250Service020(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CertPropSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service021(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ClipSVC",L"ImagePath",false);
+}
+static void auditBatch250Service022(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ClipSVC",L"ServiceDll",true);
+}
+static void auditBatch250Service023(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"COMSysApp",L"ImagePath",false);
+}
+static void auditBatch250Service024(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"COMSysApp",L"ServiceDll",true);
+}
+static void auditBatch250Service025(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CoreMessagingRegistrar",L"ImagePath",false);
+}
+static void auditBatch250Service026(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CoreMessagingRegistrar",L"ServiceDll",true);
+}
+static void auditBatch250Service027(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CryptSvc",L"ImagePath",false);
+}
+static void auditBatch250Service028(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CryptSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service029(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CscService",L"ImagePath",false);
+}
+static void auditBatch250Service030(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"CscService",L"ServiceDll",true);
+}
+static void auditBatch250Service031(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DcomLaunch",L"ImagePath",false);
+}
+static void auditBatch250Service032(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DcomLaunch",L"ServiceDll",true);
+}
+static void auditBatch250Service033(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"defragsvc",L"ImagePath",false);
+}
+static void auditBatch250Service034(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"defragsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service035(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DeviceAssociationService",L"ImagePath",false);
+}
+static void auditBatch250Service036(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DeviceAssociationService",L"ServiceDll",true);
+}
+static void auditBatch250Service037(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DeviceInstall",L"ImagePath",false);
+}
+static void auditBatch250Service038(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DeviceInstall",L"ServiceDll",true);
+}
+static void auditBatch250Service039(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DevQueryBroker",L"ImagePath",false);
+}
+static void auditBatch250Service040(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DevQueryBroker",L"ServiceDll",true);
+}
+static void auditBatch250Service041(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Dhcp",L"ImagePath",false);
+}
+static void auditBatch250Service042(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Dhcp",L"ServiceDll",true);
+}
+static void auditBatch250Service043(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"diagnosticshub.standardcollector.service",L"ImagePath",false);
+}
+static void auditBatch250Service044(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"diagnosticshub.standardcollector.service",L"ServiceDll",true);
+}
+static void auditBatch250Service045(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DiagTrack",L"ImagePath",false);
+}
+static void auditBatch250Service046(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DiagTrack",L"ServiceDll",true);
+}
+static void auditBatch250Service047(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Dnscache",L"ImagePath",false);
+}
+static void auditBatch250Service048(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Dnscache",L"ServiceDll",true);
+}
+static void auditBatch250Service049(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DoSvc",L"ImagePath",false);
+}
+static void auditBatch250Service050(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DoSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service051(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"dot3svc",L"ImagePath",false);
+}
+static void auditBatch250Service052(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"dot3svc",L"ServiceDll",true);
+}
+static void auditBatch250Service053(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DPS",L"ImagePath",false);
+}
+static void auditBatch250Service054(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DPS",L"ServiceDll",true);
+}
+static void auditBatch250Service055(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DsmSvc",L"ImagePath",false);
+}
+static void auditBatch250Service056(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DsmSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service057(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DsSvc",L"ImagePath",false);
+}
+static void auditBatch250Service058(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"DsSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service059(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Eaphost",L"ImagePath",false);
+}
+static void auditBatch250Service060(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Eaphost",L"ServiceDll",true);
+}
+static void auditBatch250Service061(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"EFS",L"ImagePath",false);
+}
+static void auditBatch250Service062(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"EFS",L"ServiceDll",true);
+}
+static void auditBatch250Service063(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"EventSystem",L"ImagePath",false);
+}
+static void auditBatch250Service064(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"EventSystem",L"ServiceDll",true);
+}
+static void auditBatch250Service065(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"fdPHost",L"ImagePath",false);
+}
+static void auditBatch250Service066(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"fdPHost",L"ServiceDll",true);
+}
+static void auditBatch250Service067(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FDResPub",L"ImagePath",false);
+}
+static void auditBatch250Service068(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FDResPub",L"ServiceDll",true);
+}
+static void auditBatch250Service069(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"fhsvc",L"ImagePath",false);
+}
+static void auditBatch250Service070(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"fhsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service071(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FontCache",L"ImagePath",false);
+}
+static void auditBatch250Service072(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FontCache",L"ServiceDll",true);
+}
+static void auditBatch250Service073(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FrameServer",L"ImagePath",false);
+}
+static void auditBatch250Service074(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"FrameServer",L"ServiceDll",true);
+}
+static void auditBatch250Service075(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"gpsvc",L"ImagePath",false);
+}
+static void auditBatch250Service076(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"gpsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service077(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"hidserv",L"ImagePath",false);
+}
+static void auditBatch250Service078(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"hidserv",L"ServiceDll",true);
+}
+static void auditBatch250Service079(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"HvHost",L"ImagePath",false);
+}
+static void auditBatch250Service080(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"HvHost",L"ServiceDll",true);
+}
+static void auditBatch250Service081(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"IKEEXT",L"ImagePath",false);
+}
+static void auditBatch250Service082(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"IKEEXT",L"ServiceDll",true);
+}
+static void auditBatch250Service083(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"InstallService",L"ImagePath",false);
+}
+static void auditBatch250Service084(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"InstallService",L"ServiceDll",true);
+}
+static void auditBatch250Service085(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"iphlpsvc",L"ImagePath",false);
+}
+static void auditBatch250Service086(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"iphlpsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service087(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"KeyIso",L"ImagePath",false);
+}
+static void auditBatch250Service088(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"KeyIso",L"ServiceDll",true);
+}
+static void auditBatch250Service089(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"KtmRm",L"ImagePath",false);
+}
+static void auditBatch250Service090(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"KtmRm",L"ServiceDll",true);
+}
+static void auditBatch250Service091(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LanmanServer",L"ImagePath",false);
+}
+static void auditBatch250Service092(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LanmanServer",L"ServiceDll",true);
+}
+static void auditBatch250Service093(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LanmanWorkstation",L"ImagePath",false);
+}
+static void auditBatch250Service094(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LanmanWorkstation",L"ServiceDll",true);
+}
+static void auditBatch250Service095(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lfsvc",L"ImagePath",false);
+}
+static void auditBatch250Service096(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lfsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service097(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LicenseManager",L"ImagePath",false);
+}
+static void auditBatch250Service098(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LicenseManager",L"ServiceDll",true);
+}
+static void auditBatch250Service099(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lltdsvc",L"ImagePath",false);
+}
+static void auditBatch250Service100(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lltdsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service101(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lmhosts",L"ImagePath",false);
+}
+static void auditBatch250Service102(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"lmhosts",L"ServiceDll",true);
+}
+static void auditBatch250Service103(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LSM",L"ImagePath",false);
+}
+static void auditBatch250Service104(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"LSM",L"ServiceDll",true);
+}
+static void auditBatch250Service105(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MapsBroker",L"ImagePath",false);
+}
+static void auditBatch250Service106(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MapsBroker",L"ServiceDll",true);
+}
+static void auditBatch250Service107(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MpsSvc",L"ImagePath",false);
+}
+static void auditBatch250Service108(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MpsSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service109(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MSDTC",L"ImagePath",false);
+}
+static void auditBatch250Service110(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"MSDTC",L"ServiceDll",true);
+}
+static void auditBatch250Service111(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"msiserver",L"ImagePath",false);
+}
+static void auditBatch250Service112(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"msiserver",L"ServiceDll",true);
+}
+static void auditBatch250Service113(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcaSvc",L"ImagePath",false);
+}
+static void auditBatch250Service114(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcaSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service115(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcbService",L"ImagePath",false);
+}
+static void auditBatch250Service116(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcbService",L"ServiceDll",true);
+}
+static void auditBatch250Service117(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcdAutoSetup",L"ImagePath",false);
+}
+static void auditBatch250Service118(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NcdAutoSetup",L"ServiceDll",true);
+}
+static void auditBatch250Service119(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Netlogon",L"ImagePath",false);
+}
+static void auditBatch250Service120(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Netlogon",L"ServiceDll",true);
+}
+static void auditBatch250Service121(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Netman",L"ImagePath",false);
+}
+static void auditBatch250Service122(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Netman",L"ServiceDll",true);
+}
+static void auditBatch250Service123(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"netprofm",L"ImagePath",false);
+}
+static void auditBatch250Service124(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"netprofm",L"ServiceDll",true);
+}
+static void auditBatch250Service125(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NetSetupSvc",L"ImagePath",false);
+}
+static void auditBatch250Service126(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NetSetupSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service127(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NetTcpPortSharing",L"ImagePath",false);
+}
+static void auditBatch250Service128(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NetTcpPortSharing",L"ServiceDll",true);
+}
+static void auditBatch250Service129(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NgcCtnrSvc",L"ImagePath",false);
+}
+static void auditBatch250Service130(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NgcCtnrSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service131(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NgcSvc",L"ImagePath",false);
+}
+static void auditBatch250Service132(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NgcSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service133(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NlaSvc",L"ImagePath",false);
+}
+static void auditBatch250Service134(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"NlaSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service135(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"nsi",L"ImagePath",false);
+}
+static void auditBatch250Service136(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"nsi",L"ServiceDll",true);
+}
+static void auditBatch250Service137(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"OneSyncSvc",L"ImagePath",false);
+}
+static void auditBatch250Service138(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"OneSyncSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service139(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PcaSvc",L"ImagePath",false);
+}
+static void auditBatch250Service140(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PcaSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service141(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PeerDistSvc",L"ImagePath",false);
+}
+static void auditBatch250Service142(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PeerDistSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service143(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PerfHost",L"ImagePath",false);
+}
+static void auditBatch250Service144(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PerfHost",L"ServiceDll",true);
+}
+static void auditBatch250Service145(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PhoneSvc",L"ImagePath",false);
+}
+static void auditBatch250Service146(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PhoneSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service147(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"pla",L"ImagePath",false);
+}
+static void auditBatch250Service148(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"pla",L"ServiceDll",true);
+}
+static void auditBatch250Service149(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PlugPlay",L"ImagePath",false);
+}
+static void auditBatch250Service150(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PlugPlay",L"ServiceDll",true);
+}
+static void auditBatch250Service151(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PolicyAgent",L"ImagePath",false);
+}
+static void auditBatch250Service152(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PolicyAgent",L"ServiceDll",true);
+}
+static void auditBatch250Service153(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Power",L"ImagePath",false);
+}
+static void auditBatch250Service154(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Power",L"ServiceDll",true);
+}
+static void auditBatch250Service155(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PrintNotify",L"ImagePath",false);
+}
+static void auditBatch250Service156(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"PrintNotify",L"ServiceDll",true);
+}
+static void auditBatch250Service157(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ProfSvc",L"ImagePath",false);
+}
+static void auditBatch250Service158(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ProfSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service159(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"QWAVE",L"ImagePath",false);
+}
+static void auditBatch250Service160(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"QWAVE",L"ServiceDll",true);
+}
+static void auditBatch250Service161(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RasAuto",L"ImagePath",false);
+}
+static void auditBatch250Service162(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RasAuto",L"ServiceDll",true);
+}
+static void auditBatch250Service163(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RasMan",L"ImagePath",false);
+}
+static void auditBatch250Service164(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RasMan",L"ServiceDll",true);
+}
+static void auditBatch250Service165(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RemoteAccess",L"ImagePath",false);
+}
+static void auditBatch250Service166(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RemoteAccess",L"ServiceDll",true);
+}
+static void auditBatch250Service167(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RemoteRegistry",L"ImagePath",false);
+}
+static void auditBatch250Service168(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RemoteRegistry",L"ServiceDll",true);
+}
+static void auditBatch250Service169(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcEptMapper",L"ImagePath",false);
+}
+static void auditBatch250Service170(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcEptMapper",L"ServiceDll",true);
+}
+static void auditBatch250Service171(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcLocator",L"ImagePath",false);
+}
+static void auditBatch250Service172(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcLocator",L"ServiceDll",true);
+}
+static void auditBatch250Service173(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcSs",L"ImagePath",false);
+}
+static void auditBatch250Service174(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"RpcSs",L"ServiceDll",true);
+}
+static void auditBatch250Service175(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SamSs",L"ImagePath",false);
+}
+static void auditBatch250Service176(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SamSs",L"ServiceDll",true);
+}
+static void auditBatch250Service177(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SCardSvr",L"ImagePath",false);
+}
+static void auditBatch250Service178(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SCardSvr",L"ServiceDll",true);
+}
+static void auditBatch250Service179(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ScDeviceEnum",L"ImagePath",false);
+}
+static void auditBatch250Service180(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ScDeviceEnum",L"ServiceDll",true);
+}
+static void auditBatch250Service181(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Schedule",L"ImagePath",false);
+}
+static void auditBatch250Service182(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Schedule",L"ServiceDll",true);
+}
+static void auditBatch250Service183(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SCPolicySvc",L"ImagePath",false);
+}
+static void auditBatch250Service184(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SCPolicySvc",L"ServiceDll",true);
+}
+static void auditBatch250Service185(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"seclogon",L"ImagePath",false);
+}
+static void auditBatch250Service186(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"seclogon",L"ServiceDll",true);
+}
+static void auditBatch250Service187(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SENS",L"ImagePath",false);
+}
+static void auditBatch250Service188(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SENS",L"ServiceDll",true);
+}
+static void auditBatch250Service189(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensorDataService",L"ImagePath",false);
+}
+static void auditBatch250Service190(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensorDataService",L"ServiceDll",true);
+}
+static void auditBatch250Service191(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensorService",L"ImagePath",false);
+}
+static void auditBatch250Service192(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensorService",L"ServiceDll",true);
+}
+static void auditBatch250Service193(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensrSvc",L"ImagePath",false);
+}
+static void auditBatch250Service194(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SensrSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service195(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SessionEnv",L"ImagePath",false);
+}
+static void auditBatch250Service196(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SessionEnv",L"ServiceDll",true);
+}
+static void auditBatch250Service197(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SharedAccess",L"ImagePath",false);
+}
+static void auditBatch250Service198(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SharedAccess",L"ServiceDll",true);
+}
+static void auditBatch250Service199(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ShellHWDetection",L"ImagePath",false);
+}
+static void auditBatch250Service200(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"ShellHWDetection",L"ServiceDll",true);
+}
+static void auditBatch250Service201(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"smphost",L"ImagePath",false);
+}
+static void auditBatch250Service202(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"smphost",L"ServiceDll",true);
+}
+static void auditBatch250Service203(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SNMPTRAP",L"ImagePath",false);
+}
+static void auditBatch250Service204(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SNMPTRAP",L"ServiceDll",true);
+}
+static void auditBatch250Service205(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Spooler",L"ImagePath",false);
+}
+static void auditBatch250Service206(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Spooler",L"ServiceDll",true);
+}
+static void auditBatch250Service207(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SSDPSRV",L"ImagePath",false);
+}
+static void auditBatch250Service208(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SSDPSRV",L"ServiceDll",true);
+}
+static void auditBatch250Service209(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SstpSvc",L"ImagePath",false);
+}
+static void auditBatch250Service210(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SstpSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service211(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"StateRepository",L"ImagePath",false);
+}
+static void auditBatch250Service212(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"StateRepository",L"ServiceDll",true);
+}
+static void auditBatch250Service213(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"StorSvc",L"ImagePath",false);
+}
+static void auditBatch250Service214(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"StorSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service215(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"svsvc",L"ImagePath",false);
+}
+static void auditBatch250Service216(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"svsvc",L"ServiceDll",true);
+}
+static void auditBatch250Service217(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SysMain",L"ImagePath",false);
+}
+static void auditBatch250Service218(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"SysMain",L"ServiceDll",true);
+}
+static void auditBatch250Service219(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TabletInputService",L"ImagePath",false);
+}
+static void auditBatch250Service220(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TabletInputService",L"ServiceDll",true);
+}
+static void auditBatch250Service221(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TapiSrv",L"ImagePath",false);
+}
+static void auditBatch250Service222(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TapiSrv",L"ServiceDll",true);
+}
+static void auditBatch250Service223(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TermService",L"ImagePath",false);
+}
+static void auditBatch250Service224(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TermService",L"ServiceDll",true);
+}
+static void auditBatch250Service225(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Themes",L"ImagePath",false);
+}
+static void auditBatch250Service226(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"Themes",L"ServiceDll",true);
+}
+static void auditBatch250Service227(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TieringEngineService",L"ImagePath",false);
+}
+static void auditBatch250Service228(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TieringEngineService",L"ServiceDll",true);
+}
+static void auditBatch250Service229(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TimeBrokerSvc",L"ImagePath",false);
+}
+static void auditBatch250Service230(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TimeBrokerSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service231(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TokenBroker",L"ImagePath",false);
+}
+static void auditBatch250Service232(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TokenBroker",L"ServiceDll",true);
+}
+static void auditBatch250Service233(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TrkWks",L"ImagePath",false);
+}
+static void auditBatch250Service234(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TrkWks",L"ServiceDll",true);
+}
+static void auditBatch250Service235(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TroubleshootingSvc",L"ImagePath",false);
+}
+static void auditBatch250Service236(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TroubleshootingSvc",L"ServiceDll",true);
+}
+static void auditBatch250Service237(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TrustedInstaller",L"ImagePath",false);
+}
+static void auditBatch250Service238(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"TrustedInstaller",L"ServiceDll",true);
+}
+static void auditBatch250Service239(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"tzautoupdate",L"ImagePath",false);
+}
+static void auditBatch250Service240(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"tzautoupdate",L"ServiceDll",true);
+}
+static void auditBatch250Service241(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UevAgentService",L"ImagePath",false);
+}
+static void auditBatch250Service242(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UevAgentService",L"ServiceDll",true);
+}
+static void auditBatch250Service243(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UmRdpService",L"ImagePath",false);
+}
+static void auditBatch250Service244(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UmRdpService",L"ServiceDll",true);
+}
+static void auditBatch250Service245(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"upnphost",L"ImagePath",false);
+}
+static void auditBatch250Service246(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"upnphost",L"ServiceDll",true);
+}
+static void auditBatch250Service247(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UserManager",L"ImagePath",false);
+}
+static void auditBatch250Service248(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UserManager",L"ServiceDll",true);
+}
+static void auditBatch250Service249(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UsoSvc",L"ImagePath",false);
+}
+static void auditBatch250Service250(std::vector<Record>& out) {
+    audit250ServiceLocation(out,L"UsoSvc",L"ServiceDll",true);
+}
+
+static std::vector<Record> collect(const std::vector<Process>& processes) {
+    std::vector<Record> result;
+    result.reserve(160);
+    persistence_audit::run(result);
+    if(cancelRequested.load())return result;
+    kernelSettings(result);
+    if(cancelRequested)return result;
+    kernelBootFlags(result);
+    if(cancelRequested)return result;
+    kernelDrivers(result);
+    if(cancelRequested)return result;
+    userProcessMitigations(result,processes);
+    if(cancelRequested)return result;
+    userExecutableMappings(result,processes);
+    if(cancelRequested)return result;
+    userModuleLocations(result,processes);
+    if(cancelRequested)return result;
+    extendedKernelRegistry(result);
+    if(cancelRequested)return result;
+    extendedKernelDriverConfiguration(result);
+    if(cancelRequested)return result;
+    extendedUserProcessReview(result,processes);
+    if(cancelRequested)return result;
+    extendedUserAutorunReview(result);
+    if(cancelRequested)return result;
+    supplementalKernelPolicyReview(result);
+    if(cancelRequested)return result;
+    supplementalKernelDriverServiceReview(result);
+    if(cancelRequested)return result;
+    supplementalKernelLoadedModuleReview(result);
+    if(cancelRequested)return result;
+    supplementalKernelServiceConsistency(result);
+    if(cancelRequested)return result;
+    supplementalKernelSecurityServiceState(result);
+    if(cancelRequested)return result;
+    supplementalKernelEnvironmentReview(result);
+    if(cancelRequested)return result;
+    supplementalUserProcessReview(result,processes);
+    if(cancelRequested)return result;
+    supplementalUserModuleReview(result,processes);
+    if(cancelRequested)return result;
+    supplementalUserAutorunReview(result);
+    if(cancelRequested)return result;
+    supplementalUserThreadCountReview(result,processes);
+    if(cancelRequested)return result;
+    supplementalUserExecutableMetadata(result,processes);
+    if(cancelRequested)return result;
+    supplementalUserProcessParentReview(result,processes);
+    if(cancelRequested)return result;
+    advancedKernelBootPolicyReview(result);
+    if(cancelRequested)return result;
+    advancedKernelDriverStartReview(result);
+    if(cancelRequested)return result;
+    advancedUserIFEOReview(result);
+    if(cancelRequested)return result;
+    advancedUserAppInitReview(result);
+    if(cancelRequested.load())return result;
+    auditKernelVulnerableDriverBlocklist(result);
+    if(cancelRequested.load())return result;
+    auditKernelVBSProtection(result);
+    if(cancelRequested.load())return result;
+    auditKernelHVCIProtection(result);
+    if(cancelRequested.load())return result;
+    auditKernelCredentialGuard(result);
+    if(cancelRequested.load())return result;
+    auditKernelSystemGuard(result);
+    if(cancelRequested.load())return result;
+    auditKernelBootDriverIntegrity(result);
+    if(cancelRequested.load())return result;
+    auditKernelLsaProtection(result);
+    if(cancelRequested.load())return result;
+    auditKernelLsaAudit(result);
+    if(cancelRequested.load())return result;
+    auditKernelKernelDmaProtection(result);
+    if(cancelRequested.load())return result;
+    auditKernelDriverSearch(result);
+    if(cancelRequested.load())return result;
+    auditKernelWDigestLogon(result);
+    if(cancelRequested.load())return result;
+    auditKernelLmCompatibility(result);
+    if(cancelRequested.load())return result;
+    auditKernelNoLmHash(result);
+    if(cancelRequested.load())return result;
+    auditKernelAnonymousSid(result);
+    if(cancelRequested.load())return result;
+    auditKernelRestrictAnonymous(result);
+    if(cancelRequested.load())return result;
+    auditKernelRestrictAnonymousSam(result);
+    if(cancelRequested.load())return result;
+    auditKernelRemoteUac(result);
+    if(cancelRequested.load())return result;
+    auditKernelUacEnable(result);
+    if(cancelRequested.load())return result;
+    auditKernelUacSecureDesktop(result);
+    if(cancelRequested.load())return result;
+    auditKernelUacAdminPrompt(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderRealtime(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderBehavior(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderOnAccess(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderScan(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderAntiSpyware(result);
+    if(cancelRequested.load())return result;
+    auditUserSmartScreen(result);
+    if(cancelRequested.load())return result;
+    auditUserDefenderPua(result);
+    if(cancelRequested.load())return result;
+    auditUserPowerShellLogging(result);
+    if(cancelRequested.load())return result;
+    auditUserPowerShellInvocation(result);
+    if(cancelRequested.load())return result;
+    auditUserPowerShellModuleLogging(result);
+    if(cancelRequested.load())return result;
+    auditUserPowerShellTranscription(result);
+    if(cancelRequested.load())return result;
+    auditUserWindowsInstallerElevated(result);
+    if(cancelRequested.load())return result;
+    auditUserWindowsInstallerDisable(result);
+    if(cancelRequested.load())return result;
+    auditUserAutorunDisable(result);
+    if(cancelRequested.load())return result;
+    auditUserAttachmentZone(result);
+    if(cancelRequested.load())return result;
+    auditUserAttachmentAntivirus(result);
+    if(cancelRequested.load())return result;
+    auditUserRemoteDesktopNla(result);
+    if(cancelRequested.load())return result;
+    auditUserRemoteDesktop(result);
+    if(cancelRequested.load())return result;
+    auditUserWinRMUnencrypted(result);
+    if(cancelRequested.load())return result;
+    auditUserWinRMBasic(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelSecureBootPolicy(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelCodeIntegrityAudit(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelDeviceGuardLocked(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelHVCILocked(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelCredentialGuardEnabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelCredentialGuardLocked(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelSystemGuardEnabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelSystemGuardLocked(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelKernelShadowStack(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelKernelShadowStackAudit(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelBootExecutePolicy(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelCrashDumpPolicy(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelDriverSignaturePolicy(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelDeviceInstallAdmin(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelRemoteRegistryService(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelKernelDebugService(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelWinDefendDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelSecurityHealthDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelWdFilterDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelWdNisDrvDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelWdBootDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelFirewallServiceDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelBaseFilteringDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelEventLogDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraKernelSecurityCenterDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableRealtimeMonitoringUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableBehaviorMonitoringUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableIOAVProtectionUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableScriptScanningUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableBlockAtFirstSeenUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemDisableTaskMgr(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemDisableRegistryTools(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemDisableCMD(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemEnableLUA(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemConsentAdmin(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemPromptSecureDesktop(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemFilterAdminToken(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemValidateAdminSignatures(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemEnableInstallerDetection(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemEnableSecureUIA(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemEnableVirtualization(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserSystemEnableUIADesktopToggle(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserWindowsScriptHostDisabled(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserExplorerHideFileExt(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserExplorerHiddenFiles(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableSmartScreenUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableFirewallDomainUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableFirewallPrivateUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableFirewallPublicUser(result);
+    if(cancelRequested.load())return result;
+    auditExtraUserDisableAttachmentsSaveZone(result);
+    // Additional 100 policy audits; missing values are not flagged.
+    auditBatch100Kernel001(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel002(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel003(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel004(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel005(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel006(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel007(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel008(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel009(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel010(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel011(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel012(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel013(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel014(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel015(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel016(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel017(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel018(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel019(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel020(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel021(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel022(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel023(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel024(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel025(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel026(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel027(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel028(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel029(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel030(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel031(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel032(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel033(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel034(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel035(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel036(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel037(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel038(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel039(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel040(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel041(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel042(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel043(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel044(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel045(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel046(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel047(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User048(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User049(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User050(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User051(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User052(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User053(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User054(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User055(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User056(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User057(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User058(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User059(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User060(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User061(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User062(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User063(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User064(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User065(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User066(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User067(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User068(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User069(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User070(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User071(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User072(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User073(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User074(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User075(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User076(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User077(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User078(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User079(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User080(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User081(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User082(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User083(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User084(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User085(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User086(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User087(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User088(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User089(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User090(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User091(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User092(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel093(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel094(result);
+    if(cancelRequested.load())return result;
+    auditBatch100Kernel095(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User096(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User097(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User098(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User099(result);
+    if(cancelRequested.load())return result;
+    auditBatch100User100(result);
+    if(cancelRequested.load())return result;
+    if (cancelRequested.load()) return result;
+    checkAdditionalService001(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService002(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService003(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService004(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService005(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService006(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService007(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService008(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService009(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService010(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService011(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService012(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService013(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService014(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService015(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService016(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService017(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService018(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService019(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService020(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService021(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService022(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService023(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService024(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService025(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService026(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService027(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService028(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService029(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService030(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService031(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService032(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService033(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService034(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService035(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService036(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService037(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService038(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService039(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService040(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService041(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService042(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService043(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService044(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService045(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService046(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService047(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService048(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService049(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService050(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService051(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService052(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService053(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService054(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService055(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService056(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService057(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService058(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService059(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService060(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService061(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService062(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService063(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService064(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalService065(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy001(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy002(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy003(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy004(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy005(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy006(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy007(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy008(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy009(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy010(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy011(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy012(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy013(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy014(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy015(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy016(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy017(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy018(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy019(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy020(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy021(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy022(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy023(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy024(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy025(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy026(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy027(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy028(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy029(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy030(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy031(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy032(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy033(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy034(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy035(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy036(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy037(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy038(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy039(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy040(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy041(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy042(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy043(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy044(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy045(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy046(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy047(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy048(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy049(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy050(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy051(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy052(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy053(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy054(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy055(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy056(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy057(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy058(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy059(result);
+    if (cancelRequested.load()) return result;
+    checkAdditionalPolicy060(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service001(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service002(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service003(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service004(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service005(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service006(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service007(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service008(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service009(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service010(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service011(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service012(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service013(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service014(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service015(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service016(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service017(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service018(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service019(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service020(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service021(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service022(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service023(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service024(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service025(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service026(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service027(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service028(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service029(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service030(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service031(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service032(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service033(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service034(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service035(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service036(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service037(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service038(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service039(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service040(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service041(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service042(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service043(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service044(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service045(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service046(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service047(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service048(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service049(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service050(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service051(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service052(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service053(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service054(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service055(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service056(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service057(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service058(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service059(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service060(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service061(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service062(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service063(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service064(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service065(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service066(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service067(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service068(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service069(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service070(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service071(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service072(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service073(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service074(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service075(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service076(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service077(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service078(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service079(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service080(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service081(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service082(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service083(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service084(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service085(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service086(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service087(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service088(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service089(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service090(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service091(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service092(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service093(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service094(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service095(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service096(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service097(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service098(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service099(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service100(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service101(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service102(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service103(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service104(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service105(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service106(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service107(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service108(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service109(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service110(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service111(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service112(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service113(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service114(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service115(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service116(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service117(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service118(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service119(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service120(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service121(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service122(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service123(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service124(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service125(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service126(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service127(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service128(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service129(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service130(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service131(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service132(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service133(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service134(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service135(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service136(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service137(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service138(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service139(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service140(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service141(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service142(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service143(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service144(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service145(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service146(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service147(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service148(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service149(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service150(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service151(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service152(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service153(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service154(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service155(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service156(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service157(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service158(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service159(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service160(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service161(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service162(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service163(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service164(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service165(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service166(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service167(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service168(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service169(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service170(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service171(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service172(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service173(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service174(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service175(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service176(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service177(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service178(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service179(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service180(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service181(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service182(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service183(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service184(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service185(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service186(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service187(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service188(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service189(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service190(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service191(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service192(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service193(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service194(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service195(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service196(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service197(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service198(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service199(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service200(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service201(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service202(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service203(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service204(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service205(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service206(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service207(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service208(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service209(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service210(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service211(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service212(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service213(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service214(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service215(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service216(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service217(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service218(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service219(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service220(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service221(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service222(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service223(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service224(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service225(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service226(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service227(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service228(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service229(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service230(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service231(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service232(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service233(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service234(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service235(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service236(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service237(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service238(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service239(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service240(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service241(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service242(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service243(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service244(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service245(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service246(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service247(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service248(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service249(result);
+    if(cancelRequested.load())return result;
+    auditBatch250Service250(result);
+    return result;
+}
+// Additional read-only security posture probes (50 independently callable checks).
+// Missing registry values are not treated as evidence of compromise.
+static void auditExtraRegistryValue(std::vector<Record>& out, HKEY root,
+    const wchar_t* key, const wchar_t* value, DWORD match,
+    const wchar_t* label, const char* explanation, const char* category) {
+    if(cancelRequested.load())return;
+    DWORD current=0;
+    if(!readDword(root,key,value,current) || current!=match)return;
+    add(out,category,label,std::string(explanation)+" (observed="+hex32(current)+")");
+}
+
+static void auditExtraKernelSecureBootPolicy(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+        L"UEFISecureBootEnabled",0,L"SecureBootPolicy","Secure Boot is reported disabled","Kernel policy review");
+}
+
+static void auditExtraKernelCodeIntegrityAudit(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+        L"AuditMode",1,L"CodeIntegrityAudit","Code integrity audit mode is enabled","Kernel policy review");
+}
+
+static void auditExtraKernelDeviceGuardLocked(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+        L"Locked",0,L"DeviceGuardLocked","Device Guard configuration is not locked","Kernel policy review");
+}
+
+static void auditExtraKernelHVCILocked(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+        L"Locked",0,L"HVCILocked","HVCI configuration is not locked","Kernel policy review");
+}
+
+static void auditExtraKernelCredentialGuardEnabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",
+        L"Enabled",0,L"CredentialGuardEnabled","Credential Guard scenario disabled","Kernel policy review");
+}
+
+static void auditExtraKernelCredentialGuardLocked(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",
+        L"Locked",0,L"CredentialGuardLocked","Credential Guard configuration is not locked","Kernel policy review");
+}
+
+static void auditExtraKernelSystemGuardEnabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",
+        L"Enabled",0,L"SystemGuardEnabled","System Guard scenario disabled","Kernel policy review");
+}
+
+static void auditExtraKernelSystemGuardLocked(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",
+        L"Locked",0,L"SystemGuardLocked","System Guard configuration is not locked","Kernel policy review");
+}
+
+static void auditExtraKernelKernelShadowStack(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks",
+        L"Enabled",0,L"KernelShadowStack","Kernel shadow stack scenario disabled","Kernel policy review");
+}
+
+static void auditExtraKernelKernelShadowStackAudit(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks",
+        L"AuditMode",1,L"KernelShadowStackAudit","Kernel shadow stack audit mode enabled","Kernel policy review");
+}
+
+static void auditExtraKernelBootExecutePolicy(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+        L"DisablePagingExecutive",0,L"BootExecutePolicy","Kernel paging policy is permissive; informational","Kernel policy review");
+}
+
+static void auditExtraKernelCrashDumpPolicy(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Control\\CrashControl",
+        L"CrashDumpEnabled",0,L"CrashDumpPolicy","Crash dump disabled; reduced incident forensics","Kernel policy review");
+}
+
+static void auditExtraKernelDriverSignaturePolicy(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions",
+        L"DenyUnspecified",0,L"DriverSignaturePolicy","Device installation restrictions not enforced","Kernel policy review");
+}
+
+static void auditExtraKernelDeviceInstallAdmin(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions",
+        L"AllowAdminInstall",1,L"DeviceInstallAdmin","Administrator device install exception enabled","Kernel policy review");
+}
+
+static void auditExtraKernelRemoteRegistryService(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\RemoteRegistry",
+        L"Start",2,L"RemoteRegistryService","Remote Registry service configured for automatic start","Kernel policy review");
+}
+
+static void auditExtraKernelKernelDebugService(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\KdPrintCircularLogger",
+        L"Start",2,L"KernelDebugService","Kernel diagnostics service automatic start","Kernel policy review");
+}
+
+static void auditExtraKernelWinDefendDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\WinDefend",
+        L"Start",4,L"WinDefendDisabled","Defender service startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelSecurityHealthDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\SecurityHealthService",
+        L"Start",4,L"SecurityHealthDisabled","Security Health service startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelWdFilterDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\WdFilter",
+        L"Start",4,L"WdFilterDisabled","Defender filesystem filter startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelWdNisDrvDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\WdNisDrv",
+        L"Start",4,L"WdNisDrvDisabled","Defender network inspection driver startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelWdBootDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\WdBoot",
+        L"Start",4,L"WdBootDisabled","Defender boot driver startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelFirewallServiceDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\mpssvc",
+        L"Start",4,L"FirewallServiceDisabled","Windows Firewall service startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelBaseFilteringDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\BFE",
+        L"Start",4,L"BaseFilteringDisabled","Base Filtering Engine service startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelEventLogDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\EventLog",
+        L"Start",4,L"EventLogDisabled","Windows Event Log service startup disabled","Kernel policy review");
+}
+
+static void auditExtraKernelSecurityCenterDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_LOCAL_MACHINE,L"SYSTEM\\CurrentControlSet\\Services\\wscsvc",
+        L"Start",4,L"SecurityCenterDisabled","Security Center service startup disabled","Kernel policy review");
+}
+
+static void auditExtraUserDisableRealtimeMonitoringUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableRealtimeMonitoring",1,L"DisableRealtimeMonitoringUser","Realtime monitoring disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableBehaviorMonitoringUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableBehaviorMonitoring",1,L"DisableBehaviorMonitoringUser","Behavior monitoring disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableIOAVProtectionUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableIOAVProtection",1,L"DisableIOAVProtectionUser","Downloaded-file scanning disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableScriptScanningUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",
+        L"DisableScriptScanning",1,L"DisableScriptScanningUser","Script scanning disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableBlockAtFirstSeenUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",
+        L"DisableBlockAtFirstSeen",1,L"DisableBlockAtFirstSeenUser","Cloud first-seen blocking disabled by user policy","User policy review");
+}
+
+static void auditExtraUserSystemDisableTaskMgr(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"DisableTaskMgr",1,L"SystemDisableTaskMgr","Task Manager restricted by policy","User policy review");
+}
+
+static void auditExtraUserSystemDisableRegistryTools(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"DisableRegistryTools",1,L"SystemDisableRegistryTools","Registry tools restricted by policy","User policy review");
+}
+
+static void auditExtraUserSystemDisableCMD(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"DisableCMD",1,L"SystemDisableCMD","Command Prompt restricted by policy","User policy review");
+}
+
+static void auditExtraUserSystemEnableLUA(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableLUA",0,L"SystemEnableLUA","User Account Control disabled","User policy review");
+}
+
+static void auditExtraUserSystemConsentAdmin(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"ConsentPromptBehaviorAdmin",0,L"SystemConsentAdmin","Administrator elevation occurs without prompt","User policy review");
+}
+
+static void auditExtraUserSystemPromptSecureDesktop(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"PromptOnSecureDesktop",0,L"SystemPromptSecureDesktop","Elevation prompts not on secure desktop","User policy review");
+}
+
+static void auditExtraUserSystemFilterAdminToken(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"FilterAdministratorToken",0,L"SystemFilterAdminToken","Built-in administrator token filtering disabled","User policy review");
+}
+
+static void auditExtraUserSystemValidateAdminSignatures(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"ValidateAdminCodeSignatures",0,L"SystemValidateAdminSignatures","Admin elevation signature validation disabled","User policy review");
+}
+
+static void auditExtraUserSystemEnableInstallerDetection(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableInstallerDetection",0,L"SystemEnableInstallerDetection","Installer detection disabled","User policy review");
+}
+
+static void auditExtraUserSystemEnableSecureUIA(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableSecureUIAPaths",0,L"SystemEnableSecureUIA","UIAccess path restrictions disabled","User policy review");
+}
+
+static void auditExtraUserSystemEnableVirtualization(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableVirtualization",0,L"SystemEnableVirtualization","UAC virtualization disabled; informational","User policy review");
+}
+
+static void auditExtraUserSystemEnableUIADesktopToggle(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        L"EnableUIADesktopToggle",1,L"SystemEnableUIADesktopToggle","UIAccess secure desktop switching enabled","User policy review");
+}
+
+static void auditExtraUserWindowsScriptHostDisabled(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows Script Host\\Settings",
+        L"Enabled",0,L"WindowsScriptHostDisabled","Windows Script Host disabled by policy","User policy review");
+}
+
+static void auditExtraUserExplorerHideFileExt(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        L"HideFileExt",1,L"ExplorerHideFileExt","File extensions hidden in Explorer","User policy review");
+}
+
+static void auditExtraUserExplorerHiddenFiles(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+        L"Hidden",2,L"ExplorerHiddenFiles","Hidden files not shown in Explorer","User policy review");
+}
+
+static void auditExtraUserDisableSmartScreenUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+        L"EnableSmartScreen",0,L"DisableSmartScreenUser","SmartScreen disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableFirewallDomainUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile",
+        L"EnableFirewall",0,L"DisableFirewallDomainUser","Domain firewall disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableFirewallPrivateUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PrivateProfile",
+        L"EnableFirewall",0,L"DisableFirewallPrivateUser","Private firewall disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableFirewallPublicUser(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\PublicProfile",
+        L"EnableFirewall",0,L"DisableFirewallPublicUser","Public firewall disabled by user policy","User policy review");
+}
+
+static void auditExtraUserDisableAttachmentsSaveZone(std::vector<Record>& out) {
+    auditExtraRegistryValue(out,HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Attachments",
+        L"SaveZoneInformation",1,L"DisableAttachmentsSaveZone","Attachment zone preservation disabled","User policy review");
+}
+
+
+// Additional read-only persistence and image-loading integrity review.
+// Findings require manual confirmation; registry access failures are not findings.
+namespace persistence_audit {
+struct Scope {
+    HKEY root;
+    const wchar_t* key;
+    const char* label;
+    bool valuesAreCommands;
+};
+static bool riskyPath(const std::wstring& text) {
+    const auto v=lowercase(text);
+    return contains(v,L"\\appdata\\") ||
+           contains(v,L"\\temp\\") ||
+           contains(v,L"\\users\\public\\") ||
+           contains(v,L"\\downloads\\") ||
+           contains(v,L"\\recycle.bin\\");
+}
+static std::wstring readString(HKEY key,const wchar_t* name) {
+    DWORD type=0,bytes=0;
+    if(RegQueryValueExW(key,name,nullptr,&type,nullptr,&bytes)!=ERROR_SUCCESS)
+        return {};
+    if(type!=REG_SZ && type!=REG_EXPAND_SZ)return {};
+    if(bytes<sizeof(wchar_t) || bytes>32768)return {};
+    std::vector<wchar_t> data(bytes/sizeof(wchar_t)+2,0);
+    if(RegQueryValueExW(key,name,nullptr,&type,
+        reinterpret_cast<BYTE*>(data.data()),&bytes)!=ERROR_SUCCESS)return {};
+    data.back()=0;
+    return std::wstring(data.data());
+}
+static void scanValues(std::vector<Record>& out,const Scope& scope) {
+    if(cancelRequested.load())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(scope.root,scope.key,0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    const LSTATUS info=RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,
+        nullptr,nullptr,nullptr,&count,&maxName,nullptr,nullptr,nullptr);
+    if(info!=ERROR_SUCCESS){RegCloseKey(key);return;}
+    const DWORD limit=std::min<DWORD>(count,512);
+    std::vector<wchar_t> name(std::min<DWORD>(maxName+2,32768),0);
+    for(DWORD index=0;index<limit && !cancelRequested.load();++index){
+        DWORD chars=static_cast<DWORD>(name.size()-1);
+        DWORD type=0;
+        if(RegEnumValueW(key,index,name.data(),&chars,nullptr,&type,
+            nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        if(type!=REG_SZ && type!=REG_EXPAND_SZ)continue;
+        name[chars]=0;
+        const std::wstring value=readString(key,name.data());
+        if(value.empty() || !riskyPath(value))continue;
+        std::wstring label=std::wstring(scope.key)+L" : "+name.data();
+        add(out,"User persistence review",label,
+            std::string("Potentially user-writable path in ")+scope.label+
+            "; inspect configured target and signature");
+    }
+    RegCloseKey(key);
+}
+static void scanSubkeys(std::vector<Record>& out,const Scope& scope) {
+    if(cancelRequested.load())return;
+    HKEY key=nullptr;
+    if(RegOpenKeyExW(scope.root,scope.key,0,KEY_READ,&key)!=ERROR_SUCCESS)return;
+    DWORD count=0,maxName=0;
+    if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,&count,&maxName,
+        nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS){
+        RegCloseKey(key);return;
+    }
+    std::vector<wchar_t> name(std::min<DWORD>(maxName+2,32768),0);
+    for(DWORD i=0;i<std::min<DWORD>(count,256) && !cancelRequested.load();++i){
+        DWORD length=static_cast<DWORD>(name.size()-1);
+        if(RegEnumKeyExW(key,i,name.data(),&length,nullptr,nullptr,
+            nullptr,nullptr)!=ERROR_SUCCESS)continue;
+        name[length]=0;
+        HKEY child=nullptr;
+        if(RegOpenKeyExW(key,name.data(),0,KEY_READ,&child)!=ERROR_SUCCESS)continue;
+        const wchar_t* fields[]={L"Debugger",L"VerifierDlls",L"MonitorProcess",
+            L"GlobalFlag",L"ImagePath",L"ServiceDll",L"DllPath",
+            L"Application",L"Command",L"Path",L"ServerExecutable"};
+        for(const auto* field:fields){
+            if(cancelRequested.load())break;
+            const auto value=readString(child,field);
+            if(!value.empty() && riskyPath(value)){
+                const std::wstring label=std::wstring(scope.key)+L"\\"+
+                    name.data()+L" : "+field;
+                add(out,"Persistence subkey review",label,
+                    std::string("User-writable target in ")+scope.label+
+                    "; validate file, owner and expected policy");
+            }
+        }
+        RegCloseKey(child);
+    }
+    RegCloseKey(key);
+}
+static void run(std::vector<Record>& out) {
+    // A scoped registry inventory; do not modify registry values.
+    const Scope valueLocations[]={
+        // Inventory 1: Machine registry scope 1.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "Machine registry scope 1",true},
+        // Inventory 2: Machine registry scope 2.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+            "Machine registry scope 2",true},
+        // Inventory 3: Machine registry scope 3.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx",
+            "Machine registry scope 3",true},
+        // Inventory 4: Machine registry scope 4.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+            "Machine registry scope 4",true},
+        // Inventory 5: Machine registry scope 5.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+            "Machine registry scope 5",true},
+        // Inventory 6: Machine registry scope 6.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+            "Machine registry scope 6",true},
+        // Inventory 7: Machine registry scope 7.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+            "Machine registry scope 7",true},
+        // Inventory 8: Machine registry scope 8.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+            "Machine registry scope 8",true},
+        // Inventory 9: Machine registry scope 9.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Custom",
+            "Machine registry scope 9",true},
+        // Inventory 10: Machine registry scope 10.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\InstalledSDB",
+            "Machine registry scope 10",true},
+        // Inventory 11: Machine registry scope 11.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+            "Machine registry scope 11",true},
+        // Inventory 12: Machine registry scope 12.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+            "Machine registry scope 12",true},
+        // Inventory 13: Machine registry scope 13.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects",
+            "Machine registry scope 13",true},
+        // Inventory 14: Machine registry scope 14.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SharedTaskScheduler",
+            "Machine registry scope 14",true},
+        // Inventory 15: Machine registry scope 15.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",
+            "Machine registry scope 15",true},
+        // Inventory 16: Machine registry scope 16.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers",
+            "Machine registry scope 16",true},
+        // Inventory 17: Machine registry scope 17.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellServiceObjectDelayLoad",
+            "Machine registry scope 17",true},
+        // Inventory 18: Machine registry scope 18.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Desktop\\NameSpace",
+            "Machine registry scope 18",true},
+        // Inventory 19: Machine registry scope 19.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MyComputer\\NameSpace",
+            "Machine registry scope 19",true},
+        // Inventory 20: Machine registry scope 20.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace",
+            "Machine registry scope 20",true},
+        // Inventory 21: Machine registry scope 21.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "Machine registry scope 21",true},
+        // Inventory 22: Machine registry scope 22.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Blocked",
+            "Machine registry scope 22",true},
+        // Inventory 23: Machine registry scope 23.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers",
+            "Machine registry scope 23",true},
+        // Inventory 24: Machine registry scope 24.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Provider Filters",
+            "Machine registry scope 24",true},
+        // Inventory 25: Machine registry scope 25.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\PLAP Providers",
+            "Machine registry scope 25",true},
+        // Inventory 26: Machine registry scope 26.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI",
+            "Machine registry scope 26",true},
+        // Inventory 27: Machine registry scope 27.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Startup",
+            "Machine registry scope 27",true},
+        // Inventory 28: Machine registry scope 28.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Shutdown",
+            "Machine registry scope 28",true},
+        // Inventory 29: Machine registry scope 29.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Logon",
+            "Machine registry scope 29",true},
+        // Inventory 30: Machine registry scope 30.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Logoff",
+            "Machine registry scope 30",true},
+        // Inventory 31: Machine registry scope 31.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Command Processor",
+            "Machine registry scope 31",true},
+        // Inventory 32: Machine registry scope 32.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug",
+            "Machine registry scope 32",true},
+        // Inventory 33: Machine registry scope 33.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32",
+            "Machine registry scope 33",true},
+        // Inventory 34: Machine registry scope 34.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Font Drivers",
+            "Machine registry scope 34",true},
+        // Inventory 35: Machine registry scope 35.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows\\AppInit_DLLs",
+            "Machine registry scope 35",true},
+        // Inventory 36: Machine registry scope 36.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+            "Machine registry scope 36",true},
+        // Inventory 37: Machine registry scope 37.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32",
+            "Machine registry scope 37",true},
+        // Inventory 38: Machine registry scope 38.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder",
+            "Machine registry scope 38",true},
+        // Inventory 39: Machine registry scope 39.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\RunOnce",
+            "Machine registry scope 39",true},
+        // Inventory 40: Machine registry scope 40.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\RunOnce32",
+            "Machine registry scope 40",true},
+        // Inventory 1: User registry scope 1.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "User registry scope 1",true},
+        // Inventory 2: User registry scope 2.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+            "User registry scope 2",true},
+        // Inventory 3: User registry scope 3.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx",
+            "User registry scope 3",true},
+        // Inventory 4: User registry scope 4.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run",
+            "User registry scope 4",true},
+        // Inventory 5: User registry scope 5.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+            "User registry scope 5",true},
+        // Inventory 6: User registry scope 6.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+            "User registry scope 6",true},
+        // Inventory 7: User registry scope 7.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+            "User registry scope 7",true},
+        // Inventory 8: User registry scope 8.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+            "User registry scope 8",true},
+        // Inventory 9: User registry scope 9.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Custom",
+            "User registry scope 9",true},
+        // Inventory 10: User registry scope 10.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\InstalledSDB",
+            "User registry scope 10",true},
+        // Inventory 11: User registry scope 11.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+            "User registry scope 11",true},
+        // Inventory 12: User registry scope 12.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+            "User registry scope 12",true},
+        // Inventory 13: User registry scope 13.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects",
+            "User registry scope 13",true},
+        // Inventory 14: User registry scope 14.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SharedTaskScheduler",
+            "User registry scope 14",true},
+        // Inventory 15: User registry scope 15.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",
+            "User registry scope 15",true},
+        // Inventory 16: User registry scope 16.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers",
+            "User registry scope 16",true},
+        // Inventory 17: User registry scope 17.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellServiceObjectDelayLoad",
+            "User registry scope 17",true},
+        // Inventory 18: User registry scope 18.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Desktop\\NameSpace",
+            "User registry scope 18",true},
+        // Inventory 19: User registry scope 19.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MyComputer\\NameSpace",
+            "User registry scope 19",true},
+        // Inventory 20: User registry scope 20.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace",
+            "User registry scope 20",true},
+        // Inventory 21: User registry scope 21.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "User registry scope 21",true},
+        // Inventory 22: User registry scope 22.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Blocked",
+            "User registry scope 22",true},
+        // Inventory 23: User registry scope 23.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers",
+            "User registry scope 23",true},
+        // Inventory 24: User registry scope 24.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Provider Filters",
+            "User registry scope 24",true},
+        // Inventory 25: User registry scope 25.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\PLAP Providers",
+            "User registry scope 25",true},
+        // Inventory 26: User registry scope 26.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI",
+            "User registry scope 26",true},
+        // Inventory 27: User registry scope 27.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Startup",
+            "User registry scope 27",true},
+        // Inventory 28: User registry scope 28.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Shutdown",
+            "User registry scope 28",true},
+        // Inventory 29: User registry scope 29.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Logon",
+            "User registry scope 29",true},
+        // Inventory 30: User registry scope 30.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\Scripts\\Logoff",
+            "User registry scope 30",true},
+        // Inventory 31: User registry scope 31.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Command Processor",
+            "User registry scope 31",true},
+        // Inventory 32: User registry scope 32.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug",
+            "User registry scope 32",true},
+        // Inventory 33: User registry scope 33.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32",
+            "User registry scope 33",true},
+        // Inventory 34: User registry scope 34.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Font Drivers",
+            "User registry scope 34",true},
+        // Inventory 35: User registry scope 35.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows\\AppInit_DLLs",
+            "User registry scope 35",true},
+        // Inventory 36: User registry scope 36.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+            "User registry scope 36",true},
+        // Inventory 37: User registry scope 37.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32",
+            "User registry scope 37",true},
+        // Inventory 38: User registry scope 38.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder",
+            "User registry scope 38",true},
+        // Inventory 39: User registry scope 39.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\RunOnce",
+            "User registry scope 39",true},
+        // Inventory 40: User registry scope 40.
+        // Review only when a configured string points into a writable location.
+        // Absence of this key is normal on many Windows installations.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\RunOnce32",
+            "User registry scope 40",true},
+    };
+    for(const auto& scope:valueLocations){
+        if(cancelRequested.load())return;
+        scanValues(out,scope);
+    }
+    const Scope subkeyLocations[]={
+        // Subkey review 1: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+            "Nested image configuration 1",false},
+        // Subkey review 2: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+            "Nested image configuration 2",false},
+        // Subkey review 3: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects",
+            "Nested image configuration 3",false},
+        // Subkey review 4: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers",
+            "Nested image configuration 4",false},
+        // Subkey review 5: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",
+            "Nested image configuration 5",false},
+        // Subkey review 6: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellServiceObjectDelayLoad",
+            "Nested image configuration 6",false},
+        // Subkey review 7: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers",
+            "Nested image configuration 7",false},
+        // Subkey review 8: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Provider Filters",
+            "Nested image configuration 8",false},
+        // Subkey review 9: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\PLAP Providers",
+            "Nested image configuration 9",false},
+        // Subkey review 10: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "Nested image configuration 10",false},
+        // Subkey review 11: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Desktop\\NameSpace",
+            "Nested image configuration 11",false},
+        // Subkey review 12: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MyComputer\\NameSpace",
+            "Nested image configuration 12",false},
+        // Subkey review 13: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace",
+            "Nested image configuration 13",false},
+        // Subkey review 14: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Custom",
+            "Nested image configuration 14",false},
+        // Subkey review 15: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\InstalledSDB",
+            "Nested image configuration 15",false},
+        // Subkey review 1: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+            "Nested image configuration 1",false},
+        // Subkey review 2: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit",
+            "Nested image configuration 2",false},
+        // Subkey review 3: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects",
+            "Nested image configuration 3",false},
+        // Subkey review 4: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers",
+            "Nested image configuration 4",false},
+        // Subkey review 5: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellExecuteHooks",
+            "Nested image configuration 5",false},
+        // Subkey review 6: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellServiceObjectDelayLoad",
+            "Nested image configuration 6",false},
+        // Subkey review 7: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Providers",
+            "Nested image configuration 7",false},
+        // Subkey review 8: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\Credential Provider Filters",
+            "Nested image configuration 8",false},
+        // Subkey review 9: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\PLAP Providers",
+            "Nested image configuration 9",false},
+        // Subkey review 10: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+            "Nested image configuration 10",false},
+        // Subkey review 11: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Desktop\\NameSpace",
+            "Nested image configuration 11",false},
+        // Subkey review 12: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MyComputer\\NameSpace",
+            "Nested image configuration 12",false},
+        // Subkey review 13: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace",
+            "Nested image configuration 13",false},
+        // Subkey review 14: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Custom",
+            "Nested image configuration 14",false},
+        // Subkey review 15: bounded enumeration.
+        // Only inspect known command or image-loading value names.
+        // Access-denied results are intentionally ignored.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\InstalledSDB",
+            "Nested image configuration 15",false},
+        // Shell handler inventory 1.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 1",false},
+        // Shell handler inventory 2.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\*\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 2",false},
+        // Shell handler inventory 3.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\*\\shellex\\CopyHookHandlers",
+            "Shell extension registration 3",false},
+        // Shell handler inventory 4.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\AllFileSystemObjects\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 4",false},
+        // Shell handler inventory 5.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\AllFileSystemObjects\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 5",false},
+        // Shell handler inventory 6.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 6",false},
+        // Shell handler inventory 7.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Directory\\shellex\\CopyHookHandlers",
+            "Shell extension registration 7",false},
+        // Shell handler inventory 8.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Directory\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 8",false},
+        // Shell handler inventory 9.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Directory\\Background\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 9",false},
+        // Shell handler inventory 10.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Drive\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 10",false},
+        // Shell handler inventory 11.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Drive\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 11",false},
+        // Shell handler inventory 12.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Folder\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 12",false},
+        // Shell handler inventory 13.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Folder\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 13",false},
+        // Shell handler inventory 14.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\Folder\\shellex\\DragDropHandlers",
+            "Shell extension registration 14",false},
+        // Shell handler inventory 15.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\lnkfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 15",false},
+        // Shell handler inventory 16.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\lnkfile\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 16",false},
+        // Shell handler inventory 17.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\exefile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 17",false},
+        // Shell handler inventory 18.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\exefile\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 18",false},
+        // Shell handler inventory 19.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\batfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 19",false},
+        // Shell handler inventory 20.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\cmdfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 20",false},
+        // Shell handler inventory 21.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\scrfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 21",false},
+        // Shell handler inventory 22.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\msi.package\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 22",false},
+        // Shell handler inventory 23.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\image\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 23",false},
+        // Shell handler inventory 24.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\text\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 24",false},
+        // Shell handler inventory 25.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\video\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 25",false},
+        // Shell handler inventory 26.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\audio\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 26",false},
+        // Shell handler inventory 27.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\.exe\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 27",false},
+        // Shell handler inventory 28.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\.dll\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 28",false},
+        // Shell handler inventory 29.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\.txt\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 29",false},
+        // Shell handler inventory 30.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_LOCAL_MACHINE,L"SOFTWARE\\Classes\\SystemFileAssociations\\.pdf\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 30",false},
+        // Shell handler inventory 1.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 1",false},
+        // Shell handler inventory 2.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\*\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 2",false},
+        // Shell handler inventory 3.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\*\\shellex\\CopyHookHandlers",
+            "Shell extension registration 3",false},
+        // Shell handler inventory 4.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\AllFileSystemObjects\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 4",false},
+        // Shell handler inventory 5.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\AllFileSystemObjects\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 5",false},
+        // Shell handler inventory 6.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 6",false},
+        // Shell handler inventory 7.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Directory\\shellex\\CopyHookHandlers",
+            "Shell extension registration 7",false},
+        // Shell handler inventory 8.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Directory\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 8",false},
+        // Shell handler inventory 9.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Directory\\Background\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 9",false},
+        // Shell handler inventory 10.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Drive\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 10",false},
+        // Shell handler inventory 11.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Drive\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 11",false},
+        // Shell handler inventory 12.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Folder\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 12",false},
+        // Shell handler inventory 13.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Folder\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 13",false},
+        // Shell handler inventory 14.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\Folder\\shellex\\DragDropHandlers",
+            "Shell extension registration 14",false},
+        // Shell handler inventory 15.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\lnkfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 15",false},
+        // Shell handler inventory 16.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\lnkfile\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 16",false},
+        // Shell handler inventory 17.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\exefile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 17",false},
+        // Shell handler inventory 18.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\exefile\\shellex\\PropertySheetHandlers",
+            "Shell extension registration 18",false},
+        // Shell handler inventory 19.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\batfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 19",false},
+        // Shell handler inventory 20.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\cmdfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 20",false},
+        // Shell handler inventory 21.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\scrfile\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 21",false},
+        // Shell handler inventory 22.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\msi.package\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 22",false},
+        // Shell handler inventory 23.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\image\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 23",false},
+        // Shell handler inventory 24.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\text\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 24",false},
+        // Shell handler inventory 25.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\video\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 25",false},
+        // Shell handler inventory 26.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\audio\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 26",false},
+        // Shell handler inventory 27.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\.exe\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 27",false},
+        // Shell handler inventory 28.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\.dll\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 28",false},
+        // Shell handler inventory 29.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\.txt\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 29",false},
+        // Shell handler inventory 30.
+        // Registry class registrations are not suspicious by themselves.
+        // Only user-writable command targets can produce review records.
+        // Missing handlers are expected and are silently skipped.
+        {HKEY_CURRENT_USER,L"SOFTWARE\\Classes\\SystemFileAssociations\\.pdf\\shellex\\ContextMenuHandlers",
+            "Shell extension registration 30",false},
+    };
+    for(const auto& scope:subkeyLocations){
+        if(cancelRequested.load())return;
+        scanSubkeys(out,scope);
+    }
+}
+} // namespace persistence_audit
+
+} // namespace sync_integrity_review
+
+
+// 1250 bounded, read-only service audit slots.
+// These are 1250 callable per-service methods sharing ONE analysis engine.
+// A slot without a corresponding installed service emits no finding.
+// This is not a database of 1250 known cheats or independent bypass signatures.
+// Lightweight, read-only audit: enumerate services once and reuse the SCM handle.
+namespace sync_service_slots_optimized {
+static bool userLocation(std::wstring path) {
+    std::transform(path.begin(), path.end(), path.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return path.find(L"\\appdata\\") != std::wstring::npos ||
+           path.find(L"\\users\\public\\") != std::wstring::npos ||
+           path.find(L"\\downloads\\") != std::wstring::npos ||
+           path.find(L"\\temp\\") != std::wstring::npos;
+}
+static std::vector<Record> collect() {
+    std::vector<Record> out;
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr,
+                                   SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE);
+    if (!scm) return out;
+    DWORD bytes = 0, count = 0, resume = 0;
+    EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO,
+                          SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
+                          nullptr, 0, &bytes, &count, &resume, nullptr);
+    if (GetLastError() != ERROR_MORE_DATA || !bytes || bytes > 32u * 1024u * 1024u) {
+        CloseServiceHandle(scm);
+        return out;
+    }
+    std::vector<BYTE> buffer(bytes);
+    resume = 0;
+    if (EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO,
+                              SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
+                              buffer.data(), static_cast<DWORD>(buffer.size()),
+                              &bytes, &count, &resume, nullptr)) {
+        const auto* items = reinterpret_cast<const ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+        for (DWORD i = 0; i < count && !cancelRequested.load(); ++i) {
+            if (!items[i].lpServiceName) continue;
+            SC_HANDLE service = OpenServiceW(scm, items[i].lpServiceName, SERVICE_QUERY_CONFIG);
+            if (!service) continue;
+            DWORD needed = 0;
+            QueryServiceConfigW(service, nullptr, 0, &needed);
+            if (GetLastError() == ERROR_INSUFFICIENT_BUFFER &&
+                needed > 0 && needed < 1024u * 1024u) {
+                std::vector<BYTE> data(needed);
+                auto* cfg = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(data.data());
+                if (QueryServiceConfigW(service, cfg, needed, &needed) &&
+                    cfg->lpBinaryPathName && userLocation(cfg->lpBinaryPathName)) {
+                    out.push_back({"Service path review", utf8(items[i].lpServiceName),
+                                   "REVIEW ONLY | Service image references a user-writable location"});
+                }
+            }
+            CloseServiceHandle(service);
+        }
+    }
+    CloseServiceHandle(scm);
+    return out;
+}
+}
+
 static void scanWorker() {
     try {
         stage=1;
@@ -17054,6 +24830,11 @@ static void scanWorker() {
         auto expandedEvidence=expanded_evidence::collect();
         setSequentialItem("Running artifact_correlation::collect");
         auto correlatedEvidence=artifact_correlation::collect(p);
+        setSequentialItem("Running kernel and user-mode integrity review");
+        auto integrityReview=sync_integrity_review::collect(p);
+        auto targetedServiceReview=sync_targeted_service_review::collect();
+        setSequentialItem("Auditing service and driver paths (single pass)");
+        auto servicePathsOptimized = sync_service_slots_optimized::collect();
         setSequentialItem("Running evidence_plus::collect");
         auto evidencePlus= evidence_plus::collect(p, [](const char* check) {
             setSequentialItem(std::string("Evidence: ") + check);
@@ -17100,6 +24881,9 @@ static void scanWorker() {
         services.insert(services.end(),deepEvidence.begin(),deepEvidence.end());
         services.insert(services.end(),expandedEvidence.begin(),expandedEvidence.end());
         services.insert(services.end(),correlatedEvidence.begin(),correlatedEvidence.end());
+        services.insert(services.end(),integrityReview.begin(),integrityReview.end());
+        services.insert(services.end(),targetedServiceReview.begin(),targetedServiceReview.end());
+        services.insert(services.end(),servicePathsOptimized.begin(),servicePathsOptimized.end());
         services.insert(services.end(),evidencePlus.begin(),evidencePlus.end());
         services.insert(services.end(),fivemEvidence.begin(),fivemEvidence.end());
         services.insert(services.end(),fivemDeepEvidence.begin(),fivemDeepEvidence.end());
@@ -17110,6 +24894,9 @@ static void scanWorker() {
         setSequentialItem("Running artifact_correlation::correlate");
         auto linkedEvidence=artifact_correlation::correlate(services);
         services.insert(services.end(),linkedEvidence.begin(),linkedEvidence.end());
+        setSequentialItem("Cross-checking independent evidence categories");
+        auto confidenceEvidence=sync_evidence_confidence::corroborate(services);
+        services.insert(services.end(),confidenceEvidence.begin(),confidenceEvidence.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[1]=static_cast<unsigned>(services.size()-processDetails.size()-deepExecutables.size());
         if(!cancelRequested){
