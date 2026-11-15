@@ -21488,7 +21488,7 @@ static void audit250ServiceLocation(std::vector<Record>& out,
     DWORD size=sizeof(buffer);
     DWORD type=0;
     const LSTATUS rc=RegGetValueW(HKEY_LOCAL_MACHINE,key.c_str(),valueName,
-        RRF_RT_REG_SZ|RRF_RT_REG_EXPAND_SZ,nullptr,&type,buffer,&size);
+        RRF_RT_REG_SZ|RRF_RT_REG_EXPAND_SZ,&type,buffer,&size);
     if(rc!=ERROR_SUCCESS || !buffer[0])return;
     std::wstring location(buffer);
     if(type==REG_EXPAND_SZ){
@@ -22253,6 +22253,58 @@ static void auditBatch250Service249(std::vector<Record>& out) {
 static void auditBatch250Service250(std::vector<Record>& out) {
     audit250ServiceLocation(out,L"UsoSvc",L"ServiceDll",true);
 }
+
+// Forward declarations: these read-only audits are defined below collect().
+static void auditExtraKernelSecureBootPolicy(std::vector<Record>& out);
+static void auditExtraKernelCodeIntegrityAudit(std::vector<Record>& out);
+static void auditExtraKernelDeviceGuardLocked(std::vector<Record>& out);
+static void auditExtraKernelHVCILocked(std::vector<Record>& out);
+static void auditExtraKernelCredentialGuardEnabled(std::vector<Record>& out);
+static void auditExtraKernelCredentialGuardLocked(std::vector<Record>& out);
+static void auditExtraKernelSystemGuardEnabled(std::vector<Record>& out);
+static void auditExtraKernelSystemGuardLocked(std::vector<Record>& out);
+static void auditExtraKernelKernelShadowStack(std::vector<Record>& out);
+static void auditExtraKernelKernelShadowStackAudit(std::vector<Record>& out);
+static void auditExtraKernelBootExecutePolicy(std::vector<Record>& out);
+static void auditExtraKernelCrashDumpPolicy(std::vector<Record>& out);
+static void auditExtraKernelDriverSignaturePolicy(std::vector<Record>& out);
+static void auditExtraKernelDeviceInstallAdmin(std::vector<Record>& out);
+static void auditExtraKernelRemoteRegistryService(std::vector<Record>& out);
+static void auditExtraKernelKernelDebugService(std::vector<Record>& out);
+static void auditExtraKernelWinDefendDisabled(std::vector<Record>& out);
+static void auditExtraKernelSecurityHealthDisabled(std::vector<Record>& out);
+static void auditExtraKernelWdFilterDisabled(std::vector<Record>& out);
+static void auditExtraKernelWdNisDrvDisabled(std::vector<Record>& out);
+static void auditExtraKernelWdBootDisabled(std::vector<Record>& out);
+static void auditExtraKernelFirewallServiceDisabled(std::vector<Record>& out);
+static void auditExtraKernelBaseFilteringDisabled(std::vector<Record>& out);
+static void auditExtraKernelEventLogDisabled(std::vector<Record>& out);
+static void auditExtraKernelSecurityCenterDisabled(std::vector<Record>& out);
+static void auditExtraUserDisableRealtimeMonitoringUser(std::vector<Record>& out);
+static void auditExtraUserDisableBehaviorMonitoringUser(std::vector<Record>& out);
+static void auditExtraUserDisableIOAVProtectionUser(std::vector<Record>& out);
+static void auditExtraUserDisableScriptScanningUser(std::vector<Record>& out);
+static void auditExtraUserDisableBlockAtFirstSeenUser(std::vector<Record>& out);
+static void auditExtraUserSystemDisableTaskMgr(std::vector<Record>& out);
+static void auditExtraUserSystemDisableRegistryTools(std::vector<Record>& out);
+static void auditExtraUserSystemDisableCMD(std::vector<Record>& out);
+static void auditExtraUserSystemEnableLUA(std::vector<Record>& out);
+static void auditExtraUserSystemConsentAdmin(std::vector<Record>& out);
+static void auditExtraUserSystemPromptSecureDesktop(std::vector<Record>& out);
+static void auditExtraUserSystemFilterAdminToken(std::vector<Record>& out);
+static void auditExtraUserSystemValidateAdminSignatures(std::vector<Record>& out);
+static void auditExtraUserSystemEnableInstallerDetection(std::vector<Record>& out);
+static void auditExtraUserSystemEnableSecureUIA(std::vector<Record>& out);
+static void auditExtraUserSystemEnableVirtualization(std::vector<Record>& out);
+static void auditExtraUserSystemEnableUIADesktopToggle(std::vector<Record>& out);
+static void auditExtraUserWindowsScriptHostDisabled(std::vector<Record>& out);
+static void auditExtraUserExplorerHideFileExt(std::vector<Record>& out);
+static void auditExtraUserExplorerHiddenFiles(std::vector<Record>& out);
+static void auditExtraUserDisableSmartScreenUser(std::vector<Record>& out);
+static void auditExtraUserDisableFirewallDomainUser(std::vector<Record>& out);
+static void auditExtraUserDisableFirewallPrivateUser(std::vector<Record>& out);
+static void auditExtraUserDisableFirewallPublicUser(std::vector<Record>& out);
+static void auditExtraUserDisableAttachmentsSaveZone(std::vector<Record>& out);
 
 static std::vector<Record> collect(const std::vector<Process>& processes) {
     std::vector<Record> result;
@@ -23766,7 +23818,7 @@ static void scanSubkeys(std::vector<Record>& out,const Scope& scope) {
     if(RegOpenKeyExW(scope.root,scope.key,0,KEY_READ,&key)!=ERROR_SUCCESS)return;
     DWORD count=0,maxName=0;
     if(RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,&count,&maxName,
-        nullptr,nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS){
+        nullptr,nullptr,nullptr,nullptr)!=ERROR_SUCCESS){
         RegCloseKey(key);return;
     }
     std::vector<wchar_t> name(std::min<DWORD>(maxName+2,32768),0);
