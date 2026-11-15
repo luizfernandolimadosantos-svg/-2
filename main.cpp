@@ -27692,15 +27692,22 @@ static void drawReviewQueueNew() {
     static char filter[160]{};
     ImGui::SetNextItemWidth((std::min)(420.f,ImGui::GetContentRegionAvail().x));
     ImGui::InputTextWithHint("##reviewFilter","Search category, name or detail...",filter,sizeof(filter));
+    // Copy only the first matching records, not the entire potentially large scan.
     std::vector<Record> snapshot;
+    const size_t limit=300;
+    const std::string term=filter;
     {
         std::lock_guard<std::mutex> lock(dataMutex);
-        snapshot=records;
+        snapshot.reserve((std::min)(limit,records.size()));
+        for (const auto& r : records) {
+            if (!term.empty() && r.category.find(term)==std::string::npos &&
+                r.name.find(term)==std::string::npos &&
+                r.detail.find(term)==std::string::npos) continue;
+            snapshot.push_back(r);
+            if (snapshot.size() >= limit) break;
+        }
     }
-    // Do not allocate or render a huge table in a single frame.
-    const size_t limit=300;
     size_t shown=0;
-    const std::string term=filter;
     if(ImGui::BeginTable("##reviewQueue",3,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1.f))) {
@@ -27710,10 +27717,7 @@ static void drawReviewQueueNew() {
         ImGui::TableSetupColumn("Description",ImGuiTableColumnFlags_WidthStretch,2.5f);
         ImGui::TableHeadersRow();
         for(const auto& r:snapshot) {
-            if(!term.empty() && r.category.find(term)==std::string::npos &&
-                r.name.find(term)==std::string::npos &&
-                r.detail.find(term)==std::string::npos)continue;
-            if(shown++>=limit)continue;
+            ++shown;
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
