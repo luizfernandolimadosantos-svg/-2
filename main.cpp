@@ -27962,9 +27962,9 @@ static void renderUI() {
         syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
     }
     lastNavPage=page;
-    const char* nav[]={"OVERVIEW","SCAN RESULTS","ARTIFACTS",
+    const char* nav[]={"VERDICT","OVERVIEW","SCAN RESULTS","ARTIFACTS",
                        "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS"};
-    const int navPages[]={0,2,9,3,7,6,8,10,4};
+    const int navPages[]={11,0,2,9,3,7,6,8,10,4};
     // Quick page navigation, ignored while editing text or using shortcuts.
     // Ctrl+1..9 follows the visible tab order.
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
@@ -27979,8 +27979,8 @@ static void renderUI() {
     }
     // Simplified mode keeps only four primary destinations visible.
     // Advanced mode preserves the complete original navigation.
-    const int simpleNavIndices[]={0,1,2,8};
-    const int visibleNavCount=simplifiedInterface?4:9;
+    const int simpleNavIndices[]={0,1,2,3,9};
+    const int visibleNavCount=simplifiedInterface?5:10;
     const float navGap=10.f;
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
@@ -28084,7 +28084,7 @@ static void renderUI() {
                     IM_COL32(100,100,100,33),1.f);
         dl->PopClipRect();
     }
-    const char* section=page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
+    const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
         page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
         page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":"PREFERENCES";
@@ -28243,6 +28243,82 @@ static void renderUI() {
         }
         ImGui::PopStyleColor(2);
         ImGui::Dummy(ImVec2(0,1.f));
+    } else if(page==11) {
+        sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
+        ImGui::Spacing();
+        if(scanning || presentationHold.load()){
+            ImGui::TextColored(ImVec4(.55f,.75f,1.f,1.f),
+                "IN PROGRESS - analysis is not final");
+            ImGui::Text("Stages: %d / %d",completedStages.load(),totalStages.load());
+        } else if(!inspectionResultsReady()){
+            ImGui::TextColored(ImVec4(.9f,.72f,.43f,1.f),
+                "NOT ASSESSED");
+            ImGui::TextWrapped("Run a full scan before interpreting the results.");
+            if(scanFailed)ImGui::TextDisabled("The previous scan failed.");
+            if(scanCancelled)ImGui::TextDisabled("The previous scan was cancelled.");
+        } else {
+            size_t suspiciousProcesses=0;
+            size_t bypassIndicators=0;
+            size_t formatMentions=0;
+            size_t evidenceTotal=0;
+            {
+                std::lock_guard<std::mutex> guard(dataMutex);
+                evidenceTotal=records.size();
+                for(const auto& p:processes)if(p.suspicious)++suspiciousProcesses;
+                for(const auto& r:records){
+                    std::string hay=r.category+" "+r.name+" "+r.detail;
+                    std::transform(hay.begin(),hay.end(),hay.begin(),
+                        [](unsigned char c){return static_cast<char>(std::tolower(c));});
+                    if(hay.find("bypass")!=std::string::npos ||
+                       hay.find("tamper")!=std::string::npos ||
+                       hay.find("evasion")!=std::string::npos)
+                        ++bypassIndicators;
+                    if(hay.find("format")!=std::string::npos ||
+                       hay.find("reinstall")!=std::string::npos)
+                        ++formatMentions;
+                }
+            }
+            // UI classification only: never treat heuristic evidence as proof
+            // of a person's behavior. "Detected" means scanner indicators.
+            const bool detectedIndicators =
+                suspiciousProcesses >= 2 && bypassIndicators >= 1;
+            const bool suspectIndicators =
+                suspiciousProcesses > 0 || bypassIndicators > 0;
+            const char* verdictLabel = detectedIndicators ? "CHEATER (DETECTED)" :
+                suspectIndicators ? "SUSPECT" : "CLEAN";
+            const ImVec4 verdictColor = detectedIndicators ?
+                ImVec4(.98f,.38f,.40f,1.f) : suspectIndicators ?
+                ImVec4(.98f,.72f,.32f,1.f) : ImVec4(.42f,.85f,.62f,1.f);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.085f,.12f,.17f,1.f));
+            ImGui::BeginChild("##verdictStatus",ImVec2(0,114),ImGuiChildFlags_Borders);
+            ImGui::Spacing();
+            ImGui::SetWindowFontScale(1.6f);
+            ImGui::TextColored(verdictColor,"%s",verdictLabel);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::TextWrapped("%s",detectedIndicators ?
+                "Multiple scanner indicators detected; manual confirmation required." :
+                suspectIndicators ? "Indicators found; inspect the evidence." :
+                "No matching indicators in this scan; not a guarantee.");
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::TextDisabled("Classification is heuristic; it does not prove cheating.");
+            ImGui::Separator();
+            ImGui::Text("Suspicious processes: %zu",suspiciousProcesses);
+            ImGui::Text("Bypass-related evidence mentions: %zu",bypassIndicators);
+            ImGui::Text("Total evidence records: %zu",evidenceTotal);
+            ImGui::Spacing();
+            ImGui::TextWrapped("Clean: No scanner can prove a PC is fully clean. "
+                "No findings means only that this scan found no matching indicators.");
+            ImGui::TextWrapped("Bypass: Keyword matches are review leads, not proof "
+                "of bypass tools or intent. Confirm each finding in Scan Results.");
+            ImGui::TextWrapped("Formatting/reinstallation: %zu related mentions in "
+                "collected evidence. These do not establish whether Windows was formatted.",
+                formatMentions);
+        }
+        ImGui::Spacing();
+        if(ImGui::Button("Open scan overview",ImVec2(190,40)))page=0;
+        ImGui::SameLine();
+        if(ImGui::Button("Inspect evidence",ImVec2(190,40)))page=2;
     } else if(page==0 && simplifiedInterface) {
         const ImVec4 muted(.67f,.67f,.67f,1.f);
         ImGui::SetWindowFontScale(1.12f);
