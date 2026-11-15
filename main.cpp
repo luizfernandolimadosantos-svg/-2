@@ -38,6 +38,7 @@
 #include <array>
 #include <chrono>
 #include <system_error>
+#include <functional>
 #include <cstdint>
 #include <winreg.h>
 #include <cctype>
@@ -3926,9 +3927,15 @@ static std::vector<Record> inspectYaraLocalFiles(const std::vector<Process>&){
 static std::atomic<unsigned> sequentialDone{0},sequentialTotal{0};
 static std::mutex sequentialLabelMutex;
 static std::string sequentialCurrent;
+static std::atomic<long long> scanActivityTickMs{0};
+static long long scanSteadyMs(){
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static void setSequentialItem(const std::string& label){
     std::lock_guard<std::mutex> lock(sequentialLabelMutex);
     sequentialCurrent=label;
+    scanActivityTickMs.store(scanSteadyMs(),std::memory_order_relaxed);
 }
 static std::string getSequentialItem(){
     std::lock_guard<std::mutex> lock(sequentialLabelMutex);
@@ -4278,7 +4285,7 @@ static std::vector<Record> inspectDeepProcessExecutables(
     return findings;
 }
 // Optional presentation hold, never counted as forensic work.
-static constexpr unsigned kMinimumDisplaySeconds=15;
+static constexpr unsigned kMinimumDisplaySeconds=0; // No artificial post-scan waiting
 static std::atomic<unsigned> presentationWaitRemaining{0};
 static std::atomic<bool> presentationHold{false};
 
@@ -10363,21 +10370,43 @@ static void inspectPEImages(Collector& out,
     }
 }
 // The scan is bounded and may skip inaccessible protected objects.
-static std::vector<Record> collect(const std::vector<Process>& processes) {
+static std::vector<Record> collect(
+    const std::vector<Process>& processes,
+    const std::function<void(const char*)>& reportProgress = {}) {
     Collector out;
-    inspectTaskFiles(out);
-    if(!out.stopped())inspectOperationalEvents(out);
-    if(!out.stopped())inspectBrowserHosts(out);
-    if(!out.stopped())inspectRegistryLocations(out);
-    if(!out.stopped())inspectStartupLocations(out);
-    if(!out.stopped())inspectPrefetch(out);
-    if(!out.stopped())inspectForensicStores(out);
-    if(!out.stopped())inspectCrashReports(out);
-    if(!out.stopped())inspectAuthenticode(out,processes);
-    if(!out.stopped())inspectNetworkOwners(out,processes);
-    if(!out.stopped())inspectImageAttributes(out,processes);
-    if(!out.stopped())inspectAlternateStreamNames(out,processes);
-    if(!out.stopped())inspectPEImages(out,processes);
+    auto run = [&](const char* name, auto&& work) {
+        if (out.stopped()) return;
+        if (reportProgress) reportProgress(name);
+        diagnosticLog(name);
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            work();
+        } catch (const std::exception& e) {
+            diagnosticLog(e.what());
+        } catch (...) {
+            diagnosticLog("Evidence collection subcheck failed with unknown exception");
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        char message[180]{};
+        snprintf(message, sizeof(message), "Evidence check %s finished in %lld ms",
+                 name, static_cast<long long>(elapsed));
+        diagnosticLog(message);
+    };
+    run("Task files", [&]{ inspectTaskFiles(out); });
+    run("Operational events", [&]{ inspectOperationalEvents(out); });
+    run("Browser hosts", [&]{ inspectBrowserHosts(out); });
+    run("Registry locations", [&]{ inspectRegistryLocations(out); });
+    run("Startup locations", [&]{ inspectStartupLocations(out); });
+    run("Prefetch", [&]{ inspectPrefetch(out); });
+    run("Forensic stores", [&]{ inspectForensicStores(out); });
+    run("Crash reports", [&]{ inspectCrashReports(out); });
+    run("Authenticode", [&]{ inspectAuthenticode(out, processes); });
+    run("Network owners", [&]{ inspectNetworkOwners(out, processes); });
+    run("Image attributes", [&]{ inspectImageAttributes(out, processes); });
+    run("Alternate streams", [&]{ inspectAlternateStreamNames(out, processes); });
+    run("PE images", [&]{ inspectPEImages(out, processes); });
+    if (reportProgress) reportProgress("Evidence collection complete");
     return std::move(out.rows);
 }
 } // namespace evidence_plus
@@ -16976,6 +17005,7 @@ static std::vector<Record> collect(
 static void scanWorker() {
     try {
         stage=1;
+        setSequentialItem("Running enumerateProcesses");
         auto p=enumerateProcesses();
         std::unordered_map<DWORD,std::wstring> observedPrevious;
         std::unordered_set<DWORD> observedEver;
@@ -16993,28 +17023,52 @@ static void scanWorker() {
             ++sequentialDone;
         }
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("Running inspectIndividualProcesses");
         auto processDetails=inspectIndividualProcesses(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
+        setSequentialItem("Running inspectDeepProcessExecutables");
         auto deepExecutables=inspectDeepProcessExecutables(p);
+        setSequentialItem("Running inspectExecutableAndDriverReview");
         auto exeAndDriverReview=inspectExecutableAndDriverReview(p);
+        setSequentialItem("Running inspectFifteenArtifactRules");
         auto additionalArtifactRules=inspectFifteenArtifactRules(p);
+        setSequentialItem("Running inspectAdditionalFifteenRules");
         auto additionalContextRules=inspectAdditionalFifteenRules(p);
+        setSequentialItem("Running inspectThirdFifteenRules");
         auto thirdArtifactRules=inspectThirdFifteenRules(p);
+        setSequentialItem("Running inspectFourthTwentyRules");
         auto fourthArtifactRules=inspectFourthTwentyRules(p);
+        setSequentialItem("Running inspectFifthTwentyRules");
         auto fifthArtifactRules=inspectFifthTwentyRules(p);
+        setSequentialItem("Running inspectSixthTwentyRules");
         auto sixthArtifactRules=inspectSixthTwentyRules(p);
+        setSequentialItem("Running inspectSeventhTwentyRules");
         auto seventhArtifactRules=inspectSeventhTwentyRules(p);
+        setSequentialItem("Running inspectEighthThirtyRules");
         auto eighthArtifactRules=inspectEighthThirtyRules(p);
+        setSequentialItem("Running real_detect::collect");
         auto realEvidence=real_detect::collect(p);
+        setSequentialItem("Running deep_evidence::collect");
         auto deepEvidence=deep_evidence::collect(p);
+        setSequentialItem("Running expanded_evidence::collect");
         auto expandedEvidence=expanded_evidence::collect();
+        setSequentialItem("Running artifact_correlation::collect");
         auto correlatedEvidence=artifact_correlation::collect(p);
-        auto evidencePlus= evidence_plus::collect(p);
+        setSequentialItem("Running evidence_plus::collect");
+        auto evidencePlus= evidence_plus::collect(p, [](const char* check) {
+            setSequentialItem(std::string("Evidence: ") + check);
+        });
+        setSequentialItem("Running fivem_evidence::collect");
         auto fivemEvidence=fivem_evidence::collect(p);
+        setSequentialItem("Running fivem_deep::collect");
         auto fivemDeepEvidence=fivem_deep::collect(p);
+        setSequentialItem("Running artifact_paths_v87::collect");
         auto pathArtifacts=artifact_paths_v87::collect(p);
+        setSequentialItem("Running artifact_review_v88::collect");
         auto artifactReview=artifact_review_v88::collect(p);
+        setSequentialItem("Running specialized_v89::collect");
         auto specializedEvidence=specialized_v89::collect(p);
+        setSequentialItem("Running artifact_consistency_v90::collect");
         auto consistencyEvidence=artifact_consistency_v90::collect(p);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[0]=static_cast<unsigned>(p.size());
@@ -17029,6 +17083,7 @@ static void scanWorker() {
         stage=2;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Service inventory");
+        setSequentialItem("Running enumerateServices");
         auto services=enumerateServices();
         services.insert(services.end(),processDetails.begin(),processDetails.end());
         services.insert(services.end(),deepExecutables.begin(),deepExecutables.end());
@@ -17052,6 +17107,7 @@ static void scanWorker() {
         services.insert(services.end(),artifactReview.begin(),artifactReview.end());
         services.insert(services.end(),specializedEvidence.begin(),specializedEvidence.end());
         services.insert(services.end(),consistencyEvidence.begin(),consistencyEvidence.end());
+        setSequentialItem("Running artifact_correlation::correlate");
         auto linkedEvidence=artifact_correlation::correlate(services);
         services.insert(services.end(),linkedEvidence.begin(),linkedEvidence.end());
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
@@ -17067,6 +17123,7 @@ static void scanWorker() {
         stage=3;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Startup inventory");
+        setSequentialItem("Running enumerateStartup");
         auto startup=enumerateStartup();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[2]=static_cast<unsigned>(startup.size());
@@ -17081,10 +17138,15 @@ static void scanWorker() {
         stage=4;
         sequentialDone=0;sequentialTotal=0;
         setSequentialItem("Network and device inventory");
+        setSequentialItem("Running enumerateTcp");
         auto network=enumerateTcp();
+        setSequentialItem("Running enumerateUdp");
         auto udp=enumerateUdp();
+        setSequentialItem("Running enumerateTcp6");
         auto tcp6=enumerateTcp6();
+        setSequentialItem("Running enumerateUsbStorage");
         auto usb=enumerateUsbStorage();
+        setSequentialItem("Running enumerateDefenderDetections");
         auto defender=enumerateDefenderDetections();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         stageWorkItems[3]=static_cast<unsigned>(
@@ -17102,18 +17164,22 @@ static void scanWorker() {
         sequentialTotal=39;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectWindowsSecurityConfiguration");
+        setSequentialItem("Running inspectWindowsSecurityConfiguration");
         auto security=inspectWindowsSecurityConfiguration();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectPolicyRuleSet");
+        setSequentialItem("Running inspectPolicyRuleSet");
         auto policyRules=inspectPolicyRuleSet();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFirmwareAndDmaIndicators");
+        setSequentialItem("Running inspectFirmwareAndDmaIndicators");
         auto firmwareIndicators=inspectFirmwareAndDmaIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFiveMSafeTestMarkers");
+        setSequentialItem("Running inspectFiveMSafeTestMarkers");
         auto fiveMTest=inspectFiveMSafeTestMarkers();
         ++sequentialDone;
         // Capture-protection diagnostics: inspect only our own window.
@@ -17136,154 +17202,193 @@ static void scanWorker() {
 
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectImageExecutionOptions");
+        setSequentialItem("Running inspectImageExecutionOptions");
         auto ifeo=inspectImageExecutionOptions();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdvancedPersistence");
+        setSequentialItem("Running inspectAdvancedPersistence");
         auto advancedPersistence=inspectAdvancedPersistence();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtendedEndpoint");
+        setSequentialItem("Running inspectExtendedEndpoint");
         auto extendedEndpoint=inspectExtendedEndpoint();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectDesktopWindowVisibility");
+        setSequentialItem("Running inspectDesktopWindowVisibility");
         auto windowVisibility=inspectDesktopWindowVisibility(hwnd);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectLogonConfiguration");
+        setSequentialItem("Running inspectLogonConfiguration");
         auto logon=inspectLogonConfiguration();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectHostsFile");
+        setSequentialItem("Running inspectHostsFile");
         auto hosts=inspectHostsFile();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectCheatNamedProcesses");
+        setSequentialItem("Running inspectCheatNamedProcesses");
         auto cheatNameProcesses=inspectCheatNamedProcesses(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectCheatNamedModules");
+        setSequentialItem("Running inspectCheatNamedModules");
         auto cheatNameModules=inspectCheatNamedModules(p);
+        setSequentialItem("Running inspectExpandedDllIndicators");
         auto dllReviewRecords=inspectExpandedDllIndicators(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectArtifactLocations");
+        setSequentialItem("Running inspectArtifactLocations");
         auto artifactLocations=inspectArtifactLocations();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdditionalEvidence");
+        setSequentialItem("Running inspectAdditionalEvidence");
         auto additionalEvidence=inspectAdditionalEvidence(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExpandedPersistenceIndicators");
+        setSequentialItem("Running inspectExpandedPersistenceIndicators");
         auto expandedPersistence=inspectExpandedPersistenceIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectStartupFolderIndicators");
+        setSequentialItem("Running inspectStartupFolderIndicators");
         auto startupFileIndicators=inspectStartupFolderIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectSpecialPersistenceKeys");
+        setSequentialItem("Running inspectSpecialPersistenceKeys");
         auto specialPersistence=inspectSpecialPersistenceKeys();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExecutableAlternateStreams");
+        setSequentialItem("Running inspectExecutableAlternateStreams");
         auto executableStreams=inspectExecutableAlternateStreams(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectImageExecutionHijackSettings");
+        setSequentialItem("Running inspectImageExecutionHijackSettings");
         auto executionConfig=inspectImageExecutionHijackSettings();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectFilenameMasquerading");
+        setSequentialItem("Running inspectFilenameMasquerading");
         auto masquerading=inspectFilenameMasquerading(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectShellInitialization");
+        setSequentialItem("Running inspectShellInitialization");
         auto shellInitialization=inspectShellInitialization();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectSecurityPolicyWeakening");
+        setSequentialItem("Running inspectSecurityPolicyWeakening");
         auto securityWeakening=inspectSecurityPolicyWeakening();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectBamExecutionHistory");
+        setSequentialItem("Running inspectBamExecutionHistory");
         auto bamHistory=inspectBamExecutionHistory();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectDefenderExclusionIndicators");
+        setSequentialItem("Running inspectDefenderExclusionIndicators");
         auto defenderExclusions=inspectDefenderExclusionIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectScheduledTaskNames");
+        setSequentialItem("Running inspectScheduledTaskNames");
         auto scheduledTaskNames=inspectScheduledTaskNames();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectUserComRegistrationIndicators");
+        setSequentialItem("Running inspectUserComRegistrationIndicators");
         auto comRegistrations=inspectUserComRegistrationIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectServiceImagePathIndicators");
+        setSequentialItem("Running inspectServiceImagePathIndicators");
         auto serviceImagePaths=inspectServiceImagePathIndicators();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectPeStructure");
+        setSequentialItem("Running inspectPeStructure");
         auto peFindings=inspectPeStructure(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExecutableProvenance");
+        setSequentialItem("Running inspectExecutableProvenance");
         auto provenance=inspectExecutableProvenance(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectLoadedModuleProvenance");
+        setSequentialItem("Running inspectLoadedModuleProvenance");
         auto loadedModules=inspectLoadedModuleProvenance(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectTemporaryExecutables");
+        setSequentialItem("Running inspectTemporaryExecutables");
         auto temporaryExecutables=inspectTemporaryExecutables(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("collectWindowsTimeline");
+        setSequentialItem("Running collectWindowsTimeline");
         auto timeline=collectWindowsTimeline();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectBypassEvidenceIntegrity");
+        setSequentialItem("Running inspectBypassEvidenceIntegrity");
         auto bypassIntegrity=inspectBypassEvidenceIntegrity();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtendedBypassEvidence");
+        setSequentialItem("Running inspectExtendedBypassEvidence");
         auto bypassExtended=inspectExtendedBypassEvidence(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdditionalCheatIndicators");
+        setSequentialItem("Running inspectAdditionalCheatIndicators");
         auto advancedIntegrity=inspectAdditionalCheatIndicators(p);
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAuditAndPlatformEvidence");
+        setSequentialItem("Running inspectAuditAndPlatformEvidence");
         auto auditPlatform=inspectAuditAndPlatformEvidence();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectExtraSecurityPolicies");
+        setSequentialItem("Running inspectExtraSecurityPolicies");
         auto extraPolicies=inspectExtraSecurityPolicies();
         ++sequentialDone;
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectForensicSourceHeaders");
+        setSequentialItem("Running inspectForensicSourceHeaders");
         auto forensicHeaders=inspectForensicSourceHeaders();
         ++sequentialDone;
         forensicSourceChecks.store(static_cast<unsigned>(forensicHeaders.size()));
         forensicSourceStatus.store(1);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectYaraLocalFiles");
+        setSequentialItem("Running inspectYaraLocalFiles");
         auto yaraFindings=inspectYaraLocalFiles(p);
         ++sequentialDone;        if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectNamedBatchScripts (.bat/.cmd)");
+        setSequentialItem("Running inspectNamedBatchScripts");
         auto batchNameFindings=inspectNamedBatchScripts();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         // Reconcile a second actual Windows snapshot; this is a bounded
         // discovery pass, not an invented process count or an ETW monitor.
         setSequentialItem("Second process snapshot / PID reconciliation");
+        setSequentialItem("Running enumerateProcesses");
         auto secondSnapshot=enumerateProcesses();
+        setSequentialItem("Running reconcileProcessSnapshots");
         auto processChanges=reconcileProcessSnapshots(p,secondSnapshot);
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         forensicProducedRecords=static_cast<unsigned>(forensicHeaders.size()+
@@ -17339,8 +17444,10 @@ static void scanWorker() {
         services.insert(services.end(),serviceImagePaths.begin(),serviceImagePaths.end());
         services.insert(services.end(),loadedModules.begin(),loadedModules.end());
         services.insert(services.end(),temporaryExecutables.begin(),temporaryExecutables.end());
+        setSequentialItem("Running correlateBypassIndicators");
         auto bypassCorrelations=correlateBypassIndicators(services);
         services.insert(services.end(),bypassCorrelations.begin(),bypassCorrelations.end());
+        setSequentialItem("Running correlateForensicEvidence");
         auto correlations=correlateForensicEvidence(services);
         forensicCorrelationNotices.store(static_cast<unsigned>(correlations.size()));
         services.insert(services.end(),correlations.begin(),correlations.end());
@@ -17360,7 +17467,7 @@ static void scanWorker() {
         // presentation countdown; do not change scanElapsedUs or stage timings.
         const auto actualUs=scanElapsedUs.load();
         const auto minimumUs=static_cast<unsigned long long>(kMinimumDisplaySeconds)*1000000ULL;
-        if(actualUs<minimumUs){
+        if(kMinimumDisplaySeconds>0 && actualUs<minimumUs){
             presentationHold=true;
             const auto until=std::chrono::steady_clock::now()+
                 std::chrono::microseconds(minimumUs-actualUs);
@@ -17391,8 +17498,33 @@ static double inspectionPresentationFraction(){
     if(done)return 1.0;
     return std::clamp(completedStages.load()/6.0,0.0,0.99);
 }
+// Presentation-only counter: never exceeds completed real scan milestones.
+// Advances one integer percentage at a time, even when a stage finishes at once.
 static int inspectionDisplayPercent(){
-    return (int)std::round(inspectionPresentationFraction()*100.0);
+    static int displayed=0;
+    static double lastTick=-1.0;
+    static double scanIdentity=-1.0;
+    const double now=ImGui::GetTime();
+    if(scanIdentity!=inspectionProgressStart){
+        scanIdentity=inspectionProgressStart;
+        displayed=0;
+        lastTick=now;
+    }
+    if(inspectionProgressStart<=0.0){
+        displayed=0;
+        lastTick=now;
+        return 0;
+    }
+    const int actual=std::clamp(
+        static_cast<int>(std::floor(inspectionPresentationFraction()*100.0+0.00001)),
+        0,100);
+    if(lastTick<0.0 || now<lastTick)lastTick=now;
+    // Limit to one increment per rendered frame; never jump over numbers.
+    if(displayed<actual && now-lastTick>=0.045){
+        ++displayed;
+        lastTick=now;
+    }
+    return displayed;
 }
 
 static void startScan() {
@@ -18011,6 +18143,12 @@ static void drawMemoryInvestigation(const char* mode,bool embedded=false){
         ImGui::EndTable();
     }
 }
+// UI-only navigation animation. No scanner state is modified.
+static double syncPageAnimationAt = -100.0;
+static float syncEase(float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    return t*t*(3.f-2.f*t);
+}
 static void modulesList() {
     const float full=ImGui::GetContentRegionAvail().x;
     const float gap=10.f;
@@ -18020,6 +18158,18 @@ static void modulesList() {
         const auto& m=inspectionModules[i];
         ImGui::PushID(i);
         if(i%columns)ImGui::SameLine(0,gap);
+        // Each module enters individually on every navigation to this page.
+        const float cardAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
+        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.095f)/0.38f);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+            ImGui::GetStyle().Alpha*(0.02f+0.98f*cardT));
+        // Keep the card's layout stable; do not show or activate it before its turn.
+        if(cardT<=0.001f) {
+            ImGui::Dummy(ImVec2(width,180.f));
+            ImGui::PopStyleVar();
+            ImGui::PopID();
+            continue;
+        }
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
@@ -18044,6 +18194,7 @@ static void modulesList() {
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
+        ImGui::PopStyleVar(); // per-card alpha
         ImGui::PopID();
     }
     if(openInspectorRequested) { ImGui::OpenPopup("Evidence inspector"); openInspectorRequested=false; }
@@ -18918,6 +19069,21 @@ static bool isSensitiveDumpTarget(const std::wstring& path){
     for(const wchar_t* item:blocked)if(name==item)return true;
     return false;
 }
+// Check current file availability without changing the scanned system.
+// A missing path is not proof of deletion: it may have been moved or renamed.
+static std::string evidenceFileAvailability(const std::wstring& path) {
+    if(path.empty())return "Unable to verify - no file path recorded.";
+    const DWORD attributes=GetFileAttributesW(path.c_str());
+    if(attributes!=INVALID_FILE_ATTRIBUTES) {
+        return (attributes&FILE_ATTRIBUTE_DIRECTORY)
+            ? "Path exists (directory, not a file)."
+            : "File exists.";
+    }
+    const DWORD error=GetLastError();
+    if(error==ERROR_FILE_NOT_FOUND || error==ERROR_PATH_NOT_FOUND)
+        return "File removed or deleted (not found at the recorded path).";
+    return "Unable to verify file status (Windows error "+std::to_string(error)+").";
+}
 static void drawEvidenceDetails() {
     if(!evidenceDetailsOpen)return;
     ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_FirstUseEver);
@@ -18943,6 +19109,9 @@ static void drawEvidenceDetails() {
     if(!evidenceFile.empty()) {
         ImGui::Separator();
         ImGui::TextWrapped("File: %s",utf8(evidenceFile).c_str());
+        const std::string fileAvailability=evidenceFileAvailability(evidenceFile);
+        ImGui::TextWrapped("File status: %s",fileAvailability.c_str());
+        ImGui::TextDisabled("Status checked now; this does not establish when or why a file disappeared.");
         if(ImGui::Button("Verify SHA-256 and Authenticode")) {
             evidenceHash=sha256(evidenceFile);
             evidenceSignature=signatureStatus(evidenceFile);
@@ -19445,28 +19614,26 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
 // 35-second presentation and completed scan stages; no synthetic detections.
 // Render-only easing: smooths the fill without changing the verified unlock gate.
 static float smoothInspectionVisual(float target){
-    static int shownPercent = 0;
-    static double lastTick = -1.0;
-    static double lastScanStart = -1.0;
-    const double now = ImGui::GetTime();
-    if (inspectionProgressStart != lastScanStart) {
-        shownPercent = 0;
-        lastTick = now;
-        lastScanStart = inspectionProgressStart;
+    static float displayed=0.f;
+    static double lastTime=-1.0;
+    static double lastScanStart=-1.0;
+    const double now=ImGui::GetTime();
+    if(inspectionProgressStart!=lastScanStart){
+        displayed=0.f;lastTime=now;lastScanStart=inspectionProgressStart;
     }
-    if (inspectionProgressStart <= 0.0 || (!scanning && !done)) {
-        shownPercent = 0;
-        lastTick = now;
-        return 0.f;
+    if(inspectionProgressStart<=0.0 || (!scanning && !done)){
+        displayed=0.f;lastTime=now;return displayed;
     }
-    const int ceiling = std::clamp(
-        static_cast<int>(std::floor(std::clamp(target, 0.f, 1.f)*100.f+0.0001f)),0,100);
-    if (lastTick < 0.0 || now < lastTick) lastTick = now;
-    if (now-lastTick >= 0.035 && shownPercent < ceiling) {
-        ++shownPercent;
-        lastTick = now;
-    }
-    return shownPercent/100.f;
+    if(lastTime<0.0 || now<lastTime || now-lastTime>3.0)lastTime=now;
+    const float dt=std::clamp(static_cast<float>(now-lastTime),0.f,.1f);
+    lastTime=now;
+    // Never decrease during a scan; ease to the next measured/paced target.
+    target=std::clamp(target,0.f,1.f);
+    if(target<displayed-.15f)displayed=0.f; // new scan reset
+    const float rate=1.f-std::exp(-dt*1.25f);
+    displayed+=(std::max)(0.f,target-displayed)*rate;
+    if(target>=1.f && 1.f-displayed<.0005f)displayed=1.f;
+    return displayed;
 }
 static void drawProfessionalProgressTrack(const char* id,const char* label,
                                            float fraction,float width,float height,
@@ -19499,93 +19666,16 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::PopID();
 }
 static void drawAtlasProgress(bool compact=false){
-    const float fraction=smoothInspectionVisual(
-        static_cast<float>(inspectionPresentationFraction()));
-    const int verified=std::clamp(static_cast<int>(std::round(fraction*100.f)),0,100);
+    // Single progress bar. Percentage comes only from completed scan milestones.
+    // No artificial stage animation or extra progress rails.
+    const int verified=inspectionDisplayPercent();
+    const float fraction=verified/100.f;
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    if(done && !scanFailed && !scanCancelled){
-        ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),
-            "VERIFIED  /  INSPECTION FINISHED");
-    }else
-        ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
+    ImGui::TextDisabled("%s",localized("FULL INSPECTION"));
     ImGui::SameLine();
-    ImGui::Text("%d%% verified",verified);
-    if(!compact){
-        ImGui::SameLine();
-        ImGui::TextDisabled("  |  %d/6 stages",std::clamp(completedStages.load(),0,6));
-        if(done && !scanFailed && !scanCancelled){
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),"  COMPLETE");
-        }
-    }
-    drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
-                                  compact?14.f:19.f);
-    if(compact)return;
-    ImGui::Spacing();
-    // Show exactly one active worker milestone; no fabricated stage timing.
-    const char* phaseNames[]={
-        "PROCESS INVENTORY","SERVICE INVENTORY","STARTUP ENTRIES",
-        "NETWORK AND DEVICE INVENTORY","SECURITY AND FORENSIC ARTIFACTS",
-        "PUBLISHING RESULTS"
-    };
-    const char* phaseNamesPt[]={
-        "INVENTÁRIO DE PROCESSOS","INVENTÁRIO DE SERVIÇOS","INICIALIZAÇÃO",
-        "REDE E DISPOSITIVOS","SEGURANÇA E ARTEFATOS FORENSES",
-        "PUBLICAÇÃO DOS RESULTADOS"
-    };
-    constexpr int phaseCount=6;
-    const int completed=std::clamp(completedStages.load(),0,6);
-    const int activeIndex=std::clamp(completed,0,5);
-    const char* activeName=displayLanguage==1?
-        phaseNamesPt[activeIndex]:phaseNames[activeIndex];
-    // Compact milestone rail: shows actual completed stages, not guessed progress.
-    const float railWidth=(std::max)(1.f,(width-5.f*5.f)/6.f);
-    const ImVec2 railStart=ImGui::GetCursorScreenPos();
-    ImDrawList* rail=ImGui::GetWindowDrawList();
-    for(int i=0;i<6;++i){
-        const float left=railStart.x+i*(railWidth+5.f);
-        const ImU32 fill=i<completed?IM_COL32(136,199,153,255):
-            i==activeIndex && scanning?IM_COL32(184,184,184,255):
-            IM_COL32(49,49,49,255);
-        rail->AddRectFilled(ImVec2(left,railStart.y),
-            ImVec2(left+railWidth,railStart.y+5.f),fill,2.f);
-    }
-    ImGui::Dummy(ImVec2(width,7.f));
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("6 real scan stages | Green: complete | Grey: active | Dark: pending");
-    ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
-    ImGui::TextUnformatted(done?
-        (displayLanguage==1?"TODAS AS ETAPAS CONCLUÍDAS":"ALL STAGES COMPLETE"):activeName);
-    // A stage reaches 100% only when its worker milestone is completed.
-    // Use indeterminate activity rather than inventing a percentage within it.
-    if(!done && scanning){
-        const unsigned total=sequentialTotal.load();
-        const unsigned checked=sequentialDone.load();
-        const float t=static_cast<float>(ImGui::GetTime());
-        const float pulse=0.12f+0.08f*(std::sin(t*2.2f)+1.f);
-        const float progress=total?std::clamp(checked/static_cast<float>(total),0.f,1.f):pulse;
-        drawProfessionalProgressTrack("active-stage",activeName,progress,width,11.f);
-        if(total)ImGui::TextDisabled("%u / %u %s",checked,total,
-            displayLanguage==1?"itens verificados":"items checked");
-        else ImGui::TextDisabled("%s",displayLanguage==1?
-            "Aguardando contagem da etapa":"Waiting for stage item count");
-        const std::string current=getSequentialItem();
-        if(!current.empty())ImGui::TextWrapped("%s: %s",
-            displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
-    }else if(!done){
-        drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
-    }
-    ImGui::Spacing();
-    const char* phase=scanFailed?"INSPECTION FAILED":
-        scanCancelled?"INSPECTION CANCELLED":
-        done?(verified>=100?"INSPECTION COMPLETE":"FINALIZING INSPECTION"):
-        scanning?(cancelRequested?"CANCELLING INSPECTION":
-            stages[std::clamp(stage.load(),0,5)]):"READY";
-    ImGui::TextDisabled("%s",localized(phase));
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Progress reflects completed worker milestones. Active stages do not report fabricated percentages.");
+    ImGui::Text("%d%%",verified);
+    drawProfessionalProgressTrack("overall","Overall inspection",
+                                  fraction,width,compact?14.f:19.f);
 }
 
 static bool simplifiedInterface=true;
@@ -19643,7 +19733,102 @@ static void drawScanQualityTab() {
     ImGui::TextDisabled("Indicators require manual context. No automatic cheat verdict is made.");
 }
 
+
+// Standalone monochrome opening sequence. Presentation only: no scan work runs here.
+static bool syncIntroOpen=true;
+static double syncIntroTransition=-1.0;
+static float syncIntroEase(float x) {
+    x=(std::max)(0.f,(std::min)(1.f,x));
+    return x*x*(3.f-2.f*x);
+}
+static double syncIntroRevealAt=-1.0;
+static void renderSyncOpening() {
+    ImGuiViewport* vp=ImGui::GetMainViewport();
+    const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
+    ImGui::SetNextWindowPos(p);
+    ImGui::SetNextWindowSize(sz);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.035f,.038f,1.f));
+    ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
+    ImDrawList* d=ImGui::GetWindowDrawList();
+    const double now=ImGui::GetTime();
+    const float t=(float)now;
+    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.48f;
+    const bool transitioning=syncIntroTransition>=0.0;
+    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
+    auto fade=[&](float begin,float duration) {
+        return syncIntroEase((elapsed-begin)/duration);
+    };
+    const float welcomeOpacity=transitioning?1.f-fade(.10f,.48f):1.f;
+    const float loadingOpacity=transitioning?fade(.58f,.38f)*(1.f-fade(2.10f,.36f)):0.f;
+    auto ink=[](int gray,float alpha) {
+        return IM_COL32(gray,gray,gray,(int)(255.f*(std::max)(0.f,(std::min)(1.f,alpha))));
+    };
+    // Gentle vignette and hairline grid, kept subtle to avoid visual noise.
+    d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
+        IM_COL32(9,9,11,255),IM_COL32(18,18,20,255),
+        IM_COL32(10,10,12,255),IM_COL32(13,13,15,255));
+    for(int j=1;j<8;++j) {
+        const float x=p.x+sz.x*j/8.f;
+        d->AddLine(ImVec2(x,p.y+80.f),ImVec2(x,p.y+sz.y-60.f),ink(255,.025f));
+    }
+    d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
+    d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
+    d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"DESKTOP APP");
+    const float pulse=.5f+.5f*std::sin(t*1.65f);
+    const float logoY=cy-115.f-(transitioning?fade(.15f,.65f)*22.f:0.f);
+    for(int i=3;i>=1;--i) {
+        const float radius=44.f+i*18.f+pulse*3.f;
+        d->AddCircle(ImVec2(cx,logoY),radius,ink(220,(.035f+.014f*pulse)/i),96,1.0f);
+    }
+    if(syncLogoTexture)
+        d->AddImage((ImTextureID)syncLogoTexture,
+            ImVec2(cx-36.f,logoY-36.f),ImVec2(cx+36.f,logoY+36.f),
+            ImVec2(0,0),ImVec2(1,1),ink(255,transitioning?.92f:1.f));
+    if(welcomeOpacity>.005f) {
+        const char* heading="Welcome to Sync.";
+        const char* detail="Check your PC. Review the results.";
+        const ImVec2 hs=ImGui::CalcTextSize(heading), ds=ImGui::CalcTextSize(detail);
+        const float offset=(1.f-welcomeOpacity)*12.f;
+        d->AddText(ImVec2(cx-hs.x*.5f,cy-12.f-offset),ink(247,welcomeOpacity),heading);
+        d->AddText(ImVec2(cx-ds.x*.5f,cy+23.f-offset),ink(169,welcomeOpacity),detail);
+    }
+    if(!transitioning) {
+        ImGui::SetCursorScreenPos(ImVec2(cx-115.f,cy+91.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.90f,.90f,.90f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
+        if(ImGui::Button("Open Scanner  ->",ImVec2(230.f,46.f)))
+            syncIntroTransition=now;
+        ImGui::PopStyleColor(4);
+    } else {
+        // The sequence is visual only; it does not pretend to run a scan.
+        const float line=fade(.48f,.95f);
+        d->AddLine(ImVec2(cx-145.f*line,cy+68.f),
+                   ImVec2(cx+145.f*line,cy+68.f),ink(226,.75f*loadingOpacity),1.5f);
+        const char* label="Opening scanner";
+        const ImVec2 ls=ImGui::CalcTextSize(label);
+        d->AddText(ImVec2(cx-ls.x*.5f,cy+88.f),ink(205,loadingOpacity),label);
+        for(int i=0;i<3;++i) {
+            float beat=.24f+.76f*(.5f+.5f*std::sin(t*5.f-i*.8f));
+            d->AddCircleFilled(ImVec2(cx+(i-1)*16.f,cy+124.f),2.5f,
+                               ink(220,loadingOpacity*beat),16);
+        }
+        if(elapsed>=2.50f) {
+            syncIntroOpen=false;
+            syncIntroRevealAt=now;
+        }
+    }
+    d->AddLine(ImVec2(p.x+32,p.y+sz.y-51),ImVec2(p.x+sz.x-32,p.y+sz.y-51),ink(255,.10f));
+    d->AddText(ImVec2(p.x+36,p.y+sz.y-35),ink(155,.75f),"SYSTEM INSPECTION");
+    ImGui::End();
+    ImGui::PopStyleColor();
+}
+
 static void renderUI() {
+    if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
     if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
@@ -19789,6 +19974,10 @@ static void renderUI() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.065f,.084f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
+    // Advanced navigation: animate each real tab, not arbitrary screen strips.
+    static float viewTransitionStart=-100.f;
+    static bool viewTransitionActive=false;
+    const float viewNow=(float)ImGui::GetTime();
     const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
     const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
     const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
@@ -19802,7 +19991,10 @@ static void renderUI() {
     static float navTransitionStart=0.f;
     const float uiNow=(float)ImGui::GetTime();
     const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
-    if(pageChanged)navTransitionStart=reducedMotion?-100.f:uiNow;
+    if(pageChanged) {
+        navTransitionStart=reducedMotion?-100.f:uiNow;
+        syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
+    }
     lastNavPage=page;
     const char* nav[]={"DASHBOARD","THREAT ANALYSIS","EVENT RECORDS",
                        "BINARY LAB","NETWORK","DRIVER AUDIT","ARTIFACT EXPLORER","KERNEL MEMORY DUMP","PREFERENCES"};
@@ -19832,6 +20024,15 @@ static void renderUI() {
          (simplifiedInterface?simpleColumns:navColumns));
     for(int visible=0;visible<visibleNavCount;visible++){
         const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
+        float itemAlpha=1.f;
+        if(viewTransitionActive && !reducedMotion){
+            const float t=(viewNow-viewTransitionStart-visible*0.115f)/0.26f;
+            const float v=std::clamp(t,0.f,1.f);
+            itemAlpha=v*v*(3.f-2.f*v);
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+                            ImGui::GetStyle().Alpha*itemAlpha);
+        if(itemAlpha<0.98f)ImGui::BeginDisabled();
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
@@ -19884,6 +20085,8 @@ static void renderUI() {
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
         ImGui::PopID();
+        if(itemAlpha<0.98f)ImGui::EndDisabled();
+        ImGui::PopStyleVar(); // Individual tab opacity
         if(simplifiedInterface){
             if(visible%simpleColumns!=simpleColumns-1 &&
                visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
@@ -19930,8 +20133,13 @@ static void renderUI() {
     if(ImGui::GetContentRegionAvail().x>195.f)ImGui::SameLine(0,24);
     ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
     if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
-    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view"))
+    // A brief, non-blocking monochrome transition when switching view modes.
+    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view")){
         simplifiedInterface=!simplifiedInterface;
+        viewTransitionStart=(float)ImGui::GetTime();
+        viewTransitionActive=!reducedMotion;
+        syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
+    }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 9 to switch pages.");
     {
@@ -19974,6 +20182,12 @@ static void renderUI() {
         ImGui::GetTime()-unlockAnimationStart : 100.0;
     const bool unlocking=!waitingForPresentation &&
         unlockElapsed<1.65;
+    // Fade the whole page content on every navigation, including revisits.
+    // Module cards receive an additional individual stagger below.
+    const float pageAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
+    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.42f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+        ImGui::GetStyle().Alpha*(0.04f+0.96f*pageFade));
     if((waitingForPresentation || (unlocking && !reducedMotion)) &&
        page!=0 && page!=4) {
         const float opening=unlocking?
@@ -20911,6 +21125,7 @@ static void renderUI() {
         }
         ImGui::EndChild();
     }
+    ImGui::PopStyleVar(); // page content fade
     // Atlas navigation transition: a short monochrome cinematic wipe.
     // Rendered over the content only, so navigation and the top bar stay
     // responsive. No result state, scan progress or evidence is modified.
@@ -20952,6 +21167,11 @@ static void renderUI() {
             transitionDraw->PopClipRect();
         }
     }
+    // End the animation after all visible tabs have appeared.
+    if(viewTransitionActive &&
+       (reducedMotion || (float)ImGui::GetTime()-viewTransitionStart >
+        (simplifiedInterface?3.f:8.f)*0.115f+0.26f))
+        viewTransitionActive=false;
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
@@ -21008,6 +21228,19 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
         renderUI();
+        // Reveal the existing scanner smoothly, without changing its scan logic.
+        if(!syncIntroOpen && syncIntroRevealAt>=0.0) {
+            const float fade=1.f-syncIntroEase(
+                (float)((ImGui::GetTime()-syncIntroRevealAt)/.70));
+            if(fade>.001f) {
+                ImGuiViewport* vp=ImGui::GetMainViewport();
+                ImGui::GetForegroundDrawList()->AddRectFilled(
+                    vp->WorkPos,
+                    ImVec2(vp->WorkPos.x+vp->WorkSize.x,
+                           vp->WorkPos.y+vp->WorkSize.y),
+                    IM_COL32(9,9,11,(int)(255.f*fade)));
+            } else syncIntroRevealAt=-1.0;
+        }
         if(ambientMotesEnabled){
             ImGuiViewport* mainViewport=ImGui::GetMainViewport();
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
