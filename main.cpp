@@ -17500,9 +17500,10 @@ static double inspectionPresentationFraction(){
 }
 // Presentation-only counter: never exceeds completed real scan milestones.
 // Advances one integer percentage at a time, even when a stage finishes at once.
+static double inspectionDisplayLastTick=-1.0;
 static int inspectionDisplayPercent(){
     static int displayed=0;
-    static double lastTick=-1.0;
+    double& lastTick=inspectionDisplayLastTick;
     static double scanIdentity=-1.0;
     const double now=ImGui::GetTime();
     if(scanIdentity!=inspectionProgressStart){
@@ -17520,7 +17521,7 @@ static int inspectionDisplayPercent(){
         0,100);
     if(lastTick<0.0 || now<lastTick)lastTick=now;
     // Limit to one increment per rendered frame; never jump over numbers.
-    if(displayed<actual && now-lastTick>=0.14){
+    if(displayed<actual && now-lastTick>=0.45){
         ++displayed;
         lastTick=now;
     }
@@ -19676,7 +19677,14 @@ static void drawAtlasProgress(bool compact=false){
     // Single progress bar. Percentage comes only from completed scan milestones.
     // No artificial stage animation or extra progress rails.
     const int verified=inspectionDisplayPercent();
-    const float fraction=verified/100.f;
+    // Smooth continuous fill between integer labels, never ahead of verified work.
+    // One displayed percentage point takes at least 450 ms (~45 s total).
+    const float actual=static_cast<float>(inspectionPresentationFraction());
+    const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionDisplayLastTick);
+    const float between=std::clamp(static_cast<float>(elapsed/0.45),0.f,0.999f);
+    const float fraction=std::clamp(
+        (verified+((actual*100.f>verified)?between:0.f))/100.f,
+        0.f,actual);
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
     ImGui::TextDisabled("%s",localized("FULL INSPECTION"));
     ImGui::SameLine();
