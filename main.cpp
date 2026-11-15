@@ -17718,7 +17718,7 @@ static bool userWritableLocation(const std::wstring& path) {
 static bool readDword(HKEY root,const wchar_t* path,const wchar_t* name,DWORD& value) {
     DWORD size=sizeof(value),type=0;
     const LSTATUS status=RegGetValueW(root,path,name,
-        RRF_RT_REG_DWORD,nullptr,&type,&value,&size);
+        RRF_RT_REG_DWORD,&type,&value,&size);
     return status==ERROR_SUCCESS;
 }
 static void kernelSettings(std::vector<Record>& out) {
@@ -17780,14 +17780,14 @@ static void kernelDrivers(std::vector<Record>& out) {
     SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
     if(!scm)return;
     DWORD bytes=0,count=0,resume=0;
-    EnumServicesStatusExW(scm,SC_ENUM_PROCESS,
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,
         SERVICE_DRIVER,SERVICE_STATE_ALL,nullptr,0,&bytes,&count,&resume,nullptr);
     if(GetLastError()!=ERROR_MORE_DATA || bytes==0 || bytes>16*1024*1024){
         CloseServiceHandle(scm);return;
     }
     std::vector<BYTE> buffer(bytes);
     resume=0;
-    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS,SERVICE_DRIVER,
+    if(!EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,
         SERVICE_STATE_ALL,buffer.data(),bytes,&bytes,&count,&resume,nullptr)){
         CloseServiceHandle(scm);return;
     }
@@ -17919,51 +17919,51 @@ static void extendedKernelRegistry(std::vector<Record>& out) {
         const char* explanation;
     };
     static const Rule rules[] = {
-        {L"SYSTEM\CurrentControlSet\Control\CI\Config",L"VulnerableDriverBlocklistEnable",0,"Driver blocklist","Vulnerable driver blocklist explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",L"VulnerableDriverBlocklistEnable",0,"Driver blocklist","Vulnerable driver blocklist explicitly disabled"},
         {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"VBS policy","Virtualization based security explicitly disabled"},
         {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",L"Enabled",0,"HVCI policy","Hypervisor enforced code integrity explicitly disabled"},
-        {L"SYSTEM\CurrentControlSet\Control\Lsa",L"RunAsPPL",0,"LSA protection","LSA protected process setting explicitly disabled"},
-        {L"SYSTEM\CurrentControlSet\Control\Lsa",L"LsaCfgFlags",0,"Credential Guard","Credential Guard policy explicitly disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"Device Guard policy","Enterprise policy disables VBS"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"HypervisorEnforcedCodeIntegrity",0,"HVCI policy","Enterprise policy disables HVCI"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\DeviceGuard",L"RequirePlatformSecurityFeatures",0,"Platform security policy","Platform security requirements explicitly set to zero"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender",L"DisableAntiSpyware",1,"Defender legacy policy","Legacy policy indicates antivirus disablement; may be ignored on modern Windows"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableRealtimeMonitoring",1,"Realtime protection policy","Realtime protection policy disabled; validate actual effective state"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableBehaviorMonitoring",1,"Behavior monitoring policy","Behavior monitoring policy disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableOnAccessProtection",1,"On-access policy","On-access protection policy disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",L"DisableScanOnRealtimeEnable",1,"Realtime scan policy","Realtime scan-on-enable policy disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Spynet",L"SpynetReporting",0,"Cloud reporting","Cloud reporting policy explicitly disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows Defender\Spynet",L"SubmitSamplesConsent",2,"Sample submission","Sample submission configured to never send"},
-        {L"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",L"EnableLUA",0,"UAC policy","User Account Control explicitly disabled"},
-        {L"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",L"ConsentPromptBehaviorAdmin",0,"UAC prompts","Administrator elevation prompts disabled"},
-        {L"SYSTEM\CurrentControlSet\Control\SafeBoot\Option",L"OptionValue",1,"Safe boot context","System may be operating in minimal safe boot"},
-        {L"SYSTEM\CurrentControlSet\Control\SafeBoot\Option",L"OptionValue",2,"Safe boot context","System may be operating in networking safe boot"},
-        {L"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",L"FeatureSettingsOverride",3,"Mitigation override","Mitigation override requires administrative review"},
-        {L"SYSTEM\CurrentControlSet\Control\SecureBoot\State",L"UEFISecureBootEnabled",0,"Secure Boot","Secure Boot state reports disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"RunAsPPL",0,"LSA protection","LSA protected process setting explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",L"LsaCfgFlags",0,"Credential Guard","Credential Guard policy explicitly disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard",L"EnableVirtualizationBasedSecurity",0,"Device Guard policy","Enterprise policy disables VBS"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard",L"HypervisorEnforcedCodeIntegrity",0,"HVCI policy","Enterprise policy disables HVCI"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard",L"RequirePlatformSecurityFeatures",0,"Platform security policy","Platform security requirements explicitly set to zero"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",L"DisableAntiSpyware",1,"Defender legacy policy","Legacy policy indicates antivirus disablement; may be ignored on modern Windows"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableRealtimeMonitoring",1,"Realtime protection policy","Realtime protection policy disabled; validate actual effective state"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableBehaviorMonitoring",1,"Behavior monitoring policy","Behavior monitoring policy disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableOnAccessProtection",1,"On-access policy","On-access protection policy disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection",L"DisableScanOnRealtimeEnable",1,"Realtime scan policy","Realtime scan-on-enable policy disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",L"SpynetReporting",0,"Cloud reporting","Cloud reporting policy explicitly disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Spynet",L"SubmitSamplesConsent",2,"Sample submission","Sample submission configured to never send"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"EnableLUA",0,"UAC policy","User Account Control explicitly disabled"},
+        {L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",L"ConsentPromptBehaviorAdmin",0,"UAC prompts","Administrator elevation prompts disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Option",L"OptionValue",1,"Safe boot context","System may be operating in minimal safe boot"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Option",L"OptionValue",2,"Safe boot context","System may be operating in networking safe boot"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",L"FeatureSettingsOverride",3,"Mitigation override","Mitigation override requires administrative review"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",L"UEFISecureBootEnabled",0,"Secure Boot","Secure Boot state reports disabled"},
         {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",L"VerifiedAndReputablePolicyState",0,"Reputation policy","Reputation policy state reports zero; OS version dependent"},
-        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard",L"Enabled",0,"Credential Guard","Credential Guard scenario explicitly disabled"},
-        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\SystemGuard",L"Enabled",0,"System Guard","System Guard scenario explicitly disabled"},
-        {L"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\KernelShadowStacks",L"Enabled",0,"Kernel shadow stacks","Kernel shadow stacks explicitly disabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\Safer\CodeIdentifiers",L"DefaultLevel",0,"Software restriction","Software restriction default level requires review"},
-        {L"SYSTEM\CurrentControlSet\Control\WMI\Autologger\EventLog-Security",L"Start",0,"Security event logging","Security event log autologger disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\EventLog",L"Start",4,"Event log service","Event log service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\WinDefend",L"Start",4,"Defender service","Defender service configured disabled; third-party AV may be installed"},
-        {L"SYSTEM\CurrentControlSet\Services\WdFilter",L"Start",4,"Defender filter","Defender minifilter configured disabled; check effective protection"},
-        {L"SYSTEM\CurrentControlSet\Services\WdNisDrv",L"Start",4,"Defender network driver","Defender network inspection driver configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\WdNisSvc",L"Start",4,"Defender network service","Defender network inspection service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\SecurityHealthService",L"Start",4,"Security Health","Security Health service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\wscsvc",L"Start",4,"Security Center","Security Center service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\BFE",L"Start",4,"Filtering Engine","Base Filtering Engine service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\MpsSvc",L"Start",4,"Firewall service","Windows Firewall service configured disabled"},
-        {L"SYSTEM\CurrentControlSet\Services\Sense",L"Start",4,"EDR sensor","Defender for Endpoint sensor configured disabled; may be unlicensed"},
-        {L"SYSTEM\CurrentControlSet\Services\SysmonDrv",L"Start",4,"Sysmon driver","Sysmon driver configured disabled; only relevant if installed"},
-        {L"SYSTEM\CurrentControlSet\Services\Sysmon64",L"Start",4,"Sysmon service","Sysmon service configured disabled; only relevant if installed"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging",L"EnableScriptBlockLogging",0,"PowerShell logging","Script block logging explicitly disabled by policy"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging",L"EnableModuleLogging",0,"PowerShell logging","Module logging explicitly disabled by policy"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription",L"EnableTranscripting",0,"PowerShell logging","Transcription explicitly disabled by policy"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\Security",L"Retention",0,"Security log retention","Security log retention policy is not enabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\System",L"Retention",0,"System log retention","System log retention policy is not enabled"},
-        {L"SOFTWARE\Policies\Microsoft\Windows\EventLog\Application",L"Retention",0,"Application log retention","Application log retention policy is not enabled"}
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\CredentialGuard",L"Enabled",0,"Credential Guard","Credential Guard scenario explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\SystemGuard",L"Enabled",0,"System Guard","System Guard scenario explicitly disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\KernelShadowStacks",L"Enabled",0,"Kernel shadow stacks","Kernel shadow stacks explicitly disabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\Safer\\CodeIdentifiers",L"DefaultLevel",0,"Software restriction","Software restriction default level requires review"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\WMI\\Autologger\\EventLog-Security",L"Start",0,"Security event logging","Security event log autologger disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\EventLog",L"Start",4,"Event log service","Event log service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\WinDefend",L"Start",4,"Defender service","Defender service configured disabled; third-party AV may be installed"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\WdFilter",L"Start",4,"Defender filter","Defender minifilter configured disabled; check effective protection"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\WdNisDrv",L"Start",4,"Defender network driver","Defender network inspection driver configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\WdNisSvc",L"Start",4,"Defender network service","Defender network inspection service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\SecurityHealthService",L"Start",4,"Security Health","Security Health service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\wscsvc",L"Start",4,"Security Center","Security Center service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\BFE",L"Start",4,"Filtering Engine","Base Filtering Engine service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\MpsSvc",L"Start",4,"Firewall service","Windows Firewall service configured disabled"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\Sense",L"Start",4,"EDR sensor","Defender for Endpoint sensor configured disabled; may be unlicensed"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\SysmonDrv",L"Start",4,"Sysmon driver","Sysmon driver configured disabled; only relevant if installed"},
+        {L"SYSTEM\\CurrentControlSet\\Services\\Sysmon64",L"Start",4,"Sysmon service","Sysmon service configured disabled; only relevant if installed"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",L"EnableScriptBlockLogging",0,"PowerShell logging","Script block logging explicitly disabled by policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",L"EnableModuleLogging",0,"PowerShell logging","Module logging explicitly disabled by policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",L"EnableTranscripting",0,"PowerShell logging","Transcription explicitly disabled by policy"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Security",L"Retention",0,"Security log retention","Security log retention policy is not enabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\System",L"Retention",0,"System log retention","System log retention policy is not enabled"},
+        {L"SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Application",L"Retention",0,"Application log retention","Application log retention policy is not enabled"}
     };
     for(const auto& rule:rules) {
         if(cancelRequested || out.size()>1500)break;
@@ -17980,14 +17980,14 @@ static void extendedKernelDriverConfiguration(std::vector<Record>& out) {
     SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
     if(!manager)return;
     DWORD required=0,count=0,resume=0;
-    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,SERVICE_STATE_ALL,
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,SERVICE_STATE_ALL,
         nullptr,0,&required,&count,&resume,nullptr);
     if(GetLastError()!=ERROR_MORE_DATA || !required || required>16*1024*1024) {
         CloseServiceHandle(manager);return;
     }
     std::vector<BYTE> storage(required);
     resume=0;
-    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,SERVICE_STATE_ALL,
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,SERVICE_STATE_ALL,
         storage.data(),required,&required,&count,&resume,nullptr)) {
         CloseServiceHandle(manager);return;
     }
@@ -18293,7 +18293,7 @@ static void supplementalKernelServiceConsistency(std::vector<Record>& out) {
     SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
     if(!manager)return;
     DWORD bytes=0,count=0,resume=0;
-    EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,
+    EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,
         SERVICE_STATE_ALL,nullptr,0,&bytes,&count,&resume,nullptr);
     if(GetLastError()!=ERROR_MORE_DATA || bytes==0 || bytes>8*1024*1024) {
         CloseServiceHandle(manager);
@@ -18301,7 +18301,7 @@ static void supplementalKernelServiceConsistency(std::vector<Record>& out) {
     }
     std::vector<BYTE> buffer(bytes);
     resume=0;
-    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS,SERVICE_DRIVER,
+    if(!EnumServicesStatusExW(manager,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,
         SERVICE_STATE_ALL,buffer.data(),bytes,&bytes,&count,&resume,nullptr)) {
         CloseServiceHandle(manager);
         return;
@@ -27642,6 +27642,88 @@ static void renderSyncOpening() {
     ImGui::PopStyleColor();
 }
 
+
+// Lightweight result views: use snapshots to keep the UI responsive while scanning.
+static void drawScanSummaryNew() {
+    ImGui::TextUnformatted("SCAN OVERVIEW");
+    ImGui::Separator();
+    const bool active=scanning.load();
+    ImGui::TextDisabled("%s",active?"Scan running - totals may change":
+        inspectionResultsReady()?"Scan completed":"Start a scan to populate this overview");
+    ImGui::Spacing();
+    if(ImGui::BeginTable("##summaryMetrics",3,
+        ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextDisabled("PROCESSES");
+        ImGui::Text("%zu",processCount.load());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("EVIDENCE RECORDS");
+        ImGui::Text("%zu",recordCount.load());
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextDisabled("FILES");
+        ImGui::Text("%zu",fileCount.load());
+        ImGui::EndTable();
+    }
+    ImGui::Spacing();
+    ImGui::TextUnformatted("CHECK COVERAGE");
+    const unsigned long long planned=processChecksPlanned.load();
+    const unsigned long long finished=processChecksCompleted.load();
+    const unsigned long long unavailable=processChecksUnavailable.load();
+    ImGui::Text("Planned: %llu  |  Completed: %llu  |  Unavailable: %llu",
+        planned,finished,unavailable);
+    const float fraction=planned?
+        static_cast<float>((std::min)(finished,planned))/static_cast<float>(planned):0.f;
+    ImGui::ProgressBar(fraction,ImVec2(-1.f,16.f));
+    ImGui::TextDisabled("Coverage reflects completed checks, not a malware detection score.");
+    ImGui::Spacing();
+    ImGui::TextUnformatted("SOURCE HEALTH");
+    const int source=forensicSourceStatus.load();
+    ImGui::TextWrapped("%s",source==1?"Source status collection completed.":
+        source==2?"Source status collection failed.":"Source status collection pending or unavailable.");
+    ImGui::TextDisabled("Source checks: %u  |  Correlation notices: %u",
+        forensicSourceChecks.load(),forensicCorrelationNotices.load());
+    ImGui::TextDisabled("An unavailable source does not imply tampering.");
+}
+
+static void drawReviewQueueNew() {
+    ImGui::TextUnformatted("EVIDENCE REVIEW QUEUE");
+    ImGui::TextDisabled("Filter existing evidence records; this tab does not perform extra scans.");
+    static char filter[160]{};
+    ImGui::SetNextItemWidth((std::min)(420.f,ImGui::GetContentRegionAvail().x));
+    ImGui::InputTextWithHint("##reviewFilter","Search category, name or detail...",filter,sizeof(filter));
+    std::vector<Record> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        snapshot=records;
+    }
+    // Do not allocate or render a huge table in a single frame.
+    const size_t limit=300;
+    size_t shown=0;
+    const std::string term=filter;
+    if(ImGui::BeginTable("##reviewQueue",3,
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1.f))) {
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,150.f);
+        ImGui::TableSetupColumn("Evidence",ImGuiTableColumnFlags_WidthStretch,1.5f);
+        ImGui::TableSetupColumn("Description",ImGuiTableColumnFlags_WidthStretch,2.5f);
+        ImGui::TableHeadersRow();
+        for(const auto& r:snapshot) {
+            if(!term.empty() && r.category.find(term)==std::string::npos &&
+                r.name.find(term)==std::string::npos &&
+                r.detail.find(term)==std::string::npos)continue;
+            if(shown++>=limit)continue;
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
+        }
+        ImGui::EndTable();
+    }
+    // A bounded preview avoids excessive ImGui draw calls for very large scans.
+}
+
 static void renderUI() {
     if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
@@ -28313,7 +28395,8 @@ static void renderUI() {
         ImGui::SameLine();
         ImGui::TextDisabled("%zu processes | %zu records",
                             processCount.load(),recordCount.load());
-        if(ImGui::BeginTabBar("results")) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(15.f,9.f));
+        if(ImGui::BeginTabBar("results",ImGuiTabBarFlags_FittingPolicyScroll)) {
             if(ImGui::BeginTabItem("Findings")) {
                 if(!expandedFindingsTable)
                     ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
@@ -28407,8 +28490,17 @@ static void renderUI() {
             if(ImGui::BeginTabItem("Modules")) {
                 modulesList();ImGui::EndTabItem();
             }
+            if(ImGui::BeginTabItem("Scan Summary")) {
+                drawScanSummaryNew();
+                ImGui::EndTabItem();
+            }
+            if(ImGui::BeginTabItem("Review Queue")) {
+                drawReviewQueueNew();
+                ImGui::EndTabItem();
+            }
             ImGui::EndTabBar();
         }
+        ImGui::PopStyleVar();
     } else if(page==3) {
         sectionTitle("EXECUTION TIMELINE",
             "Real Windows events from the past 7 days, ordered newest first");
