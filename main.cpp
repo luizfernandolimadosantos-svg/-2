@@ -19641,107 +19641,17 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::PopID();
 }
 static void drawAtlasProgress(bool compact=false){
+    // Single progress bar. Percentage comes only from completed scan milestones.
+    // No artificial stage animation or extra progress rails.
     const int verified=inspectionDisplayPercent();
     const float fraction=smoothInspectionVisual(
         static_cast<float>(inspectionPresentationFraction()));
     const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    if(done && !scanFailed && !scanCancelled){
-        ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),
-            "VERIFIED  /  INSPECTION FINISHED");
-    }else
-        ImGui::TextDisabled(localized("FULL INSPECTION  /  VERIFIED PROGRESS"));
+    ImGui::TextDisabled("%s",localized("FULL INSPECTION"));
     ImGui::SameLine();
-    ImGui::Text("%d%% verified",verified);
-    if(!compact){
-        ImGui::SameLine();
-        ImGui::TextDisabled("  |  %d/6 stages",std::clamp(completedStages.load(),0,6));
-        if(done && !scanFailed && !scanCancelled){
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.53f,0.81f,0.61f,1.f),"  COMPLETE");
-        }
-    }
-    drawProfessionalProgressTrack("overall","Overall inspection",fraction,width,
-                                  compact?14.f:19.f);
-    if(compact)return;
-    ImGui::Spacing();
-    // Show exactly one active worker milestone; no fabricated stage timing.
-    const char* phaseNames[]={
-        "PROCESS INVENTORY","SERVICE INVENTORY","STARTUP ENTRIES",
-        "NETWORK AND DEVICE INVENTORY","SECURITY AND FORENSIC ARTIFACTS",
-        "PUBLISHING RESULTS"
-    };
-    const char* phaseNamesPt[]={
-        "INVENTÁRIO DE PROCESSOS","INVENTÁRIO DE SERVIÇOS","INICIALIZAÇÃO",
-        "REDE E DISPOSITIVOS","SEGURANÇA E ARTEFATOS FORENSES",
-        "PUBLICAÇÃO DOS RESULTADOS"
-    };
-    constexpr int phaseCount=6;
-    const int completed=std::clamp(completedStages.load(),0,6);
-    const int activeIndex=std::clamp(completed,0,5);
-    const char* activeName=displayLanguage==1?
-        phaseNamesPt[activeIndex]:phaseNames[activeIndex];
-    // Compact milestone rail: shows actual completed stages, not guessed progress.
-    const float railWidth=(std::max)(1.f,(width-5.f*5.f)/6.f);
-    const ImVec2 railStart=ImGui::GetCursorScreenPos();
-    ImDrawList* rail=ImGui::GetWindowDrawList();
-    for(int i=0;i<6;++i){
-        const float left=railStart.x+i*(railWidth+5.f);
-        const ImU32 fill=i<completed?IM_COL32(136,199,153,255):
-            i==activeIndex && scanning?IM_COL32(184,184,184,255):
-            IM_COL32(49,49,49,255);
-        rail->AddRectFilled(ImVec2(left,railStart.y),
-            ImVec2(left+railWidth,railStart.y+5.f),fill,2.f);
-    }
-    ImGui::Dummy(ImVec2(width,7.f));
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("6 real scan stages | Green: complete | Grey: active | Dark: pending");
-    ImGui::TextDisabled("%s",displayLanguage==1?"ETAPA ATUAL":"CURRENT STAGE");
-    ImGui::SameLine();
-    ImGui::TextDisabled("%02d / %02d",activeIndex+1,phaseCount);
-    ImGui::TextUnformatted(done?
-        (displayLanguage==1?"TODAS AS ETAPAS CONCLUÍDAS":"ALL STAGES COMPLETE"):activeName);
-    // A stage reaches 100% only when its worker milestone is completed.
-    // Use indeterminate activity rather than inventing a percentage within it.
-    if(!done && scanning){
-        const unsigned total=sequentialTotal.load();
-        const unsigned checked=sequentialDone.load();
-        const float t=static_cast<float>(ImGui::GetTime());
-        const float pulse=0.12f+0.08f*(std::sin(t*2.2f)+1.f);
-        const float progress=total?std::clamp(checked/static_cast<float>(total),0.f,1.f):pulse;
-        drawProfessionalProgressTrack("active-stage",activeName,progress,width,11.f);
-        if(total) {
-            ImGui::TextDisabled("%u / %u %s",checked,total,
-                displayLanguage==1?"itens verificados":"items checked");
-            if(checked>=total && completedStages.load()<=activeIndex)
-                ImGui::TextDisabled("%s",displayLanguage==1?
-                    "Itens concluidos; finalizando verificacoes desta etapa...":
-                    "Items checked; finishing remaining checks in this stage...");
-        }
-        else ImGui::TextDisabled("%s",displayLanguage==1?
-            "Aguardando contagem da etapa":"Waiting for stage item count");
-        const std::string current=getSequentialItem();
-        if(!current.empty())ImGui::TextWrapped("%s: %s",
-            displayLanguage==1?"Verificando agora":"Checking now",current.c_str());
-        const long long last=scanActivityTickMs.load(std::memory_order_relaxed);
-        const long long quietMs=last>0?scanSteadyMs()-last:0;
-        if(quietMs>12000){
-            ImGui::TextWrapped("This check has been running for %.0f seconds. "
-                "It may be processing a large amount of data or waiting for Windows. "
-                "The scan has not been marked complete.",quietMs/1000.0);
-        }
-
-    }else if(!done){
-        drawProfessionalProgressTrack("active-stage",activeName,0.f,width,11.f);
-    }
-    ImGui::Spacing();
-    const char* phase=scanFailed?"INSPECTION FAILED":
-        scanCancelled?"INSPECTION CANCELLED":
-        done?(verified>=100?"INSPECTION COMPLETE":"FINALIZING INSPECTION"):
-        scanning?(cancelRequested?"CANCELLING INSPECTION":
-            stages[std::clamp(stage.load(),0,5)]):"READY";
-    ImGui::TextDisabled("%s",localized(phase));
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Progress reflects completed worker milestones. Active stages do not report fabricated percentages.");
+    ImGui::Text("%d%%",verified);
+    drawProfessionalProgressTrack("overall","Overall inspection",
+                                  fraction,width,compact?14.f:19.f);
 }
 
 static bool simplifiedInterface=true;
