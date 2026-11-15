@@ -17520,11 +17520,18 @@ static int inspectionDisplayPercent(){
         0,100);
     if(lastTick<0.0 || now<lastTick)lastTick=now;
     // Limit to one increment per rendered frame; never jump over numbers.
-    if(displayed<actual && now-lastTick>=0.045){
+    if(displayed<actual && now-lastTick>=0.14){
         ++displayed;
         lastTick=now;
     }
     return displayed;
+}
+
+// Results are only presented after the worker finishes AND the single
+// progress bar has visibly reached 100%. The animation is not extra scanning.
+static bool inspectionResultsReady(){
+    return done.load() && !scanning.load() && !scanFailed.load() &&
+           !scanCancelled.load() && inspectionDisplayPercent()>=100;
 }
 
 static void startScan() {
@@ -17910,7 +17917,7 @@ static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
     if(scanFailed)return "Failed";
     if(scanCancelled)return "Cancelled";
-    if(done)return "Completed";
+    if(done)return inspectionResultsReady()?"Completed":"Preparing results";
     return "Ready";
 }
 static const char* stages[]={"Preparing","Processes","Services & Drivers","Startup Entries","Network Connections","Finalizing"};
@@ -19934,7 +19941,7 @@ static void renderUI() {
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
         const bool running=scanning.load();
-        const bool completed=done && !scanFailed && !scanCancelled;
+        const bool completed=inspectionResultsReady();
         const ImVec4 stateColor=scanFailed?
             ImVec4(.96f,.45f,.45f,1.f):
             running?ImVec4(.93f,.74f,.38f,1.f):
@@ -19942,7 +19949,7 @@ static void renderUI() {
             ImVec4(.65f,.74f,.81f,1.f);
         ImGui::TextColored(stateColor,"%s",
             scanFailed?"SCAN FAILED":scanCancelled?"CANCELLED":
-            running?"SCANNING":completed?"SCAN COMPLETE":"READY");
+            running?"SCANNING":completed?"SCAN COMPLETE":done?"PREPARING RESULTS":"READY");
         ImGui::SameLine(0,18);
         ImGui::TextDisabled("Processes: %zu",processCount.load());
         ImGui::SameLine(0,18);
@@ -20293,11 +20300,13 @@ static void renderUI() {
             }
             if(ImGui::Button("Cancel scan",ImVec2(170,44)))
                 cancelRequested=true;
-        }else if(done && !scanFailed && !scanCancelled){
+        }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
                 "VERIFIED  -  SCAN COMPLETED");
             ImGui::SameLine();
             if(ImGui::Button("View results",ImVec2(150,42)))page=9;
+        }else if(done && !scanFailed && !scanCancelled){
+            ImGui::TextDisabled("Finalizing progress display... %d%%",inspectionDisplayPercent());
         }else{
             if(accentButton("START FULL SCAN",ImVec2(230,48)))startScan();
             ImGui::SameLine();
@@ -20349,11 +20358,13 @@ static void renderUI() {
                 ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             }
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
-        }else if(done && !scanFailed && !scanCancelled){
+        }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
                 "VERIFIED  -  SCAN COMPLETED");
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(150.f,ImGui::GetContentRegionAvail().x),42)))page=2;
+        }else if(done && !scanFailed && !scanCancelled){
+            ImGui::TextColored(accent,"FINALIZING PROGRESS DISPLAY - %d%%",inspectionDisplayPercent());
         }else{
             if(accentButton(localized("START FULL INSPECTION"),
                 ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
@@ -20407,7 +20418,7 @@ static void renderUI() {
             ImGui::PopStyleColor();
             ImGui::Dummy(ImVec2(0,10));
         }
-        if(done){
+        if(inspectionResultsReady()){
             if(ImGui::CollapsingHeader("SCAN PERFORMANCE / VERIFIED STAGES")){
                 ImGui::Text("Batch scripts: %u found | %u filename matches | %u inaccessible folders",
                     batFilesSeen.load(),batNameMatches.load(),batDirsFailed.load());
@@ -20467,7 +20478,7 @@ static void renderUI() {
             ImGui::TextDisabled("Unavailable sources are not evidence of tampering.");
             ImGui::Dummy(ImVec2(0,8));
         }
-        if(done){
+        if(inspectionResultsReady()){
             ImGui::TextColored(accent,"INDIVIDUAL PROCESS CHECKS");
             ImGui::Text("Planned: %llu | Completed: %llu | Unavailable: %llu",
                 processChecksPlanned.load(),processChecksCompleted.load(),
