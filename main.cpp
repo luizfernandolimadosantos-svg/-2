@@ -26011,36 +26011,41 @@ static double inspectionPresentationFraction(){
     const double verified=(finished+currentStageWork)/6.0;
     return std::clamp(verified,0.0,0.999);
 }
-static double inspectionDisplayLastTick=-1.0;
+// V59: integer percentage display. Each rendered update advances at most
+// one point, so the user sees 0, 1, 2, ... 100 in order, without jumps.
+// The target is still based on real completed work (not a fake timer).
 static float inspectionSmoothFraction(){
     static double scanIdentity=-1.0;
-    static float shown=0.f;
+    static int visiblePercent=0;
+    static int lastFrame=-1;
+    static double lastStepTime=-1.0;
     const double now=ImGui::GetTime();
-    if(scanIdentity!=inspectionProgressStart || now<inspectionDisplayLastTick){
+    if(scanIdentity!=inspectionProgressStart || now<lastStepTime){
         scanIdentity=inspectionProgressStart;
-        shown=0.f;
-        inspectionDisplayLastTick=now;
+        visiblePercent=0;
+        lastFrame=-1;
+        lastStepTime=now;
     }
-    if(inspectionProgressStart<=0.0){
-        shown=0.f;
-        inspectionDisplayLastTick=now;
-        return 0.f;
+    if(inspectionProgressStart<=0.0)return 0.f;
+    const int frame=ImGui::GetFrameCount();
+    if(frame!=lastFrame){
+        lastFrame=frame;
+        const int verifiedTarget=std::clamp(static_cast<int>(
+            std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
+        // Limit to one integer step per visible frame, paced for legibility.
+        // When scan finishes early, remaining numbers are shown in order;
+        // the result is not unlocked until the display reaches 100.
+        if(!scanFailed.load() && !scanCancelled.load() &&
+           visiblePercent<verifiedTarget && now-lastStepTime>=0.055){
+            ++visiblePercent;
+            lastStepTime=now;
+        }
     }
-    const float target=static_cast<float>(inspectionPresentationFraction());
-    const float dt=std::clamp(static_cast<float>(now-inspectionDisplayLastTick),0.f,.1f);
-    inspectionDisplayLastTick=now;
-    if(scanFailed || scanCancelled)return shown;
-    // Continuous rendering only between measured milestones. No fake scan.
-    // When the worker completes, show 100% immediately and unlock results.
-    if(done && !scanning){shown=1.f;return shown;}
-    const float alpha=1.f-std::exp(-3.5f*dt);
-    shown+=(std::max)(0.f,target-shown)*alpha;
-    if(target-shown<.0003f)shown=target;
-    return std::clamp(shown,0.f,target);
+    return visiblePercent/100.f;
 }
 static int inspectionDisplayPercent(){
     return std::clamp(static_cast<int>(
-        std::floor(inspectionSmoothFraction()*100.f+.00001f)),0,100);
+        std::lround(inspectionSmoothFraction()*100.f)),0,100);
 }
 
 // Results are only presented after the worker finishes AND the single
@@ -28253,7 +28258,7 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
 }
 static void drawAtlasProgress(bool compact=false){
     const float fraction=inspectionSmoothFraction();
-    const int percent=fraction>=1.f?100:std::clamp(static_cast<int>(std::floor(fraction*100.f)),0,99);
+    const int percent=inspectionDisplayPercent();
     ImGui::PushID("main_scan_progress");
     ImGui::TextColored(ImVec4(.75f,.80f,.85f,1.f),"SYSTEM INSPECTION");
     ImGui::SameLine();
@@ -32046,10 +32051,7 @@ zula.exe)FIVEMSTR";
         }else{
             ImGui::TextDisabled("%s",stateText());
         }
-        if(scanning.load()){
-            ImGui::TextDisabled("Completed phases: %d / %d | Results are provisional",
-                completedStages.load(),totalStages.load());
-        }else if(scanCancelled.load()){
+        if(scanCancelled.load()){
             ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),"Cancelled - partial evidence");
         }else if(scanFailed.load()){
             ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"Interrupted - inspect diagnostics");
