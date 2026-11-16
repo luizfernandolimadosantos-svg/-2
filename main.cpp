@@ -25809,55 +25809,55 @@ static void applyTheme() {
     st.AntiAliasedLines=true;
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
-    const ImVec4 bg(.038f,.048f,.070f,1.f);
-    const ImVec4 panel(.064f,.078f,.106f,1.f);
-    const ImVec4 raised(.095f,.115f,.153f,1.f);
-    const ImVec4 accent(.25f,.66f,.91f,1.f);
-    const ImVec4 accentHover(.32f,.73f,.98f,1.f);
+    const ImVec4 bg(.035f,.035f,.035f,1.f);
+    const ImVec4 panel(.075f,.075f,.075f,1.f);
+    const ImVec4 raised(.12f,.12f,.12f,1.f);
+    const ImVec4 accent(.84f,.84f,.84f,1.f);
+    const ImVec4 accentHover(1.f,1.f,1.f,1.f);
     const ImVec4 text(.94f,.96f,.98f,1.f);
     c[ImGuiCol_WindowBg]=bg;
     c[ImGuiCol_ChildBg]=panel;
     c[ImGuiCol_PopupBg]=raised;
-    c[ImGuiCol_Border]=ImVec4(.22f,.29f,.38f,.85f);
-    c[ImGuiCol_Separator]=ImVec4(.22f,.29f,.38f,.75f);
+    c[ImGuiCol_Border]=ImVec4(0.297f,0.297f,0.297f,.85f);
+    c[ImGuiCol_Separator]=ImVec4(0.297f,0.297f,0.297f,.75f);
     c[ImGuiCol_Text]=text;
-    c[ImGuiCol_TextDisabled]=ImVec4(.61f,.68f,.76f,1.f);
+    c[ImGuiCol_TextDisabled]=ImVec4(0.683f,0.683f,0.683f,1.f);
     c[ImGuiCol_FrameBg]=raised;
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.14f,.19f,.25f,1.f);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.18f,.25f,.33f,1.f);
-    c[ImGuiCol_Button]=ImVec4(.13f,.24f,.34f,1.f);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.18f,.34f,.46f,1.f);
-    c[ImGuiCol_ButtonActive]=ImVec4(.22f,.43f,.57f,1.f);
-    c[ImGuiCol_Header]=ImVec4(.12f,.22f,.32f,1.f);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.17f,.32f,.43f,1.f);
-    c[ImGuiCol_HeaderActive]=ImVec4(.21f,.40f,.54f,1.f);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(0.193f,0.193f,0.193f,1.f);
+    c[ImGuiCol_FrameBgActive]=ImVec4(0.253f,0.253f,0.253f,1.f);
+    c[ImGuiCol_Button]=ImVec4(0.237f,0.237f,0.237f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(0.327f,0.327f,0.327f,1.f);
+    c[ImGuiCol_ButtonActive]=ImVec4(0.407f,0.407f,0.407f,1.f);
+    c[ImGuiCol_Header]=ImVec4(0.220f,0.220f,0.220f,1.f);
+    c[ImGuiCol_HeaderHovered]=ImVec4(0.307f,0.307f,0.307f,1.f);
+    c[ImGuiCol_HeaderActive]=ImVec4(0.383f,0.383f,0.383f,1.f);
     c[ImGuiCol_CheckMark]=accent;
     c[ImGuiCol_SliderGrab]=accent;
     c[ImGuiCol_SliderGrabActive]=accentHover;
-    c[ImGuiCol_Tab]=ImVec4(.080f,.108f,.148f,1.f);
-    c[ImGuiCol_TabHovered]=ImVec4(.15f,.30f,.41f,1.f);
-    c[ImGuiCol_TabSelected]=ImVec4(.16f,.35f,.48f,1.f);
-    c[ImGuiCol_TabDimmed]=ImVec4(.055f,.072f,.099f,1.f);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.11f,.17f,.23f,1.f);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.25f,.33f,.41f,1.f);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.16f,.22f,.29f,1.f);
-    c[ImGuiCol_TableRowBg]=ImVec4(.065f,.080f,.110f,1.f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.082f,.101f,.138f,1.f);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(.20f,.53f,.76f,.38f);
+    c[ImGuiCol_Tab]=ImVec4(0.112f,0.112f,0.112f,1.f);
+    c[ImGuiCol_TabHovered]=ImVec4(0.287f,0.287f,0.287f,1.f);
+    c[ImGuiCol_TabSelected]=ImVec4(0.330f,0.330f,0.330f,1.f);
+    c[ImGuiCol_TabDimmed]=ImVec4(0.075f,0.075f,0.075f,1.f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(0.170f,0.170f,0.170f,1.f);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(0.330f,0.330f,0.330f,1.f);
+    c[ImGuiCol_TableBorderLight]=ImVec4(0.223f,0.223f,0.223f,1.f);
+    c[ImGuiCol_TableRowBg]=ImVec4(0.085f,0.085f,0.085f,1.f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(0.107f,0.107f,0.107f,1.f);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(0.497f,0.497f,0.497f,.38f);
     c[ImGuiCol_ScrollbarBg]=bg;
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.24f,.33f,.42f,1.f);
-    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(.32f,.43f,.53f,1.f);
-    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(.40f,.53f,.64f,1.f);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(0.330f,0.330f,0.330f,1.f);
+    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.427f,0.427f,0.427f,1.f);
+    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(0.523f,0.523f,0.523f,1.f);
     c[ImGuiCol_NavHighlight]=accent;
     c[ImGuiCol_TitleBg]=bg;
     c[ImGuiCol_TitleBgActive]=panel;
     c[ImGuiCol_MenuBarBg]=panel;
     c[ImGuiCol_PlotLines]=accent;
     c[ImGuiCol_PlotHistogram]=accent;
-    c[ImGuiCol_ResizeGrip]=ImVec4(.25f,.66f,.91f,.24f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(.25f,.66f,.91f,.65f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(0.607f,0.607f,0.607f,.24f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(0.607f,0.607f,0.607f,.65f);
     c[ImGuiCol_ResizeGripActive]=accent;
-    c[ImGuiCol_ModalWindowDimBg]=ImVec4(.01f,.02f,.04f,.75f);
+    c[ImGuiCol_ModalWindowDimBg]=ImVec4(0.023f,0.023f,0.023f,.75f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -28139,7 +28139,7 @@ static void renderUI() {
             ImGui::GetWindowDrawList()->AddRectFilled(
                 ImVec2(tabMin.x+1.f,tabMin.y+9.f),
                 ImVec2(tabMin.x+3.f,tabMax.y-9.f),
-                IM_COL32(79,220,163,230),1.f);
+                IM_COL32(235,235,235,230),1.f);
         } else if(showNavHover && ImGui::IsItemHovered()){
             ImGui::GetWindowDrawList()->AddRect(
                 ImVec2(tabMin.x+.5f,tabMin.y+.5f),
@@ -28175,8 +28175,8 @@ static void renderUI() {
         dl->PushClipRect(origin,ImVec2(origin.x+extent.x,origin.y+extent.y),true);
         dl->AddRectFilledMultiColor(
             origin,ImVec2(origin.x+extent.x,origin.y+210.f),
-            IM_COL32(20,36,54,255),IM_COL32(17,29,45,255),
-            IM_COL32(10,18,30,255),IM_COL32(13,23,36,255));
+            IM_COL32(32,32,32,255),IM_COL32(27,27,27,255),
+            IM_COL32(18,18,18,255),IM_COL32(23,23,23,255));
         dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
                     ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
                     IM_COL32(100,100,100,33),1.f);
@@ -28433,9 +28433,9 @@ static void renderUI() {
             const char* verdictLabel = detectedIndicators ? "CHEATER (DETECTED)" :
                 suspectIndicators ? "SUSPECT" : "CLEAN";
             const ImVec4 verdictColor = detectedIndicators ?
-                ImVec4(.98f,.38f,.40f,1.f) : suspectIndicators ?
-                ImVec4(.98f,.72f,.32f,1.f) : ImVec4(.42f,.85f,.62f,1.f);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.085f,.12f,.17f,1.f));
+                ImVec4(1.f,1.f,1.f,1.f) : suspectIndicators ?
+                ImVec4(.83f,.83f,.83f,1.f) : ImVec4(.72f,.72f,.72f,1.f);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.105f,.105f,1.f));
             ImGui::BeginChild("##verdictStatus",ImVec2(0,114),ImGuiChildFlags_Borders);
             ImGui::Spacing();
             ImGui::SetWindowFontScale(1.6f);
@@ -28452,6 +28452,63 @@ static void renderUI() {
             ImGui::Text("Suspicious processes: %zu",suspiciousProcesses);
             ImGui::Text("Bypass-related evidence mentions: %zu",bypassIndicators);
             ImGui::Text("Total evidence records: %zu",evidenceTotal);
+            // Explain the verdict using the same collected records used above.
+            // Matches are evidence leads, not a determination of player behavior.
+            if(suspectIndicators || detectedIndicators) {
+                ImGui::SeparatorText("WHY THIS RESULT? / EVIDENCE");
+                ImGui::TextWrapped("The following collected items contributed indicators "
+                    "to this assessment. A filename or keyword alone is not proof.");
+                if(ImGui::BeginTable("##verdictEvidence",3,
+                    ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|
+                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
+                    ImVec2(0,235))) {
+                    ImGui::TableSetupColumn("Indicator",ImGuiTableColumnFlags_WidthFixed,130);
+                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,135);
+                    ImGui::TableSetupColumn("Evidence / path");
+                    ImGui::TableHeadersRow();
+                    size_t shown=0, total=0;
+                    {
+                        std::lock_guard<std::mutex> guard(dataMutex);
+                        static const char* specific[]={
+                            "cheatfivem.exe","p5m_location.ini","pc5m_pvp.ini",
+                            "p5m_free.ini","clrloader.dll","fivem-premium.dll","geist.dll"
+                        };
+                        static const char* contextual[]={
+                            "mhyprot.sys","inpoutx64.sys","mavinject.exe",
+                            "hxxd64.sys","nfextlag.sys","ggkernel64.sys",
+                            "x64launcher.dll","loader_log.txt"
+                        };
+                        for(const auto& r:records) {
+                            std::string hay=r.name+" "+r.detail;
+                            std::transform(hay.begin(),hay.end(),hay.begin(),
+                                [](unsigned char c){return static_cast<char>(std::tolower(c));});
+                            const char* label=nullptr;
+                            for(const char* t:specific)if(hay.find(t)!=std::string::npos){
+                                label="FiveM specific";break;
+                            }
+                            if(!label)for(const char* t:contextual)
+                                if(hay.find(t)!=std::string::npos){label="Context only";break;}
+                            if(!label && (hay.find("bypass")!=std::string::npos ||
+                                hay.find("tamper")!=std::string::npos ||
+                                hay.find("evasion")!=std::string::npos))
+                                label="Keyword review";
+                            if(!label)continue;
+                            ++total;
+                            if(shown++>=80)continue;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(label);
+                            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextWrapped("%s",r.name.c_str());
+                            if(!r.detail.empty())ImGui::TextDisabled("%s",r.detail.c_str());
+                        }
+                    }
+                    ImGui::EndTable();
+                    if(total>80)ImGui::TextDisabled("Showing 80 of %zu matching records.",total);
+                    if(!total && suspiciousProcesses>0)
+                        ImGui::TextDisabled("Suspicious process flags: %zu. See Scan Results for process details.",suspiciousProcesses);
+                }
+            }
             ImGui::SeparatorText("FiveM indicator review");
             ImGui::Text("Specific filename matches: %zu",fivemStrong);
             ImGui::Text("Context-only matches: %zu",fivemContext);
