@@ -1768,16 +1768,22 @@ static bool isDetectedRecord(const Record& r) {
 }
 static bool isSuspectRecord(const Record& r) {
     return r.category=="PE Review" ||
+           r.category=="FiveM Cheat Name Detection" ||
            r.detail.find("SUSPECT |")!=std::string::npos ||
+           r.detail.find("SUSPECT - NAME RULE")!=std::string::npos ||
            r.detail.find("REVIEW:")!=std::string::npos;
 }
 static const char* evidenceLabel(const Record& r) {
     return isDetectedRecord(r)?"DETECTED":isSuspectRecord(r)?"SUSPECT":"UNKNOWN";
 }
 static void tintEvidenceRow(const Record& r) {
-    if(isDetectedRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(56,56,56,190));
-    else if(isSuspectRecord(r))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(94,94,94,175));
+    if(isDetectedRecord(r))
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(94,31,37,105));
+    else if(isSuspectRecord(r))
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(95,72,29,95));
+    // UNKNOWN is not CLEAN: an informational record is not a negative test.
 }
+
 
 
 // Read-only Windows Event Log timeline. Only actual events are displayed.
@@ -2285,17 +2291,15 @@ static std::vector<Record> inspectCheatNamedProcesses(
     std::vector<Record> out;
     for(auto& proc:items){
         if(cancelRequested)break;
-        if(!isCheatNameRuleMatch(proc.name) &&
-           (proc.path.empty() || !isCheatNameRuleMatch(proc.path)))continue;
-        proc.suspicious=true;
+        if(!isCheatNameRuleMatch(proc.name))continue;
         const std::string note=
-            "DETECTED - NAME RULE | Process filename contains CHEAT or EXTERNAL. "
+            "SUSPECT - NAME RULE | Process filename contains CHEAT or EXTERNAL. "
             "PID: "+std::to_string(proc.pid)+
             " | Path: "+utf8(proc.path)+
             " | Why: the operator enabled a broad FiveM cheat-name rule. "
             "This is a filename match, NOT confirmed malware or proof of cheating.";
         if(!proc.assessment.empty())proc.assessment+=" | ";
-        proc.assessment+="DETECTED: CHEAT/EXTERNAL filename rule (name only)";
+        proc.assessment+="REVIEW: CHEAT/EXTERNAL filename rule (name only)";
         out.push_back({"FiveM Cheat Name Detection",utf8(proc.name),note});
     }
     return out;
@@ -2413,7 +2417,7 @@ static std::vector<Record> inspectCheatNamedModules(
                 const std::wstring key=std::to_wstring(proc.pid)+L"|"+lowerPath(m.szExePath);
                 if(!seen.insert(key).second)continue;
                 out.push_back({"FiveM Cheat Name Detection",utf8(m.szModule),
-                    "DETECTED - NAME RULE | Loaded module filename contains CHEAT "
+                    "SUSPECT - NAME RULE | Loaded module filename contains CHEAT "
                     "or EXTERNAL. Process: "+utf8(proc.name)+
                     " | PID: "+std::to_string(proc.pid)+
                     " | Module: "+utf8(m.szExePath)+
@@ -2492,7 +2496,7 @@ static std::vector<Record> inspectArtifactLocations(){
                        seenMatches.insert(lowerPath(path.wstring())).second){
                         ++matchCount;
                         out.push_back({"FiveM Cheat Name Detection",name,
-                            "DETECTED - NAME RULE | Filename contains CHEAT or EXTERNAL. "
+                            "SUSPECT - NAME RULE | Filename contains CHEAT or EXTERNAL. "
                             "Location: "+root.label+" | Path: "+fullPath+
                             " | This confirms a filename match, not actual cheating or malware."});
                     }
@@ -2503,7 +2507,7 @@ static std::vector<Record> inspectArtifactLocations(){
                             ext==L".dll"?"Artifact: DLL":
                             ext==L".exe"?"Artifact: EXE":"Artifact: Script/Shortcut";
                         out.push_back({category,name,
-                            std::string(match?"DETECTED - NAME RULE":"INVENTORY")+
+                            std::string(match?"SUSPECT - NAME RULE":"INVENTORY")+
                             " | Location: "+root.label+" | File: "+fullPath+
                             " | File presence alone does not prove malware."});
                     }
@@ -2611,7 +2615,7 @@ static std::vector<Record> inspectAdditionalEvidence(
                     if(name.find(L"cheat")!=std::wstring::npos ||
                        name.find(L"external")!=std::wstring::npos){
                         result.push_back({"Execution Artifact",utf8(path.filename().wstring()),
-                            "DETECTED - NAME RULE | Prefetch filename contains CHEAT or "
+                            "SUSPECT - NAME RULE | Prefetch filename contains CHEAT or "
                             "EXTERNAL. Path: "+utf8(path.wstring())+
                             " | Prefetch is historical execution-related evidence, "
                             "not proof of cheating or malware."});
@@ -2777,7 +2781,7 @@ static std::vector<Record> inspectStartupFolderIndicators(){
                 const bool nameRule=isCheatNameRuleMatch(file.filename().wstring());
                 if(script || executable || nameRule){
                     out.push_back({"Startup File Review",utf8(file.filename().wstring()),
-                        std::string(nameRule?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                        std::string(nameRule?"SUSPECT - NAME RULE":"NEEDS REVIEW")+
                         " | Startup folder contains "+
                         (script?"a script":executable?"an executable":"a name-rule match")+
                         " | Path: "+utf8(file.wstring())+
@@ -2950,7 +2954,7 @@ static std::vector<Record> inspectImageExecutionHijackSettings(){
                     low.find(L"mshta")!=std::wstring::npos ||
                     low.find(L"wscript")!=std::wstring::npos;
                 out.push_back({"Execution Configuration",utf8(subkey),
-                    std::string(nameMatch?"DETECTED - NAME RULE":
+                    std::string(nameMatch?"SUSPECT - NAME RULE":
                                 unusual?"NEEDS REVIEW":"INFO")+
                     " | "+root.label+" / "+utf8(valueName)+
                     " | Command or module: "+utf8(value)+
@@ -3122,7 +3126,7 @@ static std::vector<Record> inspectBamExecutionHistory(){
                 const std::wstring entry(name,nameLen);
                 if(!isCheatNameRuleMatch(entry))continue;
                 out.push_back({"BAM Execution History",utf8(entry),
-                    "DETECTED - NAME RULE | BAM/DAM execution-history entry "
+                    "SUSPECT - NAME RULE | BAM/DAM execution-history entry "
                     "contains CHEAT or EXTERNAL. Historical record, not proof "
                     "of malware or cheating. Source: "+utf8(rootPath)});
                 if(out.size()>=250)break;
@@ -3161,7 +3165,7 @@ static std::vector<Record> inspectDefenderExclusionIndicators(){
             const bool temp=(lower.find(L"\\temp\\")!=std::wstring::npos ||
                 lower.find(L"\\downloads\\")!=std::wstring::npos);
             out.push_back({"Defender Exclusion Review",utf8(value),
-                std::string(nameMatch?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                std::string(nameMatch?"SUSPECT - NAME RULE":"NEEDS REVIEW")+
                 " | Defender exclusion group: "+utf8(group)+
                 " | Exclusions reduce scanning for matching content. "
                 "Confirm the exclusion is necessary and authorized."});
@@ -3193,7 +3197,7 @@ static std::vector<Record> inspectScheduledTaskNames(){
             const auto path=it->path();
             if(isCheatNameRuleMatch(path.filename().wstring())){
                 out.push_back({"Scheduled Task Name",utf8(path.filename().wstring()),
-                    "DETECTED - NAME RULE | Scheduled task filename matches "
+                    "SUSPECT - NAME RULE | Scheduled task filename matches "
                     "CHEAT or EXTERNAL. Task definition: "+utf8(path.wstring())+
                     " | Name-only match, not proof of malicious behavior."});
             }
@@ -3239,7 +3243,7 @@ static std::vector<Record> inspectUserComRegistrationIndicators(){
                 lower.find(L"\\appdata\\roaming\\")!=std::wstring::npos;
             if(!named && !review)continue;
             out.push_back({"COM Registration Review",utf8(clsid),
-                std::string(named?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+                std::string(named?"SUSPECT - NAME RULE":"NEEDS REVIEW")+
                 " | User COM "+utf8(sub)+" references: "+utf8(path)+
                 " | A user-level COM registration points to a name-rule match "
                 "or an unusual location. Verify the file and its publisher; "
@@ -3281,7 +3285,7 @@ static std::vector<Record> inspectServiceImagePathIndicators(){
             lower.find(L"wscript")!=std::wstring::npos;
         if(!named && !review)continue;
         out.push_back({"Service Image Review",utf8(service),
-            std::string(named?"DETECTED - NAME RULE":"NEEDS REVIEW")+
+            std::string(named?"SUSPECT - NAME RULE":"NEEDS REVIEW")+
             " | Service ImagePath: "+utf8(command)+
             " | A service references a name-rule match or an unusual location. "
             "Inspect its signature and provenance. This alone does not prove malware."});
@@ -4740,7 +4744,7 @@ static std::vector<Record> correlateBypassIndicators(const std::vector<Record>& 
         if(r.category=="Batch Script Content Review")
             scriptIndicator=true;
         if(r.category=="Defender Exclusion Review" &&
-           r.detail.find("DETECTED - NAME RULE")!=std::string::npos)
+           r.detail.find("SUSPECT - NAME RULE")!=std::string::npos)
             matchingExclusion=true;
     }
     const unsigned signals=static_cast<unsigned>(weakenedDefender)+
@@ -25942,8 +25946,8 @@ static void applyTheme() {
     // Sync PC Checker UI refresh: one centralized, predictable theme.
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=12.f;
-    st.ChildRounding=11.f;
+    st.WindowRounding=14.f;
+    st.ChildRounding=12.f;
     st.FrameRounding=cornerStyle==0?5.f:cornerStyle==1?9.f:12.f;
     st.PopupRounding=12.f;
     st.ScrollbarRounding=8.f;
@@ -25953,7 +25957,7 @@ static void applyTheme() {
     st.ChildBorderSize=1.f;
     st.FrameBorderSize=1.f;
     st.PopupBorderSize=1.f;
-    st.WindowPadding=ImVec2(22.f,19.f);
+    st.WindowPadding=ImVec2(22.f,20.f);
     st.FramePadding=ImVec2(12.f,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(11.f,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
     st.ItemInnerSpacing=ImVec2(9.f,7.f);
@@ -25965,9 +25969,9 @@ static void applyTheme() {
     st.AntiAliasedLines=true;
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
-    const ImVec4 bg(.043f,.046f,.052f,1.f);
-    const ImVec4 panel(.073f,.078f,.086f,1.f);
-    const ImVec4 raised(.116f,.122f,.133f,1.f);
+    const ImVec4 bg(.035f,.041f,.050f,1.f);
+    const ImVec4 panel(.063f,.072f,.086f,1.f);
+    const ImVec4 raised(.112f,.125f,.145f,1.f);
     const ImVec4 accent(.84f,.84f,.84f,1.f);
     const ImVec4 accentHover(1.f,1.f,1.f,1.f);
     const ImVec4 text(.94f,.96f,.98f,1.f);
@@ -25975,14 +25979,20 @@ static void applyTheme() {
     c[ImGuiCol_ChildBg]=panel;
     c[ImGuiCol_PopupBg]=raised;
     c[ImGuiCol_Border]=ImVec4(0.297f,0.297f,0.297f,.85f);
-    c[ImGuiCol_Separator]=ImVec4(0.297f,0.297f,0.297f,.75f);
+    c[ImGuiCol_Separator]=ImVec4(.31f,.37f,.45f,.65f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.105f,.126f,.151f,1.f);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.24f,.29f,.35f,.9f);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.20f,.24f,.29f,.55f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.07f,.08f,.095f,.28f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.13f,.15f,.18f,.25f);
+    c[ImGuiCol_NavHighlight]=ImVec4(.66f,.76f,.88f,.65f);
     c[ImGuiCol_Text]=text;
-    c[ImGuiCol_TextDisabled]=ImVec4(0.683f,0.683f,0.683f,1.f);
+    c[ImGuiCol_TextDisabled]=ImVec4(.64f,.69f,.75f,1.f);
     c[ImGuiCol_FrameBg]=raised;
     c[ImGuiCol_FrameBgHovered]=ImVec4(0.193f,0.193f,0.193f,1.f);
     c[ImGuiCol_FrameBgActive]=ImVec4(0.253f,0.253f,0.253f,1.f);
-    c[ImGuiCol_Button]=ImVec4(.18f,.19f,.21f,1.f);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.28f,.29f,.31f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.15f,.17f,.20f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.23f,.27f,.32f,1.f);
     c[ImGuiCol_ButtonActive]=ImVec4(0.407f,0.407f,0.407f,1.f);
     c[ImGuiCol_Header]=ImVec4(0.220f,0.220f,0.220f,1.f);
     c[ImGuiCol_HeaderHovered]=ImVec4(0.307f,0.307f,0.307f,1.f);
@@ -26018,20 +26028,26 @@ static void applyTheme() {
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::PushID(title);
-    ImGui::Dummy(ImVec2(0,7.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.11f,.12f,1.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(17.f,13.f));
-    ImGui::BeginChild("##section_heading",ImVec2(0,description?69.f:49.f),
+    ImGui::Dummy(ImVec2(0,5.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.085f,.092f,.105f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.22f,.25f,.28f,.8f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(20.f,15.f));
+    ImGui::BeginChild("##section_heading",ImVec2(0,description?77.f:57.f),
                       ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
-    ImGui::SetWindowFontScale(1.15f);
-    ImGui::TextColored(ImVec4(.97f,.97f,.98f,1.f),"%s",title);
+    const ImVec2 p=ImGui::GetWindowPos();
+    const ImVec2 sz=ImGui::GetWindowSize();
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImVec2(p.x,p.y+12.f),ImVec2(p.x+3.f,p.y+sz.y-12.f),
+        IM_COL32(144,164,185,220),2.f);
+    ImGui::SetWindowFontScale(1.18f);
+    ImGui::TextColored(ImVec4(.96f,.97f,.99f,1.f),"%s",title);
     ImGui::SetWindowFontScale(1.f);
     if(description && description[0]) {
-        ImGui::TextWrapped("%s",description);
+        ImGui::TextColored(ImVec4(.68f,.74f,.81f,1.f),"%s",description);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
     ImGui::Dummy(ImVec2(0,8.f));
     ImGui::PopID();
 }
@@ -27803,15 +27819,42 @@ static void drawAtlasProgress(bool compact=false){
     const float fraction=inspectionSmoothFraction();
     const int percent=std::clamp(static_cast<int>(std::round(fraction*100.f)),0,100);
     ImGui::PushID("main_scan_progress");
-    ImGui::TextDisabled("SYSTEM INSPECTION");
+    ImGui::TextColored(ImVec4(.75f,.80f,.85f,1.f),"SYSTEM INSPECTION");
     ImGui::SameLine();
-    ImGui::Text("%d%%",percent);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.88f,.89f,.91f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.16f,.17f,.19f,1.f));
-    ImGui::ProgressBar(fraction,ImVec2(-1.f,compact?12.f:18.f),"");
-    ImGui::PopStyleColor(2);
-    ImGui::TextDisabled("%s",scanning.load()?"Collecting system evidence...":
-        done.load()?"Scan complete - preparing results...":"Ready for inspection.");
+    ImGui::TextColored(ImVec4(.95f,.96f,.98f,1.f),"%d%%",percent);
+    const ImVec2 start=ImGui::GetCursorScreenPos();
+    const float width=(std::max)(80.f,ImGui::GetContentRegionAvail().x);
+    const float height=compact?11.f:15.f;
+    ImGui::InvisibleButton("##progress_track",ImVec2(width,height));
+    ImDrawList* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(start,ImVec2(start.x+width,start.y+height),
+        IM_COL32(36,41,49,255),5.f);
+    const float fill=width*fraction;
+    if(fill>1.f){
+        draw->AddRectFilled(start,ImVec2(start.x+fill,start.y+height),
+            IM_COL32(171,190,211,255),5.f);
+        if(fill>12.f)draw->AddRectFilled(
+            ImVec2(start.x+3.f,start.y+2.f),
+            ImVec2(start.x+fill-3.f,start.y+4.f),
+            IM_COL32(232,240,249,115),2.f);
+    }
+    draw->AddRect(start,ImVec2(start.x+width,start.y+height),
+        IM_COL32(75,85,98,145),5.f);
+    if(brandAnimation && scanning.load() && fill>8.f && fraction<1.f){
+        const float pulse=.5f+.5f*std::sin(static_cast<float>(ImGui::GetTime()*3.2));
+        const int alpha=static_cast<int>(35.f+75.f*pulse);
+        draw->AddRectFilled(
+            ImVec2(start.x+(std::max)(0.f,fill-15.f),start.y+2.f),
+            ImVec2(start.x+fill-2.f,start.y+height-2.f),
+            IM_COL32(244,248,255,alpha),3.f);
+    }
+    if(scanning.load()){
+        const int stages=(std::max)(0,(std::min)(completedStages.load(),6));
+        ImGui::TextDisabled("Evidence collection | %d of 6 stages completed",stages);
+    }else{
+        ImGui::TextDisabled("%s",done.load()?"Scan complete - preparing results...":
+            "Ready for inspection.");
+    }
     ImGui::PopID();
 }
 
@@ -27907,7 +27950,8 @@ static void beginStartupWindowExpand(){
 static void updateStartupWindowExpand(){
     if(!startupWindowExpandActive || !hwnd)return;
     const double elapsed=ImGui::GetTime()-startupWindowExpandAt;
-    const float progress=syncIntroEase(static_cast<float>(elapsed/2.20));
+    const float progress=brandAnimation?
+        syncIntroEase(static_cast<float>(elapsed/2.20)):1.f;
     auto lerp=[&](int a,int b){return static_cast<int>(std::lround(
         static_cast<double>(a)+(static_cast<double>(b)-a)*progress));};
     const int x=lerp(startupWindowFrom.left,startupWindowTo.left);
@@ -27936,6 +27980,10 @@ static void renderSyncOpening() {
     const double now=ImGui::GetTime();
     const float t=(float)now;
     const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.48f;
+    const float cardW=(std::min)(sz.x-24.f,540.f);
+    const float cardH=(std::min)(sz.y-24.f,365.f);
+    const ImVec2 cardMin(cx-cardW*.5f,cy-cardH*.52f);
+    const ImVec2 cardMax(cx+cardW*.5f,cy+cardH*.48f);
     const bool transitioning=syncIntroTransition>=0.0;
     const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
     auto fade=[&](float begin,float duration) {
@@ -27950,6 +27998,8 @@ static void renderSyncOpening() {
     d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
         IM_COL32(9,9,11,255),IM_COL32(18,18,20,255),
         IM_COL32(10,10,12,255),IM_COL32(13,13,15,255));
+    d->AddRectFilled(cardMin,cardMax,IM_COL32(23,26,32,226),16.f);
+    d->AddRect(cardMin,cardMax,IM_COL32(85,99,117,100),16.f);
     for(int j=1;j<8;++j) {
         const float x=p.x+sz.x*j/8.f;
         d->AddLine(ImVec2(x,p.y+80.f),ImVec2(x,p.y+sz.y-60.f),ink(255,.025f));
@@ -27957,7 +28007,7 @@ static void renderSyncOpening() {
     d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
     d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
     d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"FIVEM SECURITY");
-    const float pulse=.5f+.5f*std::sin(t*1.35f);
+    const float pulse=brandAnimation?(.5f+.5f*std::sin(t*1.35f)):.5f;
     const float logoY=cy-115.f-(transitioning?fade(.15f,.75f)*18.f:0.f);
     for(int i=3;i>=1;--i) {
         const float radius=44.f+i*18.f+pulse*2.f;
@@ -27976,12 +28026,12 @@ static void renderSyncOpening() {
         d->AddText(ImVec2(cx-ds.x*.5f,cy+23.f-offset),ink(169,welcomeOpacity),detail);
     }
     if(!transitioning) {
-        ImGui::SetCursorScreenPos(ImVec2(cx-115.f,cy+91.f));
+        ImGui::SetCursorScreenPos(ImVec2(cx-(std::min)(230.f,cardW-40.f)*.5f,cy+91.f));
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.90f,.90f,.90f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
-        if(ImGui::Button("Start System Scan  ->",ImVec2(230.f,46.f))) {
+        if(ImGui::Button("Start System Scan  ->",ImVec2((std::min)(230.f,cardW-40.f),46.f))) {
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
@@ -27993,7 +28043,7 @@ static void renderSyncOpening() {
         const float lineWidth=140.f*line;
         d->AddLine(ImVec2(cx-lineWidth,cy+68.f),
                    ImVec2(cx+lineWidth,cy+68.f),ink(215,.22f*loadingOpacity),1.2f);
-        const float travel=std::fmod((std::max)(0.f,elapsed)*.52f,1.f);
+        const float travel=brandAnimation?std::fmod((std::max)(0.f,elapsed)*.52f,1.f):.5f;
         const float headX=cx-lineWidth+2.f*lineWidth*travel;
         d->AddLine(ImVec2(headX-20.f*line,cy+68.f),
                    ImVec2(headX,cy+68.f),ink(255,.78f*loadingOpacity),2.f);
@@ -28077,6 +28127,12 @@ static void drawScanSummaryNew() {
         static_cast<float>((std::min)(finished,planned))/static_cast<float>(planned):0.f;
     ImGui::ProgressBar(fraction,ImVec2(-1.f,16.f));
     ImGui::TextDisabled("Coverage reflects completed checks, not a malware detection score.");
+    if(unavailable>0){
+        ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),
+            "PARTIAL COVERAGE: %llu checks unavailable",unavailable);
+        ImGui::TextWrapped("Unavailable checks are not CLEAN results. "
+            "Review permissions and source health before interpreting the verdict.");
+    }
     ImGui::Spacing();
     ImGui::TextUnformatted("SOURCE HEALTH");
     const int source=forensicSourceStatus.load();
@@ -28133,56 +28189,96 @@ static void drawReviewQueueNew() {
 // Read-only visibility review. Does not modify capture protection, hooks,
 // injected modules, process memory, or other applications.
 static void drawStreamproofReview(){
-    sectionTitle("REM STREAMPROOF","Scan indicators and visibility review");
+    sectionTitle("REM STREAMPROOF","Read-only streamproof indicator review");
     const bool running=scanning.load();
     const bool finished=done.load() && !running && !scanFailed.load() && !scanCancelled.load();
-    struct StreamproofFinding {std::string category,name,detail;};
-    std::vector<StreamproofFinding> matches;
+    struct Finding {std::string category,name,detail;bool detected;};
+    std::vector<Finding> matches;
     {
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& r:records){
-            std::string value=r.category+" "+r.name+" "+r.detail;
+            // Own-window capture diagnostics are informational, not bypass evidence.
+            if(r.category=="Capture Diagnostics")continue;
+            std::string value=r.category+" "+r.name;
             std::transform(value.begin(),value.end(),value.begin(),
                 [](unsigned char c){return static_cast<char>(std::tolower(c));});
             if(value.find("streamproof")==std::string::npos &&
                value.find("stream proof")==std::string::npos &&
                value.find("capture exclusion")==std::string::npos &&
                value.find("display affinity")==std::string::npos)continue;
-            matches.push_back({r.category,r.name,r.detail});
+            const bool strong=isDetectedRecord(r);
+            matches.push_back({r.category,r.name,r.detail,strong});
         }
     }
+    // Duplicate scan records can inflate the detection count. Keep one
+    // evidence row per unique category, name and detail.
+    std::sort(matches.begin(),matches.end(),
+        [](const Finding& a,const Finding& b){
+            if(a.category!=b.category)return a.category<b.category;
+            if(a.name!=b.name)return a.name<b.name;
+            return a.detail<b.detail;
+        });
+    matches.erase(std::unique(matches.begin(),matches.end(),
+        [](const Finding& a,const Finding& b){
+            return a.category==b.category && a.name==b.name &&
+                   a.detail==b.detail;
+        }),matches.end());
+    size_t strongCount=0;
+    for(const auto& r:matches)if(r.detected)++strongCount;
+    const ImVec4 green(.45f,.83f,.57f,1.f);
+    const ImVec4 yellow(.98f,.76f,.31f,1.f);
+    const ImVec4 red(.96f,.38f,.38f,1.f);
     ImGui::Spacing();
     if(running){
-        ImGui::TextColored(ImVec4(.94f,.75f,.37f,1.f),"STREAMPROOF CHECK IN PROGRESS");
-        ImGui::TextWrapped("Results may change until the scan finishes.");
+        ImGui::TextColored(yellow,"SCANNING");
+        ImGui::TextWrapped("Checking collected indicators. Results are provisional.");
     }else if(!finished){
         ImGui::TextDisabled("Run a scan to review streamproof indicators.");
+    }else if(strongCount){
+        ImGui::TextColored(red,"STREAMPROOF DETECTED");
+        ImGui::SameLine();ImGui::TextDisabled("| Confirmed rule match");
+        ImGui::TextWrapped("%zu detected evidence item(s). See names, sources and details below.",
+            strongCount);
     }else if(!matches.empty()){
-        ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"STREAMPROOF DETECTED");
-        ImGui::TextWrapped("%zu indicator(s) matched scan evidence. "
-            "Review the entries below; a text match alone does not confirm "
-            "that an injected bypass is currently active.",matches.size());
+        ImGui::TextColored(yellow,"STREAMPROOF SUSPECT");
+        ImGui::SameLine();ImGui::TextDisabled("| Needs manual review");
+        ImGui::TextWrapped("%zu possible indicator(s) found. Manual review required.",
+            matches.size());
     }else{
-        ImGui::TextColored(ImVec4(.45f,.83f,.57f,1.f),"NO STREAMPROOF INDICATORS FOUND");
-        ImGui::TextWrapped("The scan did not find known indicators in its collected evidence. "
-            "This does not guarantee that streamproof is absent.");
+        ImGui::TextColored(green,"CLEAN - NO STREAMPROOF INDICATORS FOUND");
+        ImGui::TextWrapped("No matching evidence collected. This does not guarantee absence.");
     }
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled("MATCHING SCAN EVIDENCE");
-    for(size_t i=0;i<matches.size() && i<80;++i){
-        const auto& r=matches[i];
-        ImGui::PushID(static_cast<int>(i));
-        ImGui::TextWrapped("%s",r.name.c_str());
-        ImGui::TextDisabled("%s",r.category.c_str());
-        ImGui::TextWrapped("%s",r.detail.c_str());
-        ImGui::Separator();
-        ImGui::PopID();
+    if(matches.empty())ImGui::TextDisabled("No matching items.");
+    if(ImGui::BeginTable("##streamproofFindings",4,
+        ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,270))){
+        ImGui::TableSetupColumn("Status",ImGuiTableColumnFlags_WidthFixed,90);
+        ImGui::TableSetupColumn("Detected item",ImGuiTableColumnFlags_WidthStretch,1.4f);
+        ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthStretch,1.f);
+        ImGui::TableSetupColumn("Evidence / path",ImGuiTableColumnFlags_WidthStretch,3.f);
+        ImGui::TableHeadersRow();
+        for(size_t i=0;i<matches.size() && i<100;++i){
+            const auto& r=matches[i];
+            const ImVec4 color=r.detected?red:yellow;
+            ImGui::TableNextRow();
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                r.detected?IM_COL32(76,25,29,85):IM_COL32(74,58,24,75));
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(color,"%s",r.detected?"DETECTED":"SUSPECT");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextWrapped("%s",r.name.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextWrapped("%s",r.category.c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextWrapped("%s",r.detail.c_str());
+        }
+        ImGui::EndTable();
     }
-    if(matches.size()>80)
-        ImGui::TextDisabled("Showing first 80 of %zu matches.",matches.size());
-    ImGui::Spacing();
-    ImGui::TextDisabled("Read-only inspection: no capture settings or processes are modified.");
+    if(matches.size()>100)ImGui::TextDisabled("Showing 100 of %zu items.",matches.size());
+    ImGui::TextDisabled("Read-only review. Historical artifacts and text matches do not prove an active injected bypass.");
 }
 
 static void renderUI() {
@@ -28279,7 +28375,7 @@ static void renderUI() {
     ImGui::EndChild();
 
     // Compact, factual status strip: no inferred malware verdict.
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.09f,.09f,.095f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.086f,.101f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
@@ -28305,6 +28401,22 @@ static void renderUI() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    // Show incomplete coverage across the entire workspace, not only in Overview.
+    if(done.load() && !scanning.load() && processChecksUnavailable.load()>0){
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.22f,.17f,.075f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.53f,.40f,.15f,.85f));
+        if(ImGui::BeginChild("##partialCoverageWarning",ImVec2(0,47.f),
+            ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
+            ImGui::TextColored(ImVec4(.98f,.78f,.36f,1.f),
+                "PARTIAL SCAN COVERAGE");
+            ImGui::SameLine(0,15.f);
+            ImGui::TextDisabled("%llu checks unavailable - no automatic CLEAN conclusion",
+                processChecksUnavailable.load());
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
 
     // Global alert appears on every main page after a completed scan.
     if(bypassCorrelatedAlert.load() && !scanning.load()){
@@ -31995,18 +32107,17 @@ zula.exe)FIVEMSTR";
                     (artifactType==5&&(r.category=="Artifact: Script/Shortcut" ||
                        r.category=="Batch Script Name Rule")) ||
                     (artifactType==6&&
-                      (r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
+                      (r.detail.find("SUSPECT - NAME RULE")!=std::string::npos ||
                        r.category=="FiveM Cheat Name Detection")) ||
                     (artifactType==7&&(r.category=="Batch Script Name Rule" ||
                        r.category=="Batch Script Content Review" ||
                        r.category=="Batch Script Inventory"));
                 if(!matchType)continue;
                 const bool detected=
-                    isDetectedRecord(r) ||
-                    r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
-                    r.category=="FiveM Cheat Name Detection";
+                    isDetectedRecord(r);
                 const bool suspect=!detected &&
                     (isSuspectRecord(r) ||
+                     r.category=="FiveM Cheat Name Detection" ||
                      r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                      r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule" ||
@@ -32028,21 +32139,27 @@ zula.exe)FIVEMSTR";
                 for(int row=artifactClipper.DisplayStart;
                     row<artifactClipper.DisplayEnd;++row){
                     const Record& r=*visibleArtifacts[(size_t)row];
-                    const bool detected=isDetectedRecord(r) ||
-                        r.detail.find("DETECTED - NAME RULE")!=std::string::npos ||
-                        r.category=="FiveM Cheat Name Detection";
+                    const bool detected=isDetectedRecord(r);
                     const bool suspect=!detected &&
                         (isSuspectRecord(r) ||
+                         r.category=="FiveM Cheat Name Detection" ||
                          r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                          r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule");
                 ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
-                    IM_COL32(65,65,65,180));
+                    IM_COL32(85,29,33,130));
                 else if(suspect)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
-                    IM_COL32(44,44,44,150));
-                ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",r.category.c_str());
-                ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
+                    IM_COL32(78,61,26,110));
+                else ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                    IM_COL32(25,62,40,65));
+                const ImVec4 evidenceColor=detected?ImVec4(.96f,.38f,.38f,1.f):
+                    suspect?ImVec4(.98f,.76f,.31f,1.f):ImVec4(.45f,.83f,.57f,1.f);
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextColored(evidenceColor,"%s",detected?"DETECTED":suspect?"SUSPECT":"INFO");
+                ImGui::TextWrapped("%s",r.category.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextColored(evidenceColor,"%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
                 ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
                 if(ImGui::Button("Show Details",ImVec2(130,32)))
