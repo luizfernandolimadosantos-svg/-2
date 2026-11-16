@@ -28043,11 +28043,11 @@ static void renderUI() {
     static bool viewTransitionActive=false;
     const float viewNow=(float)ImGui::GetTime();
     const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
-    const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
+    const int navColumns=navAvailableWidth<460.f?1:navAvailableWidth<760.f?2:navAvailableWidth<1150.f?3:5;
     const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
     const int navRows=simplifiedInterface?
         (5+simpleColumns-1)/simpleColumns:(10+navColumns-1)/navColumns;
-    const float navRowHeight=50.f;
+    const float navRowHeight=52.f;
     ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     // Persistent UI-only transition state; scan and evidence data are unaffected.
@@ -28100,10 +28100,10 @@ static void renderUI() {
         ImGui::PushID(9100+i);
         const bool active=page==navPages[i];
         if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.095f,.28f,.43f,1));
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.23f,.23f,.25f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.947f,0.947f,0.947f,1));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.25f,.72f,.98f,1));
+            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.88f,.88f,.9f,1));
         }
         const bool hoveredBefore=ImGui::IsMousePosValid() &&
             ImGui::IsMouseHoveringRect(ImGui::GetCursorScreenPos(),
@@ -28114,9 +28114,9 @@ static void renderUI() {
                 hoveredBefore?ImVec4(.12f,.22f,.33f,1.f):
                               ImVec4(.075f,.105f,.15f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                ImVec4(.15f,.30f,.43f,1.f));
+                ImVec4(.27f,.27f,.29f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Border,
-                ImVec4(.20f,.30f,.40f,1.f));
+                ImVec4(.33f,.33f,.35f,1.f));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
         }
         if(ImGui::Button((std::string(localized(nav[i]))+"##nav"+std::to_string(i)).c_str(),ImVec2(navWidth,43))){
@@ -28163,7 +28163,7 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.048f,.068f,.098f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.055f,.065f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
@@ -28433,8 +28433,8 @@ static void renderUI() {
             const char* verdictLabel = detectedIndicators ? "CHEATER (DETECTED)" :
                 suspectIndicators ? "SUSPECT" : "CLEAN";
             const ImVec4 verdictColor = detectedIndicators ?
-                ImVec4(1.f,1.f,1.f,1.f) : suspectIndicators ?
-                ImVec4(.83f,.83f,.83f,1.f) : ImVec4(.72f,.72f,.72f,1.f);
+                ImVec4(.98f,.24f,.28f,1.f) : suspectIndicators ?
+                ImVec4(1.f,.79f,.23f,1.f) : ImVec4(.27f,.89f,.53f,1.f);
             ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.105f,.105f,1.f));
             ImGui::BeginChild("##verdictStatus",ImVec2(0,114),ImGuiChildFlags_Borders);
             ImGui::Spacing();
@@ -28452,10 +28452,13 @@ static void renderUI() {
             ImGui::Text("Suspicious processes: %zu",suspiciousProcesses);
             ImGui::Text("Bypass-related evidence mentions: %zu",bypassIndicators);
             ImGui::Text("Total evidence records: %zu",evidenceTotal);
+            ImGui::TextDisabled("Verdict uses correlated findings; filename matches alone are review leads.");
             // Explain the verdict using the same collected records used above.
             // Matches are evidence leads, not a determination of player behavior.
             if(suspectIndicators || detectedIndicators) {
                 ImGui::SeparatorText("WHY THIS RESULT? / EVIDENCE");
+                static ImGuiTextFilter verdictEvidenceFilter;
+                verdictEvidenceFilter.Draw("Filter evidence", 320.f);
                 ImGui::TextWrapped("The following collected items contributed indicators "
                     "to this assessment. A filename or keyword alone is not proof.");
                 if(ImGui::BeginTable("##verdictEvidence",3,
@@ -28492,7 +28495,17 @@ static void renderUI() {
                                 hay.find("tamper")!=std::string::npos ||
                                 hay.find("evasion")!=std::string::npos))
                                 label="Keyword review";
+                            if(!label && (hay.find("injector")!=std::string::npos ||
+                                hay.find("executor")!=std::string::npos ||
+                                hay.find("aimbot")!=std::string::npos ||
+                                hay.find("triggerbot")!=std::string::npos ||
+                                hay.find("wallhack")!=std::string::npos ||
+                                hay.find("silentaim")!=std::string::npos ||
+                                hay.find("spoofer")!=std::string::npos ||
+                                hay.find("manual map")!=std::string::npos))
+                                label="Behavior keyword";
                             if(!label)continue;
+                            if(!verdictEvidenceFilter.PassFilter(hay.c_str()))continue;
                             ++total;
                             if(shown++>=80)continue;
                             ImGui::TableNextRow();
