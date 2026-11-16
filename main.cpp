@@ -25992,15 +25992,25 @@ static void scanWorker() {
 }
 // Progress reflects completed worker milestones, not an artificial timer.
 static double inspectionProgressStart=0.0;
+// V58: progress is driven by completed scan stages and measurable real
+// per-item checks. It never advances from elapsed wall-clock time alone.
 static double inspectionPresentationFraction(){
     if(inspectionProgressStart<=0.0)return 0.0;
-    if(scanFailed || scanCancelled)return std::clamp(completedStages.load()/6.0,0.0,0.99);
-    if(done)return 1.0;
-    return std::clamp(completedStages.load()/6.0,0.0,0.99);
+    if(done && !scanFailed && !scanCancelled)return 1.0;
+    const int finished=std::clamp(completedStages.load(),0,6);
+    double currentStageWork=0.0;
+    const unsigned total=sequentialTotal.load();
+    const unsigned completed=sequentialDone.load();
+    // Only stages 1 and 5 publish a known per-item denominator.
+    // In other stages, the bar holds its verified stage boundary until
+    // actual work completes. Never invent progress during unknown work.
+    if((finished==0 || finished==4) && total>0){
+        currentStageWork=std::clamp(
+            static_cast<double>(completed)/static_cast<double>(total),0.0,1.0);
+    }
+    const double verified=(finished+currentStageWork)/6.0;
+    return std::clamp(verified,0.0,0.999);
 }
-// Presentation-only counter: never exceeds completed real scan milestones.
-// Advances one integer percentage at a time, even when a stage finishes at once.
-// Smooth presentation of completed scan milestones; never exceed real work.
 static double inspectionDisplayLastTick=-1.0;
 static float inspectionSmoothFraction(){
     static double scanIdentity=-1.0;
@@ -26011,22 +26021,22 @@ static float inspectionSmoothFraction(){
         shown=0.f;
         inspectionDisplayLastTick=now;
     }
-    if(inspectionProgressStart<=0.0) {
+    if(inspectionProgressStart<=0.0){
         shown=0.f;
         inspectionDisplayLastTick=now;
-        return shown;
+        return 0.f;
     }
-    const float target=std::clamp(
-        static_cast<float>(inspectionPresentationFraction()),0.f,1.f);
-    const float dt=std::clamp(static_cast<float>(
-        now-inspectionDisplayLastTick),0.f,.1f);
+    const float target=static_cast<float>(inspectionPresentationFraction());
+    const float dt=std::clamp(static_cast<float>(now-inspectionDisplayLastTick),0.f,.1f);
     inspectionDisplayLastTick=now;
-    // A damped, frame-rate-independent easing curve; no synthetic scan work.
-    const float alpha=1.f-std::exp(-.85f*dt);
-    shown+=(target-shown)*alpha;
-    if(target-shown<.0015f)shown=target;
-    shown=std::clamp(shown,0.f,target);
-    return shown;
+    if(scanFailed || scanCancelled)return shown;
+    // Continuous rendering only between measured milestones. No fake scan.
+    // When the worker completes, show 100% immediately and unlock results.
+    if(done && !scanning){shown=1.f;return shown;}
+    const float alpha=1.f-std::exp(-3.5f*dt);
+    shown+=(std::max)(0.f,target-shown)*alpha;
+    if(target-shown<.0003f)shown=target;
+    return std::clamp(shown,0.f,target);
 }
 static int inspectionDisplayPercent(){
     return std::clamp(static_cast<int>(
@@ -28182,8 +28192,7 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
     draw->PopClipRect();
 }
 
-// Premium progress visualization. Percentage remains tied to the existing
-// 35-second presentation and completed scan stages; no synthetic detections.
+// Premium progress visualization: verified scan work, not a timer.
 // Render-only easing: smooths the fill without changing the verified unlock gate.
 static float smoothInspectionVisual(float target){
     static float displayed=0.f;
