@@ -2536,6 +2536,43 @@ static std::vector<Record> inspectCheatNamedModules(
 }
 
 
+// Exact, case-insensitive executable filename indicators. These are leads
+// for manual review, never proof of FiveM cheating or successful injection.
+static bool isKnownFiveMReviewFilename(const std::wstring& input){
+    static const std::unordered_set<std::wstring> names={
+        L"cheat.exe",L"inject.exe",L"injecthelp.exe",
+        L"shark.exe",L"sharkmenu.exe",
+        L"redengine.exe",L"eulen.exe",L"skript.gg.exe",
+        L"tzproject.exe",L"lynxmenu.exe",L"hammafia.exe",
+        L"brutan.exe",L"desudo.exe",L"absolute.exe",
+        L"executor.exe",L"fivemexecutor.exe",
+        L"fiveminjector.exe",L"fivemcheat.exe",
+        // Spoofer / hardware-ID tool filename indicators (review only).
+        L"spoofer.exe",L"hwidspoofer.exe",L"hwid_spoofer.exe",
+        L"hwid-spoofer.exe",L"serialspoofer.exe",
+        L"serial_spoofer.exe",L"serial-spoofer.exe",
+        L"diskspoofer.exe",L"disk_spoofer.exe",
+        L"macspoofer.exe",L"mac_spoofer.exe",
+        L"biosspoofer.exe",L"bios_spoofer.exe",
+        L"motherboardspoofer.exe",L"boardspoofer.exe",
+        L"fivemspoofer.exe",L"fivem_spoofer.exe",
+        L"tempspoofer.exe",L"temp_spoofer.exe",
+        L"permaspoofer.exe",L"permanent_spoofer.exe",
+        L"hwidchanger.exe",L"hwid_changer.exe",
+        L"serialchanger.exe",L"serial_changer.exe",
+        // Other potentially relevant tool names (not proof of cheating).
+        L"injector.exe",L"dllinjector.exe",L"dll_injector.exe",
+        L"manualmap.exe",L"manualmapper.exe",
+        L"mapper.exe",L"kdmapper.exe",L"driverloader.exe",
+        L"driver_mapper.exe",L"kernelmapper.exe",
+        L"loader.exe",L"cheatloader.exe",L"fivemloader.exe",
+        L"modmenu.exe",L"fivemmenu.exe",L"external.exe",
+        L"internal.exe",L"triggerbot.exe",L"aimbot.exe",
+        L"esp.exe",L"wallhack.exe",L"silentaim.exe"
+    };
+    return names.find(lowerPath(fs::path(input).filename().wstring()))!=names.end();
+}
+
 // Read-only artifact inventory. Bounded directory traversal avoids unbounded
 // scans of large user profiles and never follows directory symlinks.
 static std::vector<Record> inspectArtifactLocations(){
@@ -2685,15 +2722,15 @@ static std::vector<Record> inspectArtifactLocations(){
             if(it->is_regular_file(fileEc) && !fileEc){
                 const fs::path candidate=it->path();
                 const std::wstring filename=lowerPath(candidate.filename().wstring());
-                if(filename==L"cheat.exe"){
+                if(isKnownFiveMReviewFilename(filename)){
                     const std::wstring normalized=lowerPath(candidate.wstring());
                     if(exactPaths.insert(normalized).second){
                         ++exactHits;
                         out.push_back({"FiveM Cheat Name Detection",
                             utf8(candidate.filename().wstring()),
-                            "SUSPECT - EXACT FILENAME MATCH | Found cheat.exe on mounted volume. "
+                            "SUSPECT - EXACT FILENAME MATCH | Known review filename on mounted volume. "
                             "Path: "+utf8(candidate.wstring())+
-                            " | Filename is not proof of malicious behavior."});
+                            " | Filename-only heuristic: benign software can share this name."});
                     }
                 }
             }
@@ -2712,7 +2749,7 @@ static std::vector<Record> inspectArtifactLocations(){
                 "safety limit on this volume."});
         }
     }
-    out.push_back({"Artifact Scan Coverage","Exact cheat.exe discovery",
+    out.push_back({"Artifact Scan Coverage","Exact review-filename discovery",
         "READ-ONLY | Mounted fixed/removable volumes="+std::to_string(volumeCount)+
         " | Entries visited="+std::to_string(volumeEntries)+
         " | Exact filename matches="+std::to_string(exactHits)+
@@ -25449,10 +25486,10 @@ static void scanWorker() {
         auto p=enumerateProcesses();
         std::vector<Record> exactRunningMatches;
         for(const auto& proc:p){
-            if(lowerPath(fs::path(proc.name).filename().wstring())==L"cheat.exe" ||
-               lowerPath(fs::path(proc.path).filename().wstring())==L"cheat.exe"){
+            if(isKnownFiveMReviewFilename(proc.name) ||
+               isKnownFiveMReviewFilename(proc.path)){
                 exactRunningMatches.push_back({
-                    "Running Process Filename Review","cheat.exe",
+                    "Running Process Filename Review",utf8(proc.name),
                     "SUSPECT - EXACT RUNNING PROCESS NAME | PID "+
                     std::to_string(proc.pid)+" | Image: "+utf8(proc.path)+
                     " | Name alone is not proof of cheating."});
