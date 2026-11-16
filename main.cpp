@@ -26352,7 +26352,7 @@ static void modulesList() {
         if(i%columns)ImGui::SameLine(0,gap);
         // Each module enters individually on every navigation to this page.
         const float cardAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
-        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.055f)/0.44f);
+        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.045f)/0.36f);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
             ImGui::GetStyle().Alpha*(0.02f+0.98f*cardT));
         // Keep the card's layout stable; do not show or activate it before its turn.
@@ -26365,6 +26365,13 @@ static void modulesList() {
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
+        if(!reducedMotion && cardT<.999f){
+            const ImVec2 p=ImGui::GetWindowPos();
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(p.x+2.f,p.y+2.f),
+                ImVec2(p.x+2.f+(width-4.f)*cardT,p.y+2.f),
+                IM_COL32(240,240,240,(int)(165.f*(1.f-cardT))),2.f);
+        }
         // Inner padding keeps text away from card edges; no decorative stripe
         // overlaid on the module label.
         ImGui::SetCursorPos(ImVec2(16.f,14.f));
@@ -27894,6 +27901,22 @@ static void drawAtlasProgress(bool compact=false){
             ImVec2(start.x+(std::max)(0.f,fill-15.f),start.y+2.f),
             ImVec2(start.x+fill-2.f,start.y+height-2.f),
             IM_COL32(244,248,255,alpha),3.f);
+        // White scanning beam traverses only the completed part of the track.
+        const float phase=static_cast<float>(std::fmod(ImGui::GetTime()*0.62,1.0));
+        const float beamX=start.x+3.f+(std::max)(0.f,fill-8.f)*phase;
+        draw->AddRectFilled(
+            ImVec2(beamX-3.f,start.y+2.f),
+            ImVec2(beamX+3.f,start.y+height-2.f),
+            IM_COL32(255,255,255,(int)(150.f+75.f*pulse)),2.f);
+        // Restrained moving tick marks make scanning visibly active.
+        for(int i=0;i<6;++i){
+            const float tick=static_cast<float>(std::fmod(phase+i/6.f,1.f));
+            const float tickX=start.x+3.f+(std::max)(0.f,fill-8.f)*tick;
+            draw->AddLine(
+                ImVec2(tickX,start.y+height-4.f),
+                ImVec2(tickX,start.y+height-2.f),
+                IM_COL32(250,250,250,75),1.f);
+        }
     }
     if(scanFailed.load())
         ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"Scan interrupted - review diagnostics.");
@@ -28017,148 +28040,149 @@ static void updateStartupWindowExpand(){
 }
 
 static void renderSyncOpening() {
+    // V39: redesigned opening — monochrome orbital scanner, shutter reveal,
+    // animated typography and a genuine, clickable Open Scanner action.
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
     ImGui::SetNextWindowPos(p);
     ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.035f,.038f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
     ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
     ImDrawList* d=ImGui::GetWindowDrawList();
     const double now=ImGui::GetTime();
-    const float t=(float)now;
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.48f;
-    const float cardW=(std::min)(sz.x-24.f,540.f);
-    const float cardH=(std::min)(sz.y-24.f,365.f);
-    const ImVec2 cardMin(cx-cardW*.5f,cy-cardH*.52f);
-    const ImVec2 cardMax(cx+cardW*.5f,cy+cardH*.48f);
+    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
+    const float cardW=(std::max)(200.f,(std::min)(sz.x-28.f,590.f));
+    const float cardH=(std::max)(230.f,(std::min)(sz.y-28.f,405.f));
+    const ImVec2 lo(cx-cardW*.5f,cy-cardH*.50f);
+    const ImVec2 hi(cx+cardW*.5f,cy+cardH*.50f);
     const bool transitioning=syncIntroTransition>=0.0;
     const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
-    auto fade=[&](float begin,float duration) {
-        return syncIntroEase((elapsed-begin)/duration);
+    auto ease=[&](float start,float duration){
+        return syncIntroEase((elapsed-start)/duration);
     };
-    const float welcomeOpacity=transitioning?1.f-fade(.10f,.65f):1.f;
-    const float loadingOpacity=transitioning?fade(.45f,.55f)*(1.f-fade(4.85f,.55f)):0.f;
-    auto ink=[](int gray,float alpha) {
-        return IM_COL32(gray,gray,gray,(int)(255.f*(std::max)(0.f,(std::min)(1.f,alpha))));
+    auto ink=[](int g,float opacity){
+        const float a=(std::max)(0.f,(std::min)(1.f,opacity));
+        return IM_COL32(g,g,g,(int)(255.f*a));
     };
-    // Gentle vignette and hairline grid, kept subtle to avoid visual noise.
-    d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
-        IM_COL32(9,9,11,255),IM_COL32(18,18,20,255),
-        IM_COL32(10,10,12,255),IM_COL32(13,13,15,255));
-    d->AddRectFilled(cardMin,cardMax,IM_COL32(23,26,32,226),16.f);
-    d->AddRect(cardMin,cardMax,IM_COL32(85,99,117,100),16.f);
-    for(int j=1;j<8;++j) {
-        const float x=p.x+sz.x*j/8.f;
-        d->AddLine(ImVec2(x,p.y+80.f),ImVec2(x,p.y+sz.y-60.f),ink(255,.025f));
+    const bool animate=brandAnimation && !reducedMotion;
+    const float clock=animate?(float)now:0.f;
+    const float entrance=transitioning?ease(.05f,.70f):0.f;
+    const float exit=transitioning?ease(4.65f,.60f):0.f;
+    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
+    d->AddRectFilledMultiColor(lo,hi,IM_COL32(26,26,26,255),
+        IM_COL32(17,17,17,255),IM_COL32(13,13,13,255),IM_COL32(20,20,20,255));
+    d->AddRect(lo,hi,ink(132,.44f),12.f,0,1.2f);
+    // Fine editorial rails; subtle enough not to compete with text.
+    d->AddLine(ImVec2(lo.x+24.f,lo.y+55.f),
+        ImVec2(hi.x-24.f,lo.y+55.f),ink(225,.24f),1.f);
+    d->AddLine(ImVec2(lo.x+24.f,hi.y-48.f),
+        ImVec2(hi.x-24.f,hi.y-48.f),ink(225,.20f),1.f);
+    d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC / PC CHECKER");
+    const char* edition="NOIR  //  V39";
+    d->AddText(ImVec2(hi.x-25.f-ImGui::CalcTextSize(edition).x,lo.y+23.f),
+        ink(178,.84f),edition);
+    const float orbitY=cy-78.f;
+    const ImVec2 center(cx,orbitY);
+    const float orbitRadius=52.f;
+    // Rotating orbital segments, not a flashing texture.
+    for(int ring=0;ring<3;++ring){
+        const float radius=orbitRadius+ring*12.f;
+        const float start=clock*(ring%2?-.42f:.57f)+ring*1.4f;
+        const float sweep=1.15f+ring*.19f;
+        d->PathClear();
+        for(int k=0;k<=28;++k){
+            const float theta=start+sweep*k/28.f;
+            d->PathLineTo(ImVec2(center.x+std::cos(theta)*radius,
+                center.y+std::sin(theta)*radius));
+        }
+        d->PathStroke(ink(238,ring==0?.80f:.25f),0,ring==0?2.4f:1.1f);
     }
-    d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
-    d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
-    d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"FIVEM SECURITY");
-    const float pulse=brandAnimation?(.5f+.5f*std::sin(t*1.35f)):.5f;
-    const float logoY=cy-115.f-(transitioning?fade(.15f,.75f)*18.f:0.f);
-    for(int i=3;i>=1;--i) {
-        const float radius=44.f+i*18.f+pulse*2.f;
-        d->AddCircle(ImVec2(cx,logoY),radius,ink(220,(.035f+.014f*pulse)/i),96,1.0f);
-    }
-    // Draw a clean vector shield instead of the legacy opaque black logo texture.
-    // The old texture had a black background, producing a visible square on the intro.
-    const float shieldScale=(std::min)(1.f,cardW/360.f);
-    const float a=shieldScale;
-    const ImVec2 center(cx,logoY);
-    ImVec2 shield[]={
-        ImVec2(center.x-25.f*a,center.y-25.f*a),
-        ImVec2(center.x,center.y-36.f*a),
-        ImVec2(center.x+25.f*a,center.y-25.f*a),
-        ImVec2(center.x+23.f*a,center.y+8.f*a),
-        ImVec2(center.x+15.f*a,center.y+23.f*a),
-        ImVec2(center.x,center.y+35.f*a),
-        ImVec2(center.x-15.f*a,center.y+23.f*a),
-        ImVec2(center.x-23.f*a,center.y+8.f*a)
+    d->AddCircle(center,36.f,ink(215,.30f),64,1.0f);
+    // Crosshair and a minimal vector shield.
+    d->AddLine(ImVec2(cx-9.f,orbitY),ImVec2(cx+9.f,orbitY),
+        ink(248,.55f),1.f);
+    d->AddLine(ImVec2(cx,orbitY-9.f),ImVec2(cx,orbitY+9.f),
+        ink(248,.55f),1.f);
+    ImVec2 shield[6]={
+        ImVec2(cx-16.f,orbitY-22.f),ImVec2(cx,orbitY-28.f),
+        ImVec2(cx+16.f,orbitY-22.f),ImVec2(cx+14.f,orbitY+5.f),
+        ImVec2(cx,orbitY+23.f),ImVec2(cx-14.f,orbitY+5.f)
     };
-    d->AddConvexPolyFilled(shield,8,IM_COL32(28,35,45,230));
-    d->AddPolyline(shield,8,ink(230,.88f),ImDrawFlags_Closed,2.f*a);
-    d->AddLine(ImVec2(cx-12.f*a,logoY),
-               ImVec2(cx-2.f*a,logoY+10.f*a),ink(236,.95f),3.f*a);
-    d->AddLine(ImVec2(cx-2.f*a,logoY+10.f*a),
-               ImVec2(cx+15.f*a,logoY-11.f*a),ink(236,.95f),3.f*a);
-    if(welcomeOpacity>.005f) {
-        const char* heading="SYNC PC CHECKER";
-        const char* detail="Advanced Anti-Cheat for FiveM";
-        const ImVec2 hs=ImGui::CalcTextSize(heading), ds=ImGui::CalcTextSize(detail);
-        const float offset=(1.f-welcomeOpacity)*12.f;
-        d->AddText(ImVec2(cx-hs.x*.5f,cy-12.f-offset),ink(247,welcomeOpacity),heading);
-        d->AddText(ImVec2(cx-ds.x*.5f,cy+23.f-offset),ink(169,welcomeOpacity),detail);
-    }
-    if(!transitioning) {
-        ImGui::SetCursorScreenPos(ImVec2(cx-(std::min)(230.f,cardW-40.f)*.5f,cy+91.f));
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.90f,.90f,.90f,1.f));
+    d->AddConvexPolyFilled(shield,6,ink(24,.97f));
+    d->AddPolyline(shield,6,ink(245,.90f),ImDrawFlags_Closed,1.8f);
+    d->AddLine(ImVec2(cx-7.f,orbitY-1.f),ImVec2(cx-1.f,orbitY+6.f),
+        ink(255,.96f),2.f);
+    d->AddLine(ImVec2(cx-1.f,orbitY+6.f),ImVec2(cx+9.f,orbitY-8.f),
+        ink(255,.96f),2.f);
+    const char* heading=transitioning?"INITIALIZING WORKSPACE":"SYSTEM INSPECTION";
+    const ImVec2 headingSize=ImGui::CalcTextSize(heading);
+    const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
+    d->AddText(ImVec2(cx-headingSize.x*.5f,cy+25.f-8.f*entrance),
+        ink(249,headingOpacity),heading);
+    const char* sub=transitioning?"Preparing the scanner interface":
+        "Read-only security diagnostics for FiveM";
+    const ImVec2 subSize=ImGui::CalcTextSize(sub);
+    d->AddText(ImVec2(cx-subSize.x*.5f,cy+51.f),
+        ink(164,headingOpacity*.9f),sub);
+    if(!transitioning){
+        const float buttonW=(std::min)(255.f,cardW-44.f);
+        ImGui::SetCursorScreenPos(ImVec2(cx-buttonW*.5f,cy+94.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.88f,.88f,.88f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
-        if(ImGui::Button("Open Scanner  ->",ImVec2((std::min)(230.f,cardW-40.f),46.f))) {
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
+        if(ImGui::Button("OPEN SCANNER   >>",ImVec2(buttonW,47.f))){
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
         ImGui::PopStyleColor(4);
-    } else {
-        // The sequence is visual only; it does not pretend to run a scan.
-        // One continuous reveal line with a gentle moving highlight.
-        const float line=fade(.30f,1.15f);
-        const float lineWidth=140.f*line;
-        d->AddLine(ImVec2(cx-lineWidth,cy+68.f),
-                   ImVec2(cx+lineWidth,cy+68.f),ink(215,.22f*loadingOpacity),1.2f);
-        const float travel=brandAnimation?std::fmod((std::max)(0.f,elapsed)*.52f,1.f):.5f;
-        const float headX=cx-lineWidth+2.f*lineWidth*travel;
-        d->AddLine(ImVec2(headX-20.f*line,cy+68.f),
-                   ImVec2(headX,cy+68.f),ink(255,.78f*loadingOpacity),2.f);
-
-        // Existing captions are unchanged; cross-fade and glide between them.
-        static constexpr const char* openingCaptions[]={
-            "SYNC PC CHECKER",
-            "ADVANCED ANTI-CHEAT",
-            "FOR FIVEM",
-            "BYPASS HUNTER"
-        };
-        const float captionClock=(std::max)(0.f,elapsed-.20f);
-        const float captionDuration=1.05f;
-        const int captionIndex=(std::min)(3,static_cast<int>(captionClock/captionDuration));
-        const float captionPhase=std::clamp(
-            (captionClock-captionIndex*captionDuration)/captionDuration,0.f,1.f);
-        const float fadeIn=syncIntroEase(captionPhase/.24f);
-        const float fadeOut=1.f-syncIntroEase((captionPhase-.73f)/.27f);
-        const float captionFade=fadeIn*fadeOut;
-        const char* caption=openingCaptions[captionIndex];
-        const ImVec2 captionSize=ImGui::CalcTextSize(caption);
-        const float captionOffset=(1.f-fadeIn)*11.f-fadeOut*4.f;
-        d->AddText(ImVec2(cx-captionSize.x*.5f,cy+88.f+captionOffset),
-                   ink(238,loadingOpacity*captionFade),caption);
-
-        // Small timeline segments show where the opening sequence is.
-        const float segmentWidth=44.f;
-        for(int i=0;i<4;++i){
-            const float x=cx-2.f*segmentWidth-9.f+i*(segmentWidth+6.f);
-            const float fill=i<captionIndex?1.f:
-                i==captionIndex?syncIntroEase(captionPhase):0.f;
-            d->AddRectFilled(ImVec2(x,cy+121.f),
-                ImVec2(x+segmentWidth,cy+124.f),ink(105,loadingOpacity*.35f),2.f);
-            if(fill>.001f)
-                d->AddRectFilled(ImVec2(x,cy+121.f),
-                    ImVec2(x+segmentWidth*fill,cy+124.f),
-                    ink(240,loadingOpacity*.8f),2.f);
+        if(animate){
+            const float sweep=.5f+.5f*std::sin(clock*1.8f);
+            d->AddLine(ImVec2(cx-buttonW*.5f+8.f,cy+144.f),
+                ImVec2(cx-buttonW*.5f+8.f+buttonW*sweep*.75f,cy+144.f),
+                ink(220,.25f),1.f);
         }
-        if(elapsed>=5.35f) {
+    }else{
+        // Opening sequence is a visual handoff, not a fake scan.
+        static constexpr const char* captions[]={
+            "SYNC PC CHECKER","ADVANCED ANTI-CHEAT","FOR FIVEM","BYPASS HUNTER"
+        };
+        const float stageTime=(std::max)(0.f,elapsed-.20f);
+        const int stage=(std::min)(3,(int)(stageTime/1.03f));
+        const float phase=(std::max)(0.f,(std::min)(1.f,
+            (stageTime-stage*1.03f)/1.03f));
+        const float opacity=ease(.18f,.40f)*(1.f-exit);
+        const float captionIn=syncIntroEase(phase/.22f);
+        const float captionOut=1.f-syncIntroEase((phase-.78f)/.22f);
+        const ImVec2 labelSize=ImGui::CalcTextSize(captions[stage]);
+        d->AddText(ImVec2(cx-labelSize.x*.5f,cy+99.f+(1.f-captionIn)*13.f),
+            ink(240,opacity*captionIn*captionOut),captions[stage]);
+        const float trackW=(std::min)(310.f,cardW-70.f);
+        const float trackX=cx-trackW*.5f;
+        d->AddRectFilled(ImVec2(trackX,cy+139.f),
+            ImVec2(trackX+trackW,cy+144.f),ink(80,.65f*opacity),2.f);
+        const float progress=(std::min)(1.f,(std::max)(0.f,elapsed/4.65f));
+        d->AddRectFilled(ImVec2(trackX,cy+139.f),
+            ImVec2(trackX+trackW*progress,cy+144.f),
+            ink(248,.98f*opacity),2.f);
+        // A thin white scanning beam moves across the transition track.
+        if(animate && progress>.01f){
+            const float head=trackX+trackW*progress;
+            d->AddCircleFilled(ImVec2(head,cy+141.5f),4.f,
+                ink(255,opacity),16);
+        }
+        if(elapsed>=5.25f){
             syncIntroOpen=false;
             syncIntroRevealAt=now;
         }
     }
-    d->AddLine(ImVec2(p.x+32,p.y+sz.y-51),ImVec2(p.x+sz.x-32,p.y+sz.y-51),ink(255,.10f));
-    d->AddText(ImVec2(p.x+36,p.y+sz.y-35),ink(155,.75f),"FIVEM ANTICHEAT  /  READ-ONLY ANALYSIS");
+    const char* footer="FIVEM SECURITY  /  READ-ONLY ANALYSIS";
+    d->AddText(ImVec2(lo.x+25.f,hi.y-32.f),ink(168,.85f),footer);
     ImGui::End();
     ImGui::PopStyleColor();
 }
-
 
 // Lightweight result views: use snapshots to keep the UI responsive while scanning.
 static void drawScanSummaryNew() {
@@ -28559,11 +28583,11 @@ static void renderUI() {
             const bool active=page==navPages[i];
             ImGui::PushID(i+9800);
             ImGui::PushStyleColor(ImGuiCol_Button,active?
-                ImVec4(.13f,.28f,.36f,1.f):ImVec4(.085f,.12f,.16f,1.f));
+                ImVec4(.26f,.26f,.26f,1.f):ImVec4(.095f,.095f,.095f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,active?
-                ImVec4(.17f,.34f,.43f,1.f):ImVec4(.14f,.22f,.29f,1.f));
+                ImVec4(.33f,.33f,.33f,1.f):ImVec4(.18f,.18f,.18f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Text,active?
-                ImVec4(.76f,.94f,1.f,1.f):ImVec4(.75f,.82f,.89f,1.f));
+                ImVec4(1.f,1.f,1.f,1.f):ImVec4(.76f,.76f,.76f,1.f));
             const bool clicked=ImGui::Button(localized(nav[i]),ImVec2(-1.f,40.f));
             const ImVec2 itemMin=ImGui::GetItemRectMin();
             const ImVec2 itemMax=ImGui::GetItemRectMax();
@@ -28576,13 +28600,26 @@ static void renderUI() {
                 ImDrawList* railDraw=ImGui::GetWindowDrawList();
                 railDraw->AddRectFilled(ImVec2(itemMin.x-3.f,navMarkerY+5.f),
                     ImVec2(itemMin.x,navMarkerY+35.f),
-                    IM_COL32(95,215,245,245),2.f);
+                    IM_COL32(245,245,245,245),2.f);
                 railDraw->AddRect(itemMin,itemMax,
-                    IM_COL32(65,142,176,190),10.f);
+                    IM_COL32(190,190,190,150),10.f);
                 railDraw->AddLine(
                     ImVec2(itemMin.x+13.f,itemMax.y-3.f),
                     ImVec2(itemMax.x-13.f,itemMax.y-3.f),
-                    IM_COL32(74,199,231,100),1.f);
+                    IM_COL32(230,230,230,110),1.f);
+            }
+            // Smooth hover underline, including keyboard focus.
+            static float navHover[11]={};
+            const float hoverTarget=(ImGui::IsItemHovered() || ImGui::IsItemFocused())?1.f:0.f;
+            const float hoverRate=reducedMotion?1.f:
+                1.f-std::exp(-14.f*ImGui::GetIO().DeltaTime);
+            navHover[i]+=(hoverTarget-navHover[i])*hoverRate;
+            if(navHover[i]>.01f && !active){
+                const float lineWidth=(itemMax.x-itemMin.x-28.f)*navHover[i];
+                ImGui::GetWindowDrawList()->AddLine(
+                    ImVec2(itemMin.x+14.f,itemMax.y-3.f),
+                    ImVec2(itemMin.x+14.f+lineWidth,itemMax.y-3.f),
+                    IM_COL32(245,245,245,(int)(190.f*navHover[i])),1.5f);
             }
             if(clicked && !active){
                 page=navPages[i]; navTransitionStart=uiNow;
@@ -28688,46 +28725,32 @@ static void renderUI() {
     // Fade the whole page content on every navigation, including revisits.
     // Module cards receive an additional individual stagger below.
     const float pageAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
-    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.76f);
+    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.58f);
     const float transitionAmount=reducedMotion?0.f:1.f-pageFade;
     // A brief entrance fade preserves text readability and avoids full-screen flashes.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-        ImGui::GetStyle().Alpha*(0.42f+0.58f*pageFade));
-    // V36: grayscale editorial wipe, moving progress rule and corner bracket.
-    // Rendered behind the page widgets; does not intercept input.
+        ImGui::GetStyle().Alpha*(0.65f+0.35f*pageFade));
+    // V38: spotlight curtain: a quiet moving light reveals each new page.
+    // Decoration is placed behind widgets, without input interception.
     if(transitionAmount>.001f){
-        const ImVec2 at=ImGui::GetCursorScreenPos();
-        const ImVec2 space=ImGui::GetContentRegionAvail();
-        if(space.x>60.f && space.y>60.f){
-            ImDrawList* bgDraw=ImGui::GetWindowDrawList();
-            const float eased=pageFade;
-            const float x=at.x+space.x*eased;
-            const int fade=(int)(transitionAmount*180.f);
-            bgDraw->AddRectFilledMultiColor(
-                at,ImVec2(at.x+space.x,at.y+space.y),
-                IM_COL32(65,65,65,fade/3),
-                IM_COL32(20,20,20,0),
-                IM_COL32(20,20,20,0),
-                IM_COL32(65,65,65,fade/5));
-            // High-contrast moving line and a subdued trailing glow.
-            bgDraw->AddRectFilled(
-                ImVec2(x-45.f,at.y+1.f),
-                ImVec2(x+5.f,at.y+5.f),
-                IM_COL32(145,145,145,fade/2),2.f);
-            bgDraw->AddRectFilled(
-                ImVec2(x-4.f,at.y),
-                ImVec2(x+4.f,at.y+5.f),
-                IM_COL32(255,255,255,(std::min)(255,fade+65)),2.f);
-            // Bracket expands downward to emphasize the new workspace.
-            const float bracket=38.f+110.f*eased;
-            bgDraw->AddLine(
-                ImVec2(at.x,at.y+7.f),
-                ImVec2(at.x,at.y+bracket),
-                IM_COL32(235,235,235,fade),2.f);
-            bgDraw->AddLine(
-                ImVec2(at.x,at.y+bracket),
-                ImVec2(at.x+24.f,at.y+bracket),
-                IM_COL32(235,235,235,fade),2.f);
+        const ImVec2 o=ImGui::GetCursorScreenPos();
+        const ImVec2 size=ImGui::GetContentRegionAvail();
+        if(size.x>60.f && size.y>60.f){
+            ImDrawList* dl=ImGui::GetWindowDrawList();
+            const float t=pageFade;
+            const float x=o.x+(size.x+60.f)*t-30.f;
+            const int opacity=(int)(175.f*transitionAmount);
+            const float strip=std::max(12.f,35.f*transitionAmount);
+            dl->AddRectFilledMultiColor(
+                ImVec2(x-strip,o.y+5.f),ImVec2(x+strip,o.y+size.y),
+                IM_COL32(220,220,220,0),IM_COL32(235,235,235,opacity/4),
+                IM_COL32(235,235,235,opacity/8),IM_COL32(220,220,220,0));
+            dl->AddLine(ImVec2(o.x,o.y+2.f),
+                ImVec2(o.x+size.x*t,o.y+2.f),
+                IM_COL32(255,255,255,(int)(220.f*transitionAmount)),2.f);
+            const float r=5.f+12.f*(1.f-t);
+            dl->AddCircle(ImVec2(x,o.y+2.f),r,
+                IM_COL32(245,245,245,opacity),24,1.4f);
         }
     }
     if((waitingForPresentation || (unlocking && !reducedMotion)) &&
@@ -31565,16 +31588,31 @@ zula.exe)FIVEMSTR";
         }
         // Live scan telemetry, attached to the main scan action.
         ImGui::Dummy(ImVec2(0,12));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.088f,.108f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.24f,.29f,.35f,.85f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.07f,.07f,.07f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.30f,.30f,.30f,.85f));
         ImGui::BeginChild("##live_scan_telemetry",ImVec2(0,scanning.load()?147.f:124.f),
             ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
         ImGui::TextColored(ImVec4(.82f,.88f,.95f,1.f),"LIVE SCAN ACTIVITY");
+        if(scanning.load() && brandAnimation && !reducedMotion){
+            ImGui::SameLine();
+            const ImVec2 meter=ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(56.f,18.f));
+            ImDrawList* meterDraw=ImGui::GetWindowDrawList();
+            for(int bar=0;bar<9;++bar){
+                const float wave=.5f+.5f*std::sin(
+                    static_cast<float>(ImGui::GetTime()*5.5+bar*0.54));
+                const float h=3.f+14.f*wave*wave;
+                meterDraw->AddRectFilled(
+                    ImVec2(meter.x+bar*6.f,meter.y+18.f-h),
+                    ImVec2(meter.x+bar*6.f+3.f,meter.y+18.f),
+                    IM_COL32(230,230,230,180),1.f);
+            }
+        }
         ImGui::SameLine();
         if(scanning.load()) {
             const char* frames[]={"|","/","-","\\"};
             const int frame=static_cast<int>(ImGui::GetTime()*9.0)%4;
-            ImGui::TextColored(ImVec4(.58f,.82f,.98f,1.f),"%s RUNNING",frames[frame]);
+            ImGui::TextColored(ImVec4(.94f,.94f,.94f,1.f),"%s RUNNING",frames[frame]);
         }else if(done.load() && !scanFailed.load() && !scanCancelled.load()){
             ImGui::TextColored(ImVec4(.45f,.83f,.57f,1.f),"COMPLETED");
         }else{
