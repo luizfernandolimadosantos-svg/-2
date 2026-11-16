@@ -886,7 +886,7 @@ static void assessProcess(Process& process,const std::wstring& winRoot) {
         process.assessment=warnings+"; manual review recommended";
     }
 }
-static std::string sha256(const std::wstring& path) {
+static std::string sha256Uncached(const std::wstring& path) {
     HANDLE f=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
                          nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
     if(f==INVALID_HANDLE_VALUE) return "Unavailable";
@@ -920,6 +920,51 @@ static std::string sha256(const std::wstring& path) {
     if(alg) BCryptCloseAlgorithmProvider(alg,0);
     CloseHandle(f);
     return result;
+}
+// V42: bounded, thread-safe SHA-256 memoization for repeated file inspection.
+// The key includes file identity, size and last-write timestamp. Reopening the
+// file for metadata is cheap; hashing remains read-only.
+struct CachedSha256 {
+    std::wstring path;
+    ULONGLONG bytes=0;
+    FILETIME modified{};
+    std::string digest;
+};
+static std::mutex sha256CacheMutex;
+static std::vector<CachedSha256> sha256Cache;
+static std::atomic<unsigned long long> sha256CacheHits{0},sha256CacheMisses{0};
+static std::string sha256(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA metadata{};
+    if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&metadata))
+        return sha256Uncached(path);
+    const ULONGLONG bytes=(static_cast<ULONGLONG>(metadata.nFileSizeHigh)<<32) |
+        metadata.nFileSizeLow;
+    {
+        std::lock_guard<std::mutex> guard(sha256CacheMutex);
+        for(const auto& item:sha256Cache){
+            if(item.path==path && item.bytes==bytes &&
+               CompareFileTime(&item.modified,&metadata.ftLastWriteTime)==0){
+                ++sha256CacheHits;
+                return item.digest;
+            }
+        }
+    }
+    ++sha256CacheMisses;
+    const std::string digest=sha256Uncached(path);
+    if(digest=="Unavailable")return digest;
+    // Avoid caching a digest if the file changed while it was read.
+    WIN32_FILE_ATTRIBUTE_DATA after{};
+    if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&after) ||
+       metadata.nFileSizeHigh!=after.nFileSizeHigh ||
+       metadata.nFileSizeLow!=after.nFileSizeLow ||
+       CompareFileTime(&metadata.ftLastWriteTime,&after.ftLastWriteTime)!=0)
+        return digest;
+    {
+        std::lock_guard<std::mutex> guard(sha256CacheMutex);
+        if(sha256Cache.size()>=256)sha256Cache.erase(sha256Cache.begin());
+        sha256Cache.push_back({path,bytes,metadata.ftLastWriteTime,digest});
+    }
+    return digest;
 }
 static std::string signatureStatus(const std::wstring& path) {
     WINTRUST_FILE_INFO fi{};
@@ -3880,32 +3925,90 @@ static void drawEvidenceInspector(){
     std::lock_guard<std::mutex> lock(dataMutex);
     static int selected=-1;
     static char query[160]{};
+    static std::vector<std::string> searchIndex;
+    static std::unordered_map<std::string,std::pair<size_t,std::unordered_set<std::string>>> relatedIndex;
+    static size_t indexedRevision=0;
+    static size_t indexedCount=static_cast<size_t>(-1);
+    static bool indexedScanning=false;
+    static bool indexedDone=false;
+    const bool nowScanning=scanning.load();
+    const bool nowDone=done.load();
+    if(indexedCount!=records.size() || indexedScanning!=nowScanning ||
+       indexedDone!=nowDone){
+        searchIndex.clear();
+        relatedIndex.clear();
+        searchIndex.reserve(records.size());
+        relatedIndex.reserve((std::min)(records.size(),static_cast<size_t>(8192)));
+        for(const auto& r:records){
+            std::string searchable=r.category+" / "+r.name+" / "+r.detail;
+            std::transform(searchable.begin(),searchable.end(),searchable.begin(),
+                [](unsigned char c){return static_cast<char>(std::tolower(c));});
+            searchIndex.push_back(std::move(searchable));
+            if(r.name.size()>=4){
+                auto& group=relatedIndex[r.name];
+                ++group.first;
+                group.second.insert(r.category);
+            }
+        }
+        ++indexedRevision;
+        indexedCount=records.size();
+        indexedScanning=nowScanning;
+        indexedDone=nowDone;
+    }
     ImGui::InputTextWithHint("##evidenceSearch","Search category, name or details...",query,sizeof(query));
     ImGui::SameLine();
     if(ImGui::SmallButton("Clear evidence filter"))query[0]='\0';
     ImGui::TextDisabled("Tip: use category, executable name, PID or rule number to narrow the evidence.");
     ImGui::TextDisabled("%zu records available | Read-only evidence inspector",records.size());
+    ImGui::TextDisabled("SHA-256 cache: %llu reused / %llu computed",
+        sha256CacheHits.load(),sha256CacheMisses.load());
+    if(scanning.load())
+        ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),
+            "LIVE: evidence is still being collected; classifications are provisional.");
+    if(scanFailed.load() || scanCancelled.load())
+        ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),
+            "INCOMPLETE: some checks did not finish; CLEAN is not guaranteed.");
     ImGui::TextDisabled("Search ignores letter case. Findings are indicators, not verdicts.");
+    std::string normalizedQuery=query;
+    std::transform(normalizedQuery.begin(),normalizedQuery.end(),
+        normalizedQuery.begin(),[](unsigned char c){
+            return static_cast<char>(std::tolower(c));
+        });
+    size_t totalMatches=0;
+    for(const auto& searchable:searchIndex)
+        if(normalizedQuery.empty() ||
+           searchable.find(normalizedQuery)!=std::string::npos)
+            ++totalMatches;
+    ImGui::TextDisabled("Matching evidence: %zu | Displaying up to 500",totalMatches);
     if(ImGui::BeginChild("##evidenceList",ImVec2(0,270),ImGuiChildFlags_Borders)){
-        unsigned shown=0;
-        for(size_t i=0;i<records.size() && shown<500;++i){
-            const auto& r=records[i];
-            const std::string text=r.category+" / "+r.name+" / "+r.detail;
-            if(query[0]){
-                std::string needle=query;
-                std::string haystack=text;
-                std::transform(needle.begin(),needle.end(),needle.begin(),
-                    [](unsigned char c){return static_cast<char>(std::tolower(c));});
-                std::transform(haystack.begin(),haystack.end(),haystack.begin(),
-                    [](unsigned char c){return static_cast<char>(std::tolower(c));});
-                if(haystack.find(needle)==std::string::npos)continue;
-            }
-            ImGui::PushID(static_cast<int>(i));
-            if(ImGui::Selectable((r.category+" | "+r.name).c_str(),
-                                 selected==static_cast<int>(i)))
-                selected=static_cast<int>(i);
-            ImGui::PopID();++shown;
+        ImGuiListClipper clipper;
+        // Keep the original record order, but clip only the filtered matches.
+        static std::vector<size_t> filtered;
+        static std::string previousQuery;
+        static size_t previousRevision=static_cast<size_t>(-1);
+        if(previousRevision!=indexedRevision || previousQuery!=normalizedQuery){
+            filtered.clear();
+            filtered.reserve((std::min)(records.size(),static_cast<size_t>(500)));
+            for(size_t i=0;i<records.size() && filtered.size()<500;++i)
+                if(normalizedQuery.empty() ||
+                   searchIndex[i].find(normalizedQuery)!=std::string::npos)
+                    filtered.push_back(i);
+            previousQuery=normalizedQuery;
+            previousRevision=indexedRevision;
         }
+        clipper.Begin(static_cast<int>(filtered.size()));
+        while(clipper.Step()){
+            for(int visible=clipper.DisplayStart;visible<clipper.DisplayEnd;++visible){
+                const size_t i=filtered[static_cast<size_t>(visible)];
+                const auto& r=records[i];
+                ImGui::PushID(static_cast<int>(i));
+                if(ImGui::Selectable((r.category+" | "+r.name).c_str(),
+                                     selected==static_cast<int>(i)))
+                    selected=static_cast<int>(i);
+                ImGui::PopID();
+            }
+        }
+        clipper.End();
     }
     ImGui::EndChild();
     if(selected>=0 && static_cast<size_t>(selected)<records.size()){
@@ -3918,7 +4021,25 @@ static void drawEvidenceInspector(){
             const std::string text=r.category+" | "+r.name+" | "+r.detail;
             ImGui::SetClipboardText(text.c_str());
         }
-        ImGui::TextDisabled("An indicator alone does not confirm a threat.");
+        // Correlate exact names across independent evidence categories.
+        // Exact-name matches are context, not automatic proof of cheating.
+        if(!r.name.empty() && r.name.size()>=4){
+            const auto group=relatedIndex.find(r.name);
+            if(group!=relatedIndex.end()){
+                const size_t related=group->second.first>0?group->second.first-1:0;
+                const auto& categories=group->second.second;
+                const size_t otherCategories=categories.size()-
+                    (categories.find(r.category)!=categories.end()?1u:0u);
+                ImGui::Text("Related records (exact name): %zu",related);
+                ImGui::Text("Other evidence categories: %zu",otherCategories);
+                if(otherCategories && ImGui::TreeNode("Related sources")){
+                    for(const auto& category:categories)
+                        if(category!=r.category)ImGui::BulletText("%s",category.c_str());
+                    ImGui::TreePop();
+                }
+            }
+        }
+        ImGui::TextDisabled("Correlation provides context, not proof of cheating.");
     }
 }
 
@@ -4872,32 +4993,104 @@ static std::vector<Record> inspectExecutableAndDriverReview(const std::vector<Pr
             " | User-writable location="+(unusual?"yes":"no")+
             " | A name or location alone does not establish cheating."});
     }
+    // Build a read-only service-to-driver-name index for contextual correlation.
+    // Service names are not necessarily the binary filenames; unmatched entries
+    // must never be treated as evidence of malicious activity.
+    std::unordered_set<std::wstring> registeredDriverServices;
+    size_t serviceEntries=0;
+    bool serviceInventoryAvailable=false;
+    SC_HANDLE driverScm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(driverScm){
+        DWORD required=0,returned=0,resume=0;
+        EnumServicesStatusExW(driverScm,SC_ENUM_PROCESS_INFO,
+            SERVICE_DRIVER,SERVICE_STATE_ALL,nullptr,0,
+            &required,&returned,&resume,nullptr);
+        if(GetLastError()==ERROR_MORE_DATA && required>0 &&
+           required<16u*1024u*1024u){
+            std::vector<BYTE> serviceBuffer(required+4096u);
+            resume=0;
+            if(EnumServicesStatusExW(driverScm,SC_ENUM_PROCESS_INFO,
+                SERVICE_DRIVER,SERVICE_STATE_ALL,serviceBuffer.data(),
+                static_cast<DWORD>(serviceBuffer.size()),&required,
+                &returned,&resume,nullptr)){
+                serviceInventoryAvailable=true;
+                serviceEntries=returned;
+                auto* entries=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(
+                    serviceBuffer.data());
+                for(DWORD i=0;i<returned;++i){
+                    if(entries[i].lpServiceName)
+                        registeredDriverServices.insert(
+                            lowerPath(entries[i].lpServiceName));
+                }
+            }
+        }
+        CloseServiceHandle(driverScm);
+    }
     // EnumDeviceDrivers is an inventory of loaded kernel images, not a
     // hidden-driver or kernel-tampering detector.
     std::array<LPVOID,2048> addresses{};
     DWORD needed=0;
     if(EnumDeviceDrivers(addresses.data(),
             static_cast<DWORD>(addresses.size()*sizeof(LPVOID)),&needed)){
-        const size_t count=std::min(addresses.size(),
-            static_cast<size_t>(needed/sizeof(LPVOID)));
+        const size_t reported=static_cast<size_t>(needed/sizeof(LPVOID));
+        const size_t count=std::min(addresses.size(),reported);
+        size_t pathsUnavailable=0;
+        size_t reviewed=0;
+        size_t matchedServiceNames=0;
+        size_t signatureChecked=0;
+        size_t signatureUnavailable=0;
         for(size_t i=0;i<count && !cancelRequested;++i){
             wchar_t pathBuffer[MAX_PATH]{};
-            if(!GetDeviceDriverFileNameW(addresses[i],pathBuffer,MAX_PATH))
+            if(!GetDeviceDriverFileNameW(addresses[i],pathBuffer,MAX_PATH)){
+                ++pathsUnavailable;
                 continue;
+            }
             ++driverReviewChecked;
             const std::wstring path=lowerPath(pathBuffer);
             const std::wstring filename=lowerPath(fs::path(path).filename().wstring());
             const auto match=token(filename);
+            std::wstring stem=fs::path(filename).stem().wstring();
+            const bool hasMatchingService=
+                registeredDriverServices.find(stem)!=registeredDriverServices.end();
+            if(hasMatchingService)++matchedServiceNames;
             const bool unusual=path.find(L"\\temp\\")!=std::wstring::npos ||
                 path.find(L"\\users\\")!=std::wstring::npos;
             if(match.empty() && !unusual)continue;
             ++driverReviewFlagged;
+            ++reviewed;
+            // Only inspect signatures of flagged drivers to avoid expensive
+            // verification of the entire driver inventory.
+            std::string signature="Not checked (path unavailable)";
+            const DWORD attrs=GetFileAttributesW(pathBuffer);
+            if(attrs!=INVALID_FILE_ATTRIBUTES &&
+               !(attrs&FILE_ATTRIBUTE_DIRECTORY)){
+                signature=signatureStatus(pathBuffer);
+                ++signatureChecked;
+            }else{
+                ++signatureUnavailable;
+            }
             records.push_back({"Kernel Driver Review",utf8(filename),
                 "REVIEW ONLY | Loaded driver path="+utf8(pathBuffer)+
                 " | Filename token="+(match.empty()?"none":utf8(match))+
                 " | Unusual path="+(unusual?"yes":"no")+
-                " | This does not prove kernel bypass or malicious activity."});
+                " | Registered service name match="+
+                    (hasMatchingService?"yes":"no or unavailable")+
+                " | Signature="+signature+
+                " | An unmatched service or unsigned file alone does not prove cheating."});
         }
+        records.push_back({"Kernel Driver Coverage","Loaded driver inventory",
+            "READ-ONLY | Drivers reported="+std::to_string(reported)+
+            " | Driver paths retrieved="+std::to_string(count-pathsUnavailable)+
+            " | Paths unavailable="+std::to_string(pathsUnavailable)+
+            " | Review indicators="+std::to_string(reviewed)+
+            " | Driver services enumerated="+std::to_string(serviceEntries)+
+            " | Service inventory="+
+                (serviceInventoryAvailable?"available":"unavailable")+
+            " | Exact stem/service matches="+std::to_string(matchedServiceNames)+
+            " | Reviewed signatures checked="+std::to_string(signatureChecked)+
+            " | Reviewed signature paths unavailable="+std::to_string(signatureUnavailable)+
+            " | List truncated="+(reported>count?"yes":"no")+
+            " | A loaded-driver inventory cannot detect hidden drivers or guarantee kernel integrity."});
     }else{
         records.push_back({"Kernel Driver Coverage","Driver inventory unavailable",
             "Windows did not expose the loaded driver list; not equivalent to no drivers."});
@@ -32651,10 +32844,24 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                     const unsigned int gray=lum>170u
                         ? (std::min)(255u,lum+((lum-170u)/4u))
                         : lum<55u ? (lum*3u)/4u : lum;
-                    vertex.col=(gray<<IM_COL32_R_SHIFT)
-                              |(gray<<IM_COL32_G_SHIFT)
-                              |(gray<<IM_COL32_B_SHIFT)
-                              |(a<<IM_COL32_A_SHIFT);
+                    // V40: keep semantic verdict colors readable in the
+                    // otherwise monochrome UI. Do not recolor unrelated blue
+                    // accents or neutral panels.
+                    const bool redStatus = r>=145u && r>g*14u/10u &&
+                        r>b*13u/10u && g<155u;
+                    const bool yellowStatus = r>=160u && g>=115u &&
+                        r>b*15u/10u && g>b*14u/10u &&
+                        g*10u>=r*6u;
+                    const bool greenStatus = g>=145u && g>r*12u/10u &&
+                        g>b*11u/10u && r<170u;
+                    if(redStatus || yellowStatus || greenStatus){
+                        vertex.col=color;
+                    }else{
+                        vertex.col=(gray<<IM_COL32_R_SHIFT)
+                                  |(gray<<IM_COL32_G_SHIFT)
+                                  |(gray<<IM_COL32_B_SHIFT)
+                                  |(a<<IM_COL32_A_SHIFT);
+                    }
                 }
             }
         }
