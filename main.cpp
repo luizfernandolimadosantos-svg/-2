@@ -28835,6 +28835,61 @@ static void drawSyncComputerMagnifier(ImDrawList* d,float cx,float cy,
     }
 }
 
+// V73 visual layer: restrained NOIR grid, moving light sweep, corner
+// reticles and depth accents. Pure ImDrawList rendering; no scanner changes.
+static void drawSyncNoirAtmosphere(ImDrawList* draw,
+                                   const ImVec2& origin,
+                                   const ImVec2& size,
+                                   bool animate){
+    if(size.x<180.f || size.y<140.f)return;
+    const float t=animate?(float)ImGui::GetTime():0.f;
+    const ImVec2 end(origin.x+size.x,origin.y+size.y);
+    draw->PushClipRect(origin,end,true);
+    const float step=64.f;
+    for(float x=origin.x+step;x<end.x;x+=step)
+        draw->AddLine(ImVec2(x,origin.y),ImVec2(x,end.y),
+            IM_COL32(210,210,210,8),1.f);
+    for(float y=origin.y+step;y<end.y;y+=step)
+        draw->AddLine(ImVec2(origin.x,y),ImVec2(end.x,y),
+            IM_COL32(210,210,210,8),1.f);
+    // Diagonal micro-streaks give movement without surrounding the content.
+    if(animate){
+        for(int i=0;i<17;++i){
+            const float seed=(float)(i+1);
+            const float x=origin.x+std::fmod(seed*173.37f,size.x);
+            const float y=origin.y+std::fmod(seed*91.73f+t*(8.f+i%4*3.f),size.y);
+            draw->AddLine(ImVec2(x,y),ImVec2(x-8.f,y+20.f),
+                IM_COL32(210,210,210,19),1.f);
+        }
+    }
+    // A soft spotlight moves across the grid, not over the UI controls.
+    const float sweep=origin.x+size.x*(animate?
+        (.5f+.5f*std::sin(t*.24f)):.5f);
+    for(int i=0;i<5;++i){
+        const float x=sweep+(i-2)*16.f;
+        draw->AddLine(ImVec2(x,origin.y),ImVec2(x,end.y),
+            IM_COL32(230,230,230,4+(2-std::abs(i-2))*3),1.f);
+    }
+    draw->PopClipRect();
+}
+static void drawSyncCornerAccents(ImDrawList* draw,
+                                  const ImVec2& p,const ImVec2& sz,
+                                  bool animate){
+    if(sz.x<300.f||sz.y<250.f)return;
+    const float t=animate?(float)ImGui::GetTime():0.f;
+    const int a=animate?(int)(65.f+20.f*std::sin(t*1.3f)):65;
+    const float pad=30.f, len=17.f;
+    const ImU32 c=IM_COL32(220,220,220,a);
+    const float x0=p.x+pad,y0=p.y+pad,x1=p.x+sz.x-pad,y1=p.y+sz.y-pad;
+    draw->AddLine(ImVec2(x0,y0),ImVec2(x0+len,y0),c,1.f);
+    draw->AddLine(ImVec2(x0,y0),ImVec2(x0,y0+len),c,1.f);
+    draw->AddLine(ImVec2(x1,y0),ImVec2(x1-len,y0),c,1.f);
+    draw->AddLine(ImVec2(x1,y0),ImVec2(x1,y0+len),c,1.f);
+    draw->AddLine(ImVec2(x0,y1),ImVec2(x0+len,y1),c,1.f);
+    draw->AddLine(ImVec2(x0,y1),ImVec2(x0,y1-len),c,1.f);
+    draw->AddLine(ImVec2(x1,y1),ImVec2(x1-len,y1),c,1.f);
+    draw->AddLine(ImVec2(x1,y1),ImVec2(x1,y1-len),c,1.f);
+}
 static void renderSyncOpening() {
     // V46: redesigned opening — animated computer, code and magnifier,
     // animated typography and a genuine, clickable Open Scanner action.
@@ -28869,6 +28924,8 @@ static void renderSyncOpening() {
     const float entrance=transitioning?ease(.05f,.70f):0.f;
     const float exit=transitioning?ease(4.65f,.60f):0.f;
     d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
+    drawSyncNoirAtmosphere(d,p,sz,animate);
+    drawSyncCornerAccents(d,p,sz,animate);
     // No outer card fill or outline: opening content sits directly
     // on the fullscreen background, with no enclosing rectangle.
     // Fine editorial rails; subtle enough not to compete with text.
@@ -28898,6 +28955,14 @@ static void renderSyncOpening() {
         ink(255,.92f+.08f*pulse),syncWord);
     d->AddText(wordFont,labelSize,ImVec2(cx-restSize.x*.5f,labelY),
         ink(180,.74f+.14f*pulse),restWord);
+    // Animated fine rule under SYNC: clean and typographic, no extra text.
+    const float lineAlpha=animate?(.18f+.16f*pulse):.22f;
+    const float lineY=labelY+labelSize+13.f;
+    const float lineW=animate?(syncSize.x*(.52f+.12f*std::sin(clock*.8f))):
+        syncSize.x*.58f;
+    d->AddLine(ImVec2(cx-lineW*.5f,lineY),
+        ImVec2(cx+lineW*.5f,lineY),
+        ink(245,lineAlpha),1.f);
     // Clean wordmark: no subtitle or decorative interface caption.
     const float illustrationScale=(std::min)(1.f,
         (std::min)(cardW/590.f,cardH/405.f));
@@ -28914,7 +28979,16 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
-        if(ImGui::Button("OPEN SCANNER   >>",ImVec2(buttonW,47.f))){
+        const bool openClicked=ImGui::Button("OPEN SCANNER   >>",ImVec2(buttonW,47.f));
+        if(ImGui::IsItemHovered() && animate){
+            const ImVec2 a=ImGui::GetItemRectMin();
+            const ImVec2 b=ImGui::GetItemRectMax();
+            const float shimmer=.4f+.6f*(.5f+.5f*std::sin(clock*4.f));
+            d->AddRect(ImVec2(a.x-3.f,a.y-3.f),
+                ImVec2(b.x+3.f,b.y+3.f),
+                ink(230,.12f+.17f*shimmer),9.f,0,1.2f);
+        }
+        if(openClicked){
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
