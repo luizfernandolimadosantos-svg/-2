@@ -388,6 +388,157 @@ static const char* cornerStyleNames[]={"Square","Soft","Rounded"};
 static const char* scrollbarWidthNames[]={"Thin","Standard","Wide"};
 static ImVec4 customAccent(.98f,.43f,.15f,1.f);
 static bool settingsNotice=false;
+
+// User-defined, read-only evidence rules. Plain substring matching; no code execution.
+struct CustomDetectionRule { std::string token; bool enabled=true; };
+struct CustomDetectionHit { std::string token, category, name, detail; };
+static std::vector<CustomDetectionRule> customDetectionRules;
+static std::vector<CustomDetectionHit> customDetectionHits;
+static char customDetectionInput[192]{};
+static bool customDetectionDirty=true;
+static size_t customDetectionLastRecordCount=static_cast<size_t>(-1);
+static bool customDetectionLastDone=false;
+static std::string customDetectionMessage;
+static std::string customDetectionLower(std::string value) {
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](unsigned char c){return static_cast<char>(std::tolower(c));});
+    return value;
+}
+static fs::path customDetectionPath() {
+    wchar_t appdata[32768]{};
+    DWORD n=GetEnvironmentVariableW(L"APPDATA",appdata,32768);
+    if(n>0 && n<32768) return fs::path(appdata)/L"SyncPCChecker"/L"custom_detections.txt";
+    return fs::path(executablePath()).parent_path()/L"custom_detections.txt";
+}
+static void saveCustomDetections() {
+    try {
+        const auto path=customDetectionPath();
+        fs::create_directories(path.parent_path());
+        std::ofstream output(path,std::ios::trunc);
+        if(!output){customDetectionMessage="Unable to save custom rules.";return;}
+        for(const auto& rule:customDetectionRules)
+            output<<(rule.enabled?"1|":"0|")<<rule.token<<"\n";
+        customDetectionMessage=output?"Custom rules saved locally.":"Unable to save custom rules.";
+    }catch(...){customDetectionMessage="Unable to save custom rules.";}
+}
+static void loadCustomDetections() {
+    std::ifstream input(customDetectionPath());
+    std::string line;
+    while(customDetectionRules.size()<200 && std::getline(input,line)) {
+        if(line.size()<6 || line.size()>194 || line[1]!='|')continue;
+        std::string token=line.substr(2);
+        if(token.size()<4 || token.find_first_of("\r\n|")!=std::string::npos)continue;
+        bool duplicate=false;
+        for(const auto& rule:customDetectionRules)
+            if(customDetectionLower(rule.token)==customDetectionLower(token)){duplicate=true;break;}
+        if(!duplicate)customDetectionRules.push_back({token,line[0]=='1'});
+    }
+    customDetectionDirty=true;
+}
+static void updateCustomDetections() {
+    if(scanning.load() || !done.load()) {
+        if(!done.load()) {customDetectionHits.clear();customDetectionLastDone=false;}
+        return;
+    }
+    const size_t count=recordCount.load();
+    if(!customDetectionDirty && customDetectionLastDone && customDetectionLastRecordCount==count)return;
+    std::vector<CustomDetectionHit> next;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& record:records) {
+            const std::string hay=customDetectionLower(record.name+" "+record.detail);
+            for(const auto& rule:customDetectionRules) {
+                if(!rule.enabled)continue;
+                if(hay.find(customDetectionLower(rule.token))!=std::string::npos) {
+                    if(next.size()<500)
+                        next.push_back({rule.token,record.category,record.name,record.detail});
+                }
+            }
+        }
+    }
+    customDetectionHits.swap(next);
+    customDetectionLastRecordCount=count;
+    customDetectionLastDone=true;
+    customDetectionDirty=false;
+}
+static void drawCustomDetectionPreferences() {
+    ImGui::SeparatorText("CUSTOM DETECTION STUDIO");
+    ImGui::TextDisabled("CREATE  /  ENABLE  /  SCAN  /  REVIEW");
+    ImGui::TextWrapped("Add a filename or distinctive text to search in the evidence collected by the scanner.");
+    ImGui::TextDisabled("Plain text, case-insensitive. No scripts or external commands are executed.");
+    ImGui::SetNextItemWidth(360.f);
+    ImGui::InputTextWithHint("##custom_detection_input","Example: example-loader.dll",customDetectionInput,IM_ARRAYSIZE(customDetectionInput));
+    ImGui::SameLine();
+    if(ImGui::Button("Add detection")) {
+        std::string token=customDetectionInput;
+        auto begin=token.find_first_not_of(" \t");
+        auto end=token.find_last_not_of(" \t");
+        token=begin==std::string::npos?"":token.substr(begin,end-begin+1);
+        bool duplicate=false;
+        for(const auto& r:customDetectionRules)
+            if(customDetectionLower(r.token)==customDetectionLower(token))duplicate=true;
+        if(token.size()<4 || token.size()>160 || token.find_first_of("\r\n|")!=std::string::npos)
+            customDetectionMessage="Use 4-160 characters without line breaks or |.";
+        else if(duplicate)customDetectionMessage="This detection already exists.";
+        else if(customDetectionRules.size()>=200)customDetectionMessage="Limit reached (200 rules).";
+        else {
+            customDetectionRules.push_back({token,true});
+            customDetectionInput[0]='\0';
+            customDetectionDirty=true;
+            saveCustomDetections();
+        }
+    }
+    ImGui::TextDisabled("Tip: prefer an exact filename, unique path fragment or verified hash over generic words like 'hack'.");
+    ImGui::TextDisabled("A rule only matches data the scan actually collected; a missing match does not prove absence.");
+    ImGui::TextDisabled("Custom matches are review leads, never automatic proof of cheating.");
+    if(ImGui::BeginChild("##custom_rule_list",ImVec2(0,180.f),ImGuiChildFlags_Borders)) {
+        for(size_t i=0;i<customDetectionRules.size();) {
+            ImGui::PushID(static_cast<int>(i));
+            if(ImGui::Checkbox("##enabled",&customDetectionRules[i].enabled)) {
+                customDetectionDirty=true;saveCustomDetections();
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(customDetectionRules[i].token.c_str());
+            ImGui::SameLine();
+            if(ImGui::SmallButton("Remove")) {
+                customDetectionRules.erase(customDetectionRules.begin()+static_cast<std::ptrdiff_t>(i));
+                customDetectionDirty=true;saveCustomDetections();
+                ImGui::PopID();
+                continue;
+            }
+            ImGui::PopID();
+            ++i;
+        }
+    }
+    ImGui::EndChild();
+    if(ImGui::Button("Recheck collected evidence")) {
+        customDetectionDirty=true;updateCustomDetections();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%zu rules / %zu matches",customDetectionRules.size(),customDetectionHits.size());
+    if(!customDetectionMessage.empty())ImGui::TextWrapped("%s",customDetectionMessage.c_str());
+}
+static void drawCustomDetectionFindings() {
+    updateCustomDetections();
+    ImGui::SeparatorText("CUSTOM RULE MATCHES / EVIDENCE");
+    ImGui::TextDisabled("%zu matches from user-defined rules (informational only).",customDetectionHits.size());
+    if(ImGui::BeginTable("##custom_detection_findings",3,
+        ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY,
+        ImVec2(0,190.f))) {
+        ImGui::TableSetupColumn("Rule",ImGuiTableColumnFlags_WidthFixed,160.f);
+        ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,170.f);
+        ImGui::TableSetupColumn("Evidence");
+        ImGui::TableHeadersRow();
+        for(const auto& hit:customDetectionHits) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(hit.token.c_str());
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(hit.category.c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s | %s",hit.name.c_str(),hit.detail.c_str());
+        }
+        ImGui::EndTable();
+    }
+}
+
 static const char* accentNames[]={"Orange","Red","Blue","Purple","Green","Custom"};
 static const char* themeNames[]={"Obsidian","Graphite","Charcoal"};
 static const char* densityNames[]={"Compact","Comfortable","Spacious"};
@@ -25786,18 +25937,18 @@ static void applyTheme() {
     // Sync PC Checker UI refresh: one centralized, predictable theme.
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=8.f;
-    st.ChildRounding=7.f;
+    st.WindowRounding=12.f;
+    st.ChildRounding=11.f;
     st.FrameRounding=cornerStyle==0?5.f:cornerStyle==1?9.f:12.f;
-    st.PopupRounding=11.f;
+    st.PopupRounding=12.f;
     st.ScrollbarRounding=8.f;
-    st.TabRounding=5.f;
+    st.TabRounding=9.f;
     st.GrabRounding=7.f;
     st.WindowBorderSize=0.f;
     st.ChildBorderSize=1.f;
     st.FrameBorderSize=1.f;
     st.PopupBorderSize=1.f;
-    st.WindowPadding=ImVec2(21.f,18.f);
+    st.WindowPadding=ImVec2(22.f,19.f);
     st.FramePadding=ImVec2(12.f,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
     st.ItemSpacing=ImVec2(11.f,densityIndex==0?8.f:densityIndex==2?13.f:10.f);
     st.ItemInnerSpacing=ImVec2(9.f,7.f);
@@ -25809,9 +25960,9 @@ static void applyTheme() {
     st.AntiAliasedLines=true;
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
-    const ImVec4 bg(.032f,.037f,.047f,1.f);
-    const ImVec4 panel(.065f,.073f,.087f,1.f);
-    const ImVec4 raised(.105f,.117f,.135f,1.f);
+    const ImVec4 bg(.043f,.046f,.052f,1.f);
+    const ImVec4 panel(.073f,.078f,.086f,1.f);
+    const ImVec4 raised(.116f,.122f,.133f,1.f);
     const ImVec4 accent(.84f,.84f,.84f,1.f);
     const ImVec4 accentHover(1.f,1.f,1.f,1.f);
     const ImVec4 text(.94f,.96f,.98f,1.f);
@@ -25825,8 +25976,8 @@ static void applyTheme() {
     c[ImGuiCol_FrameBg]=raised;
     c[ImGuiCol_FrameBgHovered]=ImVec4(0.193f,0.193f,0.193f,1.f);
     c[ImGuiCol_FrameBgActive]=ImVec4(0.253f,0.253f,0.253f,1.f);
-    c[ImGuiCol_Button]=ImVec4(0.237f,0.237f,0.237f,1.f);
-    c[ImGuiCol_ButtonHovered]=ImVec4(0.327f,0.327f,0.327f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.18f,.19f,.21f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.28f,.29f,.31f,1.f);
     c[ImGuiCol_ButtonActive]=ImVec4(0.407f,0.407f,0.407f,1.f);
     c[ImGuiCol_Header]=ImVec4(0.220f,0.220f,0.220f,1.f);
     c[ImGuiCol_HeaderHovered]=ImVec4(0.307f,0.307f,0.307f,1.f);
@@ -25842,7 +25993,7 @@ static void applyTheme() {
     c[ImGuiCol_TableBorderStrong]=ImVec4(0.330f,0.330f,0.330f,1.f);
     c[ImGuiCol_TableBorderLight]=ImVec4(0.223f,0.223f,0.223f,1.f);
     c[ImGuiCol_TableRowBg]=ImVec4(0.085f,0.085f,0.085f,1.f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(0.107f,0.107f,0.107f,1.f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.135f,.14f,.15f,.55f);
     c[ImGuiCol_TextSelectedBg]=ImVec4(0.497f,0.497f,0.497f,.38f);
     c[ImGuiCol_ScrollbarBg]=bg;
     c[ImGuiCol_ScrollbarGrab]=ImVec4(0.330f,0.330f,0.330f,1.f);
@@ -25861,16 +26012,23 @@ static void applyTheme() {
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
-    ImGui::Dummy(ImVec2(0,9));
-    ImGui::SetWindowFontScale(1.10f);
-    ImGui::TextColored(ImVec4(.94f,.94f,.95f,1.f),"%s",title);
+    ImGui::PushID(title);
+    ImGui::Dummy(ImVec2(0,7.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.11f,.12f,1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(17.f,13.f));
+    ImGui::BeginChild("##section_heading",ImVec2(0,description?69.f:49.f),
+                      ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::SetWindowFontScale(1.15f);
+    ImGui::TextColored(ImVec4(.97f,.97f,.98f,1.f),"%s",title);
     ImGui::SetWindowFontScale(1.f);
-    if(description)ImGui::TextDisabled("%s",description);
-    ImGui::Dummy(ImVec2(0,3));
-    ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(0.274f,0.274f,0.274f,.72f));
-    ImGui::Separator();
+    if(description && description[0]) {
+        ImGui::TextWrapped("%s",description);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0,5));
+    ImGui::Dummy(ImVec2(0,8.f));
+    ImGui::PopID();
 }
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
@@ -27756,7 +27914,7 @@ static void renderSyncOpening() {
     }
     d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
     d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
-    d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"DESKTOP APP");
+    d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"FIVEM SECURITY");
     const float pulse=.5f+.5f*std::sin(t*1.65f);
     const float logoY=cy-115.f-(transitioning?fade(.15f,.65f)*22.f:0.f);
     for(int i=3;i>=1;--i) {
@@ -27768,8 +27926,8 @@ static void renderSyncOpening() {
             ImVec2(cx-36.f,logoY-36.f),ImVec2(cx+36.f,logoY+36.f),
             ImVec2(0,0),ImVec2(1,1),ink(255,transitioning?.92f:1.f));
     if(welcomeOpacity>.005f) {
-        const char* heading="Welcome to Sync.";
-        const char* detail="Check your PC. Review the results.";
+        const char* heading="SYNC PC CHECKER";
+        const char* detail="Advanced Anti-Cheat for FiveM";
         const ImVec2 hs=ImGui::CalcTextSize(heading), ds=ImGui::CalcTextSize(detail);
         const float offset=(1.f-welcomeOpacity)*12.f;
         d->AddText(ImVec2(cx-hs.x*.5f,cy-12.f-offset),ink(247,welcomeOpacity),heading);
@@ -27781,7 +27939,7 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
-        if(ImGui::Button("Open Scanner  ->",ImVec2(230.f,46.f)))
+        if(ImGui::Button("Start System Scan  ->",ImVec2(230.f,46.f)))
             syncIntroTransition=now;
         ImGui::PopStyleColor(4);
     } else {
@@ -27789,7 +27947,7 @@ static void renderSyncOpening() {
         const float line=fade(.48f,.95f);
         d->AddLine(ImVec2(cx-145.f*line,cy+68.f),
                    ImVec2(cx+145.f*line,cy+68.f),ink(226,.75f*loadingOpacity),1.5f);
-        const char* label="Opening scanner";
+        const char* label="Preparing security workspace";
         const ImVec2 ls=ImGui::CalcTextSize(label);
         d->AddText(ImVec2(cx-ls.x*.5f,cy+88.f),ink(205,loadingOpacity),label);
         for(int i=0;i<3;++i) {
@@ -27803,7 +27961,7 @@ static void renderSyncOpening() {
         }
     }
     d->AddLine(ImVec2(p.x+32,p.y+sz.y-51),ImVec2(p.x+sz.x-32,p.y+sz.y-51),ink(255,.10f));
-    d->AddText(ImVec2(p.x+36,p.y+sz.y-35),ink(155,.75f),"SYSTEM INSPECTION");
+    d->AddText(ImVec2(p.x+36,p.y+sz.y-35),ink(155,.75f),"FIVEM ANTICHEAT  /  READ-ONLY ANALYSIS");
     ImGui::End();
     ImGui::PopStyleColor();
 }
@@ -27922,9 +28080,9 @@ static void renderUI() {
     // ATLAS: entirely different shell, no left rail, full-width operations canvas.
     if(page==1||page==5)page=0;
     const ImVec4 titleInk(.94f,.97f,1.f,1);
-    const ImVec4 subtleInk(.60f,.71f,.81f,1);
-    const ImVec4 accentInk(.30f,.75f,.98f,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.074f,.094f,1));
+    const ImVec4 subtleInk(.65f,.66f,.69f,1);
+    const ImVec4 accentInk(.84f,.85f,.87f,1);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.08f,.09f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
@@ -27977,7 +28135,9 @@ static void renderUI() {
         }
     }
     ImGui::SameLine(0,30);
-    ImGui::TextColored(accentInk,"SECURITY WORKSPACE  /  READ-ONLY");
+    ImGui::TextColored(accentInk,"ADVANCED ANTI-CHEAT FOR FIVEM");
+    ImGui::SameLine(0,22.f);
+    ImGui::TextDisabled("STATUS / %s",stateText());
     // Presentation progress remains visible while completed results await unlocking.
     if(inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 && (scanning || done)){
         const ImVec2 wp=ImGui::GetWindowPos();
@@ -28045,9 +28205,9 @@ static void renderUI() {
     static float navTransitionStart=-100.f;
     const float uiNow=(float)ImGui::GetTime();
     if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; }
-    const char* nav[]={"VERDICT","OVERVIEW","SCAN RESULTS","ARTIFACTS",
+    const char* nav[]={"OVERVIEW","VERDICT","SCAN RESULTS","ARTIFACTS",
                        "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS"};
-    const int navPages[]={11,0,2,9,3,7,6,8,10,4};
+    const int navPages[]={0,11,2,9,3,7,6,8,10,4};
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
         for(int shortcut=0;shortcut<9;shortcut++){
@@ -28061,9 +28221,9 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.069f,.077f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
-        ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
+        ImGuiChildFlags_Borders,ImGuiWindowFlags_None)){
         ImGui::TextColored(ImVec4(.98f,.98f,.98f,1.f),"SYNC");
-        ImGui::TextDisabled("PC CHECKER  /  V8");
+        ImGui::TextDisabled("ADVANCED ANTI-CHEAT / FIVEM");
         ImGui::Dummy(ImVec2(0,12));
         ImGui::Separator();
         ImGui::TextDisabled("WORKSPACE");
@@ -28283,6 +28443,8 @@ static void renderUI() {
     } else if(page==11) {
         sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
         sync_module_audit::render();
+        ImGui::Spacing();
+        drawCustomDetectionFindings();
         ImGui::Spacing();
         if(scanning || presentationHold.load()){
             ImGui::TextColored(ImVec4(.55f,.75f,1.f,1.f),
@@ -31028,6 +31190,30 @@ zula.exe)FIVEMSTR";
         ImGui::Text("Evidence records: %zu",recordCount.load());
         ImGui::Text("Files checked: %zu",fileCount.load());
         ImGui::Text("Status: %s",stateText());
+        // Real scan completion indicator, using the existing inspection milestones.
+        // The progress bar is not a fabricated animation or a verdict score.
+        if(scanning || (done && !scanFailed && !scanCancelled)){
+            const int scanPercent=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
+            char scanLabel[40]={};
+            snprintf(scanLabel,sizeof(scanLabel),"%d%%",scanPercent);
+            ImGui::Dummy(ImVec2(0,9));
+            ImGui::TextDisabled("SCAN PROGRESS");
+            ImGui::ProgressBar(scanPercent/100.0f,ImVec2(-1.f,18.f),scanLabel);
+            if(scanning && presentationHold.load())
+                ImGui::TextDisabled("Finalizing results...");
+        }
+        // Real scan completion indicator, using the existing inspection milestones.
+        // The progress bar is not a fabricated animation or a verdict score.
+        if(scanning || (done && !scanFailed && !scanCancelled)){
+            const int scanPercent=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
+            char scanLabel[40]={};
+            snprintf(scanLabel,sizeof(scanLabel),"%d%%",scanPercent);
+            ImGui::Dummy(ImVec2(0,9));
+            ImGui::TextDisabled("SCAN PROGRESS");
+            ImGui::ProgressBar(scanPercent/100.0f,ImVec2(-1.f,18.f),scanLabel);
+            if(scanning && presentationHold.load())
+                ImGui::TextDisabled("Finalizing results...");
+        }
         if(scanFailed){
             ImGui::Separator();
             ImGui::TextColored(ImVec4(1.f,.37f,.37f,1.f),
@@ -31856,6 +32042,8 @@ zula.exe)FIVEMSTR";
         ImGui::Checkbox(localized("Highlight suspicious processes in red"),&highlightSuspicious);
         ImGui::Checkbox(localized("Show security assessment details"),&showSecurityWarnings);
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        drawCustomDetectionPreferences();
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),"PREFERENCES");
         if(accentButton(localized("Save Settings"),ImVec2(170,42)))saveSettings();
         ImGui::SameLine();
@@ -31970,6 +32158,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     IMGUI_CHECKVERSION();ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     loadSettings();
+    loadCustomDetections();
     applyWindowPreset();
     applyTheme();
     ImGui::GetIO().FontGlobalScale=interfaceScale;
