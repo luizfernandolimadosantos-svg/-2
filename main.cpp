@@ -25786,12 +25786,12 @@ static void applyTheme() {
     // Sync PC Checker UI refresh: one centralized, predictable theme.
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=14.f;
-    st.ChildRounding=12.f;
+    st.WindowRounding=8.f;
+    st.ChildRounding=7.f;
     st.FrameRounding=cornerStyle==0?5.f:cornerStyle==1?9.f:12.f;
     st.PopupRounding=11.f;
     st.ScrollbarRounding=8.f;
-    st.TabRounding=9.f;
+    st.TabRounding=5.f;
     st.GrabRounding=7.f;
     st.WindowBorderSize=0.f;
     st.ChildBorderSize=1.f;
@@ -25809,9 +25809,9 @@ static void applyTheme() {
     st.AntiAliasedLines=true;
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
-    const ImVec4 bg(.035f,.035f,.035f,1.f);
-    const ImVec4 panel(.075f,.075f,.075f,1.f);
-    const ImVec4 raised(.12f,.12f,.12f,1.f);
+    const ImVec4 bg(.032f,.037f,.047f,1.f);
+    const ImVec4 panel(.065f,.073f,.087f,1.f);
+    const ImVec4 raised(.105f,.117f,.135f,1.f);
     const ImVec4 accent(.84f,.84f,.84f,1.f);
     const ImVec4 accentHover(1.f,1.f,1.f,1.f);
     const ImVec4 text(.94f,.96f,.98f,1.f);
@@ -27993,7 +27993,7 @@ static void renderUI() {
     ImGui::EndChild();
 
     // Compact, factual status strip: no inferred malware verdict.
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.065f,.092f,.115f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.09f,.09f,.095f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
@@ -28036,134 +28036,70 @@ static void renderUI() {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.065f,.084f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,8));
-    // Advanced navigation: animate each real tab, not arbitrary screen strips.
-    static float viewTransitionStart=-100.f;
-    static bool viewTransitionActive=false;
-    const float viewNow=(float)ImGui::GetTime();
-    const float navAvailableWidth=ImGui::GetContentRegionAvail().x-50.f;
-    const int navColumns=navAvailableWidth<460.f?1:navAvailableWidth<760.f?2:navAvailableWidth<1150.f?3:5;
-    const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
-    const int navRows=simplifiedInterface?
-        (5+simpleColumns-1)/simpleColumns:(10+navColumns-1)/navColumns;
-    const float navRowHeight=52.f;
-    ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
-        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
-    // Persistent UI-only transition state; scan and evidence data are unaffected.
+    // V4 navigation: compact, predictable workspace switcher.
+    // The previous 3-column grid consumed multiple rows and clipped at small sizes.
     static int lastNavPage=-1;
-    static float navTransitionStart=0.f;
+    static float navTransitionStart=-100.f;
     const float uiNow=(float)ImGui::GetTime();
-    const bool pageChanged=lastNavPage!=-1 && lastNavPage!=page;
-    if(pageChanged) {
-        navTransitionStart=reducedMotion?-100.f:uiNow;
-        syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
-    }
-    lastNavPage=page;
+    if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; }
     const char* nav[]={"VERDICT","OVERVIEW","SCAN RESULTS","ARTIFACTS",
                        "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS"};
     const int navPages[]={11,0,2,9,3,7,6,8,10,4};
-    // Quick page navigation, ignored while editing text or using shortcuts.
-    // Ctrl+1..9 follows the visible tab order.
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
         for(int shortcut=0;shortcut<9;shortcut++){
             if(ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1+shortcut),false)){
-                page=navPages[shortcut];
-                navTransitionStart=uiNow;
-                lastNavPage=page;
+                page=navPages[shortcut]; navTransitionStart=uiNow; lastNavPage=page;
             }
         }
     }
-    // Simplified mode keeps only four primary destinations visible.
-    // Advanced mode preserves the complete original navigation.
-    const int simpleNavIndices[]={0,1,2,3,9};
-    const int visibleNavCount=simplifiedInterface?5:10;
-    const float navGap=10.f;
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
-    const float navWidth=(std::max)(85.f,
-        (ImGui::GetContentRegionAvail().x-
-         ((simplifiedInterface?simpleColumns:navColumns)-1)*navGap)/
-         (simplifiedInterface?simpleColumns:navColumns));
-    for(int visible=0;visible<visibleNavCount;visible++){
-        const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
-        float itemAlpha=1.f;
-        if(viewTransitionActive && !reducedMotion){
-            const float t=(viewNow-viewTransitionStart-visible*0.115f)/0.26f;
-            const float v=std::clamp(t,0.f,1.f);
-            itemAlpha=v*v*(3.f-2.f*v);
-        }
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-                            ImGui::GetStyle().Alpha*itemAlpha);
-        if(itemAlpha<0.98f)ImGui::BeginDisabled();
-        ImGui::PushID(9100+i);
-        const bool active=page==navPages[i];
-        if(active){
-            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.23f,.23f,.25f,1));
-            ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(0.947f,0.947f,0.947f,1));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.88f,.88f,.9f,1));
-        }
-        const bool hoveredBefore=ImGui::IsMousePosValid() &&
-            ImGui::IsMouseHoveringRect(ImGui::GetCursorScreenPos(),
-                ImVec2(ImGui::GetCursorScreenPos().x+navWidth,
-                       ImGui::GetCursorScreenPos().y+39.f),false);
-        if(!active){
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                hoveredBefore?ImVec4(.12f,.22f,.33f,1.f):
-                              ImVec4(.075f,.105f,.15f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                ImVec4(.27f,.27f,.29f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_Border,
-                ImVec4(.33f,.33f,.35f,1.f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,1.f);
-        }
-        if(ImGui::Button((std::string(localized(nav[i]))+"##nav"+std::to_string(i)).c_str(),ImVec2(navWidth,43))){
-            if(page!=navPages[i]){
-                page=navPages[i];
-                navTransitionStart=uiNow;
-                lastNavPage=page;
+    // V8: investigation cockpit. Persistent navigation rail, separate evidence workspace.
+    const float railWidth = ImGui::GetContentRegionAvail().x < 790.f ? 172.f : 222.f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.069f,.077f,1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
+    if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
+        ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
+        ImGui::TextColored(ImVec4(.98f,.98f,.98f,1.f),"SYNC");
+        ImGui::TextDisabled("PC CHECKER  /  V8");
+        ImGui::Dummy(ImVec2(0,12));
+        ImGui::Separator();
+        ImGui::TextDisabled("WORKSPACE");
+        ImGui::Dummy(ImVec2(0,5));
+        const int simpleNavIndices[]={0,1,2,3,9};
+        const int visibleNavCount=simplifiedInterface?5:10;
+        for(int visible=0;visible<visibleNavCount;visible++){
+            const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
+            if(i==4 || i==7){
+                ImGui::Dummy(ImVec2(0,8));
+                ImGui::Separator();
+                ImGui::TextDisabled(i==4?"FORENSICS":"SYSTEM");
             }
+            const bool active=page==navPages[i];
+            ImGui::PushID(i+9800);
+            ImGui::PushStyleColor(ImGuiCol_Button,active?
+                ImVec4(.89f,.90f,.92f,1.f):ImVec4(.105f,.112f,.125f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,active?
+                ImVec4(.98f,.98f,.99f,1.f):ImVec4(.19f,.20f,.22f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text,active?
+                ImVec4(.055f,.060f,.070f,1.f):ImVec4(.85f,.87f,.90f,1.f));
+            if(ImGui::Button(localized(nav[i]),ImVec2(-1.f,35.f))){
+                page=navPages[i]; navTransitionStart=uiNow; lastNavPage=page;
+            }
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+            ImGui::Dummy(ImVec2(0,3));
         }
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){
-            ImGui::BeginTooltip();
-            ImGui::Text("%s",localized(nav[i]));
-            ImGui::TextDisabled("Ctrl + %d",i+1);
-            ImGui::EndTooltip();
-        }
-        const ImVec2 tabMin=ImGui::GetItemRectMin();
-        const ImVec2 tabMax=ImGui::GetItemRectMax();
-        if(active){
-            // A solid edge marker, not the disliked bottom underline.
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(tabMin.x+1.f,tabMin.y+9.f),
-                ImVec2(tabMin.x+3.f,tabMax.y-9.f),
-                IM_COL32(235,235,235,230),1.f);
-        } else if(showNavHover && ImGui::IsItemHovered()){
-            ImGui::GetWindowDrawList()->AddRect(
-                ImVec2(tabMin.x+.5f,tabMin.y+.5f),
-                ImVec2(tabMax.x-.5f,tabMax.y-.5f),
-                IM_COL32(149,149,149,115),7.f,0,1.f);
-        }
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar();
-        ImGui::PopID();
-        if(itemAlpha<0.98f)ImGui::EndDisabled();
-        ImGui::PopStyleVar(); // Individual tab opacity
-        if(simplifiedInterface){
-            if(visible%simpleColumns!=simpleColumns-1 &&
-               visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
-        }else if(visible%navColumns!=navColumns-1 && visible!=visibleNavCount-1){
-            ImGui::SameLine(0,navGap);
-        }
+        ImGui::Dummy(ImVec2(0,10));
+        ImGui::Separator();
+        ImGui::TextDisabled("SCANNER STATUS");
+        ImGui::TextWrapped("%s",stateText());
     }
-    ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+    ImGui::SameLine(0.f,10.f);
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.055f,.065f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.055f,.060f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
@@ -28188,7 +28124,7 @@ static void renderUI() {
         page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":"PREFERENCES";
     // A short title entrance signals navigation without obscuring the tables.
     const float elapsed=uiNow-navTransitionStart;
-    const float entrance=(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.30f);
+    const float entrance=reducedMotion?0.f:(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.24f);
     const float titleAlpha=1.f-.42f*entrance;
     const float titleOffset=10.f*entrance;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX()+titleOffset);
@@ -31104,7 +31040,38 @@ zula.exe)FIVEMSTR";
         ImGui::Dummy(ImVec2(0,18));
         ImGui::TextColored(muted,"Need more detail? Select Advanced view above.");
     } else if(page==0) {
-        // Rebuilt command center; no legacy metric() tiles.
+        // V6: live metric cards; values come directly from the scan counters.
+        if(!simplifiedInterface){
+            const float region=ImGui::GetContentRegionAvail().x;
+            const int columns=region>=670.f?4:region>=350.f?2:1;
+            const float gap=9.f;
+            const float width=(region-gap*(columns-1))/columns;
+            const char* labels[]={"PROCESSES","EVIDENCE","FILES CHECKED","DEFENDER EVENTS"};
+            const unsigned long long values[]={
+                (unsigned long long)processCount.load(),
+                (unsigned long long)recordCount.load(),
+                (unsigned long long)fileCount.load(),
+                (unsigned long long)defenderAlerts.load()};
+            for(int k=0;k<4;k++){
+                ImGui::PushID(60000+k);
+                ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.115f,.135f,1.f));
+                if(ImGui::BeginChild("##v6Metric",ImVec2(width,93.f),ImGuiChildFlags_Borders)){
+                    ImGui::TextDisabled("%s",labels[k]);
+                    ImGui::SetWindowFontScale(1.35f);
+                    ImGui::Text("%llu",values[k]);
+                    ImGui::SetWindowFontScale(1.f);
+                    const float maxScale=(float)(values[k] > 0 ? values[k] : 1);
+                    const float normalized=(std::min)(1.f,maxScale/(k==0?400.f:k==1?1500.f:k==2?3000.f:50.f));
+                    ImGui::ProgressBar(normalized,ImVec2(-1.f,3.f),"");
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor();
+                ImGui::PopID();
+                if((k+1)%columns!=0 && k!=3)ImGui::SameLine(0.f,gap);
+            }
+            ImGui::Dummy(ImVec2(0.f,9.f));
+        }
+        // Existing scan controls and detailed modules remain intact.
         const ImVec4 pale(.96f,.96f,.96f,1),quiet(.62f,.62f,.62f,1),accent(.78f,.78f,.78f,1);
         const float full=ImGui::GetContentRegionAvail().x;
         const bool side=full>=790.f;
