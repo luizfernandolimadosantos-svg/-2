@@ -75,6 +75,104 @@
 #pragma comment(lib,"ws2_32.lib")
 #pragma comment(lib,"psapi.lib")
 
+// Read-only, bounded PE module string inventory. No execution or decompilation.
+namespace sync_module_audit {
+struct Hit { std::wstring path; std::string token; };
+static std::vector<std::wstring> pending;
+static std::vector<Hit> hits;
+static size_t next=0;
+static bool active=false;
+static size_t unreadable=0;
+static const char* const tokens[]={"bypass","injector","executor","cheatfivem","aimbot","triggerbot","wallhack","silentaim","lua executor","mod menu","spoof","hook","detour"};
+static std::string lower(std::string v) {
+    for(char& c:v) if(c>='A'&&c<='Z')c=char(c+('a'-'A'));
+    return v;
+}
+static bool relevantExtension(const std::wstring& p) {
+    auto dot=p.find_last_of(L'.');
+    if(dot==std::wstring::npos)return false;
+    std::wstring ext=p.substr(dot);
+    for(auto& c:ext)c=(wchar_t)towlower(c);
+    return ext==L".dll"||ext==L".exe"||ext==L".sys"||ext==L".ocx"||
+           ext==L".cpl"||ext==L".ax"||ext==L".node"||ext==L".drv";
+}
+static void begin() {
+    pending.clear(); hits.clear(); next=0; unreadable=0; active=false;
+    std::unordered_set<std::wstring> unique;
+    HANDLE procs=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    if(procs==INVALID_HANDLE_VALUE)return;
+    PROCESSENTRY32W pe{}; pe.dwSize=sizeof(pe);
+    if(Process32FirstW(procs,&pe)) do {
+        HANDLE modules=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pe.th32ProcessID);
+        if(modules==INVALID_HANDLE_VALUE)continue;
+        MODULEENTRY32W me{};me.dwSize=sizeof(me);
+        if(Module32FirstW(modules,&me))do {
+            std::wstring path=me.szExePath;
+            if(relevantExtension(path)&&unique.insert(path).second && pending.size()<2000)
+                pending.push_back(std::move(path));
+        }while(Module32NextW(modules,&me)&&pending.size()<2000);
+        CloseHandle(modules);
+    }while(Process32NextW(procs,&pe)&&pending.size()<2000);
+    CloseHandle(procs);
+    active=true;
+}
+static void step() {
+    if(!active)return;
+    // One bounded read per UI frame to avoid blocking rendering for long periods.
+    if(next>=pending.size()){active=false;return;}
+    const auto& path=pending[next++];
+    std::ifstream f(std::filesystem::path(path),std::ios::binary);
+    if(!f){++unreadable;return;}
+    std::vector<char> bytes(1024*1024);
+    f.read(bytes.data(),static_cast<std::streamsize>(bytes.size()));
+    bytes.resize(static_cast<size_t>(f.gcount()));
+    if(bytes.size()<64||bytes[0]!='M'||bytes[1]!='Z'){++unreadable;return;}
+    // Verify PE header bounds; not a full parser or Detect It Easy integration.
+    uint32_t peoff=0;
+    std::memcpy(&peoff,bytes.data()+0x3c,sizeof(peoff));
+    if(peoff>bytes.size()-4||std::memcmp(bytes.data()+peoff,"PE\0\0",4)!=0){++unreadable;return;}
+    std::string ascii,utf16;
+    ascii.reserve(bytes.size());utf16.reserve(bytes.size()/2);
+    for(size_t i=0;i<bytes.size();++i) {
+        unsigned char c=static_cast<unsigned char>(bytes[i]);
+        ascii.push_back(c>=32&&c<=126?static_cast<char>(c):' ');
+    }
+    for(size_t i=0;i+1<bytes.size();i+=2){
+        unsigned char a=static_cast<unsigned char>(bytes[i]),b=static_cast<unsigned char>(bytes[i+1]);
+        utf16.push_back(b==0&&a>=32&&a<=126?static_cast<char>(a):' ');
+    }
+    ascii=lower(std::move(ascii));utf16=lower(std::move(utf16));
+    std::string filename=lower(std::filesystem::path(path).filename().string());
+    for(const char* token:tokens) {
+        if(filename.find(token)!=std::string::npos||
+           ascii.find(token)!=std::string::npos||
+           utf16.find(token)!=std::string::npos){
+            if(hits.size()<300)hits.push_back({path,token});
+        }
+    }
+}
+static void render() {
+    ImGui::Separator();
+    ImGui::TextUnformatted("PE MODULE AUDIT - read-only");
+    ImGui::TextDisabled("Loaded modules: DLL / EXE / SYS / OCX / CPL / AX / NODE / DRV");
+    if(ImGui::Button("Analyze loaded modules"))begin();
+    if(active)step();
+    ImGui::Text("Inspected: %zu / %zu | Matches: %zu | Unreadable: %zu",
+                next,pending.size(),hits.size(),unreadable);
+    if(active&& !pending.empty())ImGui::ProgressBar(float(next)/float(pending.size()),ImVec2(-1,0));
+    ImGui::TextWrapped("String matches are contextual, not proof of cheating. "
+                       "Reads up to 1 MiB per PE file; inaccessible modules may be skipped.");
+    if(ImGui::BeginChild("##module_audit_hits",ImVec2(0,170),true)){
+        for(const auto& hit:hits){
+            ImGui::TextColored(ImVec4(1.f,.75f,.35f,1.f),"%s",hit.token.c_str());
+            ImGui::SameLine();
+            ImGui::TextWrapped("%ls",hit.path.c_str());
+        }
+    }
+    ImGui::EndChild();
+}
+} // namespace sync_module_audit
+
 // Compile-time XOR obfuscation for selected non-sensitive UI literals.
 // This is not cryptography; decoded text is present during use.
 namespace sync_xor {
@@ -27948,7 +28046,7 @@ static void renderUI() {
     const int navColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:3;
     const int simpleColumns=navAvailableWidth<430.f?1:navAvailableWidth<700.f?2:4;
     const int navRows=simplifiedInterface?
-        (4+simpleColumns-1)/simpleColumns:(9+navColumns-1)/navColumns;
+        (5+simpleColumns-1)/simpleColumns:(10+navColumns-1)/navColumns;
     const float navRowHeight=50.f;
     ImGui::BeginChild("##atlasNav",ImVec2(0,navRows*navRowHeight+16.f),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
@@ -28056,7 +28154,7 @@ static void renderUI() {
         if(simplifiedInterface){
             if(visible%simpleColumns!=simpleColumns-1 &&
                visible!=visibleNavCount-1)ImGui::SameLine(0,navGap);
-        }else if(i%navColumns!=navColumns-1 && i!=8){
+        }else if(visible%navColumns!=navColumns-1 && visible!=visibleNavCount-1){
             ImGui::SameLine(0,navGap);
         }
     }
@@ -28245,6 +28343,7 @@ static void renderUI() {
         ImGui::Dummy(ImVec2(0,1.f));
     } else if(page==11) {
         sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
+        sync_module_audit::render();
         ImGui::Spacing();
         if(scanning || presentationHold.load()){
             ImGui::TextColored(ImVec4(.55f,.75f,1.f,1.f),
@@ -28288,7 +28387,8 @@ static void renderUI() {
                 std::lock_guard<std::mutex> guard(dataMutex);
                 static const char* strongNames[]={
                     "p5m_location.ini", "pc5m_pvp.ini", "p5m_free.ini",
-                    "clrloader.dll", "fivem-premium.dll", "geist.dll"
+                    "clrloader.dll", "fivem-premium.dll", "geist.dll",
+                    "cheatfivem.exe"
                 };
                 static const char* contextNames[]={
                     // Additional exact names found in jean.7z.
@@ -30810,37 +30910,59 @@ zula.exe)FIVEMSTR";
                 }();
                 ImGui::Text("Unique filenames loaded: %zu",inventory.size());
                 ImGui::TextDisabled("Exact filename matches in collected records only.");
-                size_t matchingRecords = 0, shown = 0;
-                // Match bounded filename tokens rather than substrings, so a
-                // common short filename cannot match unrelated longer names.
-                static const std::regex fileToken(
-                    R"(([A-Za-z0-9_ .@(){}+-]{2,110}\.(?:exe|dll|sys|node|tmp|ini|bat|cmd|ps1|jar|dat|log|db|json|lua|asi|pak|zip|7z|txt)))",
-                    std::regex_constants::icase);
-                {
-                    std::lock_guard<std::mutex> guard(dataMutex);
-                    for(const auto& r : records) {
+                // Cache inventory lookup: do not run thousands of regex checks
+                // on the UI thread on every rendered frame.
+                static size_t cachedRecordCount = static_cast<size_t>(-1);
+                static size_t cachedMatchingRecords = 0;
+                static std::vector<std::string> cachedMatches;
+                static std::vector<Record> evidenceSnapshot;
+                static size_t inventoryCursor = 0;
+                if(inspectionResultsReady() && cachedRecordCount != recordCount.load()){
+                    cachedMatches.clear();
+                    cachedMatchingRecords = 0;
+                    {
+                        std::lock_guard<std::mutex> guard(dataMutex);
+                        evidenceSnapshot = records;
+                    }
+                    inventoryCursor = 0;
+                    cachedRecordCount = evidenceSnapshot.size();
+                }
+                if(inspectionResultsReady() && inventoryCursor < evidenceSnapshot.size()){
+                    static const std::regex fileToken(
+                        R"(([A-Za-z0-9_ .@(){}+-]{2,110}\\.(?:exe|dll|sys|node|tmp|ini|bat|cmd|ps1|jar|dat|log|db|json|lua|asi|pak|zip|7z|txt)))",
+                        std::regex_constants::icase);
+                    const size_t batchEnd = (std::min)(inventoryCursor+80,evidenceSnapshot.size());
+                    for(;inventoryCursor<batchEnd;++inventoryCursor){
+                        const auto& r = evidenceSnapshot[inventoryCursor];
                         const std::string hay = r.name + " " + r.detail;
                         bool matched = false;
                         for(std::sregex_iterator it(hay.begin(),hay.end(),fileToken), last;
-                            it != last; ++it) {
+                            it != last; ++it){
                             std::string candidate = it->str();
                             std::transform(candidate.begin(),candidate.end(),candidate.begin(),
                                 [](unsigned char c){return static_cast<char>(std::tolower(c));});
-                            // Strip a leading space that can be part of a token.
                             const size_t first = candidate.find_first_not_of(' ');
                             if(first != std::string::npos && first)
                                 candidate.erase(0,first);
                             if(inventory.find(candidate)==inventory.end())continue;
                             matched = true;
-                            if(shown < 40) {
-                                ImGui::BulletText("%s | %s",candidate.c_str(),r.category.c_str());
-                                ++shown;
-                            }
+                            if(cachedMatches.size()<40)
+                                cachedMatches.push_back(candidate+" | "+r.category);
                             break;
                         }
-                        if(matched)++matchingRecords;
+                        if(matched)++cachedMatchingRecords;
+                    }
+                    if(inventoryCursor==evidenceSnapshot.size()){
+                        std::vector<Record>().swap(evidenceSnapshot);
                     }
                 }
+                if(inspectionResultsReady() && !evidenceSnapshot.empty())
+                    ImGui::TextDisabled("Indexing evidence: %zu / %zu",
+                        inventoryCursor,evidenceSnapshot.size());
+                for(const auto& match : cachedMatches)
+                    ImGui::BulletText("%s",match.c_str());
+                const size_t matchingRecords = cachedMatchingRecords;
+                const size_t shown = cachedMatches.size();
                 ImGui::Text("Matching evidence records: %zu",matchingRecords);
                 if(matchingRecords>shown)ImGui::TextDisabled("Showing first 40 records.");
                 ImGui::TextDisabled("Context only. Does not change the verdict.");
