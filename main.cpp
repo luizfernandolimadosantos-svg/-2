@@ -510,6 +510,30 @@ static void drawCustomDetectionPreferences() {
             saveCustomDetections();
         }
     }
+    // Rule preview is informational and never changes scan verdicts.
+    if(ImGui::Button("Test rule on current scan")){
+        if(scanning.load() || !done.load()){
+            customDetectionMessage="Complete a scan before testing a rule.";
+        }else{
+        const std::string query=customDetectionLower(customDetectionInput);
+        if(query.size()>=4){
+            size_t previewCount=0;
+            std::string example;
+            {
+                std::lock_guard<std::mutex> guard(dataMutex);
+                for(const auto& item:records){
+                    if(customDetectionLower(item.name+" "+item.detail).find(query)==std::string::npos)
+                        continue;
+                    ++previewCount;
+                    if(example.empty())example=item.name;
+                }
+            }
+            customDetectionMessage="Preview: "+std::to_string(previewCount)+
+                " matching evidence records (not proof)."+
+                (example.empty()?std::string():std::string(" Example: ")+example);
+        }else customDetectionMessage="Enter at least 4 characters to test.";
+        }
+    }
     ImGui::TextDisabled("Tip: prefer an exact filename, unique path fragment or verified hash over generic words like 'hack'.");
     ImGui::TextDisabled("A rule only matches data the scan actually collected; a missing match does not prove absence.");
     ImGui::TextDisabled("Custom matches are review leads, never automatic proof of cheating.");
@@ -25986,7 +26010,8 @@ static void applyTheme() {
     st.ItemSpacing=ImVec2(12.f,densityIndex==0?9.f:densityIndex==2?14.f:11.f);
     st.ItemInnerSpacing=ImVec2(9.f,7.f);
     st.CellPadding=ImVec2(15.f,densityIndex==0?10.f:densityIndex==2?16.f:13.f);
-    st.ScrollbarSize=scrollbarWidth==0?11.f:scrollbarWidth==1?13.f:16.f;
+    st.ScrollbarSize=scrollbarWidth==0?12.f:scrollbarWidth==1?15.f:18.f;
+    st.GrabMinSize=15.f;
     st.GrabMinSize=15.f;
     st.TouchExtraPadding=ImVec2(2.f,2.f);
     st.IndentSpacing=21.f;
@@ -28156,8 +28181,8 @@ static void drawScanSummaryNew() {
         ImGui::TextDisabled("EVIDENCE RECORDS");
         ImGui::Text("%zu",recordCount.load());
         ImGui::TableSetColumnIndex(2);
-        ImGui::TextDisabled("FILES");
-        ImGui::Text("%zu",fileCount.load());
+        ImGui::TextDisabled("PE FILES");
+        ImGui::Text("%zu",peFilesInspected.load());
         ImGui::EndTable();
     }
     ImGui::Spacing();
@@ -28256,7 +28281,9 @@ static void drawStreamproofReview(){
                value.find("stream proof")==std::string::npos &&
                value.find("capture exclusion")==std::string::npos &&
                value.find("display affinity")==std::string::npos)continue;
-            const bool strong=isDetectedRecord(r);
+            const bool strong=isDetectedRecord(r) &&
+                !isSuspectRecord(r) &&
+                r.category!="FiveM Cheat Name Detection";
             matches.push_back({r.category,r.name,r.detail,strong});
         }
     }
@@ -28305,6 +28332,8 @@ static void drawStreamproofReview(){
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled("MATCHING SCAN EVIDENCE");
+    ImGui::SameLine();
+    ImGui::TextDisabled("| %zu unique items",matches.size());
     ImGui::SameLine();
     ImGui::TextDisabled("| %zu unique observations",matches.size());
     static char streamproofFilter[160]{};
@@ -31476,12 +31505,59 @@ zula.exe)FIVEMSTR";
             ImGui::SameLine();
             if(ImGui::Button("View results",ImVec2(150,48)))page=9;
         }
-        ImGui::Dummy(ImVec2(0,15));
-        ImGui::Separator();
-        ImGui::Text("Processes: %zu",processCount.load());
-        ImGui::Text("Evidence records: %zu",recordCount.load());
-        ImGui::Text("Files checked: %zu",fileCount.load());
-        ImGui::Text("Status: %s",stateText());
+        // Live scan telemetry, attached to the main scan action.
+        ImGui::Dummy(ImVec2(0,12));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.088f,.108f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.24f,.29f,.35f,.85f));
+        ImGui::BeginChild("##live_scan_telemetry",ImVec2(0,scanning.load()?147.f:124.f),
+            ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::TextColored(ImVec4(.82f,.88f,.95f,1.f),"LIVE SCAN ACTIVITY");
+        ImGui::SameLine();
+        if(scanning.load()) {
+            const char* frames[]={"|","/","-","\\"};
+            const int frame=static_cast<int>(ImGui::GetTime()*9.0)%4;
+            ImGui::TextColored(ImVec4(.58f,.82f,.98f,1.f),"%s RUNNING",frames[frame]);
+        }else if(done.load() && !scanFailed.load() && !scanCancelled.load()){
+            ImGui::TextColored(ImVec4(.45f,.83f,.57f,1.f),"COMPLETED");
+        }else{
+            ImGui::TextDisabled("%s",stateText());
+        }
+        if(scanning.load()){
+            ImGui::TextDisabled("Completed phases: %d / %d | Results are provisional",
+                completedStages.load(),totalStages.load());
+        }else if(scanCancelled.load()){
+            ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),"Cancelled - partial evidence");
+        }else if(scanFailed.load()){
+            ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"Interrupted - inspect diagnostics");
+        }
+        if(ImGui::BeginTable("##live_telemetry_values",3,
+            ImGuiTableFlags_SizingStretchSame)){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextDisabled("PROCESSES");
+            ImGui::Text("%zu",processCount.load());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextDisabled("EVIDENCE");
+            ImGui::Text("%zu",recordCount.load());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextDisabled("PE FILES CHECKED");
+            ImGui::Text("%zu",peFilesInspected.load());
+            ImGui::EndTable();
+        }
+        if(scanning.load() && brandAnimation && !reducedMotion){
+            const float phase=static_cast<float>(std::fmod(ImGui::GetTime()*1.2,1.0));
+            const ImVec2 q=ImGui::GetCursorScreenPos();
+            const float w=ImGui::GetContentRegionAvail().x;
+            ImGui::GetWindowDrawList()->AddRectFilled(q,
+                ImVec2(q.x+w,q.y+3.f),IM_COL32(42,52,65,255),2.f);
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(q.x+w*phase,q.y),
+                ImVec2(q.x+(std::min)(w,w*phase+36.f),q.y+3.f),
+                IM_COL32(169,202,235,210),2.f);
+            ImGui::Dummy(ImVec2(w,5.f));
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
         if(scanFailed){
             ImGui::Separator();
             ImGui::TextColored(ImVec4(1.f,.37f,.37f,1.f),
@@ -31593,7 +31669,7 @@ zula.exe)FIVEMSTR";
             ImGui::Separator();
             ImGui::TextColored(quiet,"PROCESSES");ImGui::SameLine(145);ImGui::Text("%zu",processCount.load());
             ImGui::TextColored(quiet,"SYSTEM RECORDS");ImGui::SameLine(145);ImGui::Text("%zu",recordCount.load());
-            ImGui::TextColored(quiet,"FILES VERIFIED");ImGui::SameLine(145);ImGui::Text("%zu",fileCount.load());
+            ImGui::TextColored(quiet,"PE FILES CHECKED");ImGui::SameLine(145);ImGui::Text("%zu",peFilesInspected.load());
             ImGui::TextColored(quiet,"DEFENDER EVENTS");ImGui::SameLine(145);ImGui::Text("%d",defenderAlerts.load());
             ImGui::Separator();
             ImGui::TextColored(quiet,"%s",stateText());
@@ -31602,8 +31678,8 @@ zula.exe)FIVEMSTR";
         }else{
             ImGui::TextColored(quiet,"PROCESSES: %zu    RECORDS: %zu",
                 processCount.load(),recordCount.load());
-            ImGui::TextColored(quiet,"FILES VERIFIED: %zu    DEFENDER EVENTS: %d",
-                fileCount.load(),defenderAlerts.load());
+            ImGui::TextColored(quiet,"PE FILES CHECKED: %zu    DEFENDER EVENTS: %d",
+                peFilesInspected.load(),defenderAlerts.load());
         }
         ImGui::Dummy(ImVec2(0,16));
         if(defenderAlerts.load()>0){
