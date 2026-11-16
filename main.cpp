@@ -2655,6 +2655,70 @@ static std::vector<Record> inspectArtifactLocations(){
                 "Some files in this location may not have been checked."});
         }
     }
+    // V53: dedicated exact-filename discovery across mounted fixed/removable
+    // volumes. This is independent of the inventory cap and does not rely on
+    // a filename appearing in the first 2,200 inventory rows.
+    DWORD drives=GetLogicalDrives();
+    size_t volumeEntries=0,volumeErrors=0,volumeCaps=0,exactHits=0;
+    size_t volumeCount=0;
+    std::unordered_set<std::wstring> exactPaths;
+    for(int letter=0;letter<26 && !cancelRequested;++letter){
+        if(!(drives&(1u<<letter)))continue;
+        const std::wstring root=std::wstring(1,wchar_t(L'A'+letter))+L":\\";
+        const UINT kind=GetDriveTypeW(root.c_str());
+        if(kind!=DRIVE_FIXED && kind!=DRIVE_REMOVABLE)continue;
+        ++volumeCount;
+        std::error_code ec;
+        fs::recursive_directory_iterator it(root,
+            fs::directory_options::skip_permission_denied,ec),end;
+        if(ec){
+            ++volumeErrors;
+            out.push_back({"Artifact Scan Coverage",utf8(root),
+                "INCOMPLETE | Volume cannot be enumerated: "+ec.message()});
+            continue;
+        }
+        size_t visited=0;
+        constexpr size_t volumeVisitLimit=250000;
+        while(it!=end && !cancelRequested && visited<volumeVisitLimit){
+            std::error_code fileEc;
+            if(it->is_symlink(fileEc))it.disable_recursion_pending();
+            if(it->is_regular_file(fileEc) && !fileEc){
+                const fs::path candidate=it->path();
+                const std::wstring filename=lowerPath(candidate.filename().wstring());
+                if(filename==L"cheat.exe"){
+                    const std::wstring normalized=lowerPath(candidate.wstring());
+                    if(exactPaths.insert(normalized).second){
+                        ++exactHits;
+                        out.push_back({"FiveM Cheat Name Detection",
+                            utf8(candidate.filename().wstring()),
+                            "SUSPECT - EXACT FILENAME MATCH | Found cheat.exe on mounted volume. "
+                            "Path: "+utf8(candidate.wstring())+
+                            " | Filename is not proof of malicious behavior."});
+                    }
+                }
+            }
+            ++visited;
+            ++volumeEntries;
+            it.increment(ec);
+            if(ec){
+                ++volumeErrors;
+                ec.clear();
+            }
+        }
+        if(visited>=volumeVisitLimit){
+            ++volumeCaps;
+            out.push_back({"Artifact Scan Coverage",utf8(root),
+                "PARTIAL SCAN | Exact-name discovery reached its 250,000-entry "
+                "safety limit on this volume."});
+        }
+    }
+    out.push_back({"Artifact Scan Coverage","Exact cheat.exe discovery",
+        "READ-ONLY | Mounted fixed/removable volumes="+std::to_string(volumeCount)+
+        " | Entries visited="+std::to_string(volumeEntries)+
+        " | Exact filename matches="+std::to_string(exactHits)+
+        " | Enumeration errors="+std::to_string(volumeErrors)+
+        " | Volumes at safety limit="+std::to_string(volumeCaps)+
+        " | Zero matches is not proof that the file does not exist."});
     out.push_back({"Artifact Scan Coverage","File discovery summary",
         "READ-ONLY | Roots requested="+std::to_string(roots.size())+
         " | Entries visited="+std::to_string(totalVisited)+
