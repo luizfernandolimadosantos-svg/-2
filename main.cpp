@@ -2171,6 +2171,24 @@ static std::vector<Record> inspectFirmwareAndDmaIndicators(){
             (secureBoot==0?" | REVIEW: Secure Boot disabled":
              " | Reported enabled")});
     }
+    // EFI / boot posture: read-only Windows-reported configuration,
+    // not independent proof of firmware tampering.
+    const struct {const wchar_t* key;const wchar_t* name;const char* label;} bootChecks[]={
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+         L"SecureBootCapable","Secure Boot capability"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot",
+         L"SecureBootUpdates","Secure Boot update flags"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\BitLocker",
+         L"PreventDeviceEncryption","Device encryption policy"},
+    };
+    for(const auto& check:bootChecks){
+        if(cancelRequested)break;
+        DWORD value=0;
+        if(readRegistryDword(HKEY_LOCAL_MACHINE,check.key,check.name,value))
+            out.push_back({"UEFI / EFI Boot Posture",check.label,
+                "Windows-reported DWORD="+std::to_string(value)+
+                " | Configuration review only; not proof of EFI compromise"});
+    }
     const struct{const wchar_t* key;const wchar_t* name;const char* label;} checks[]={
         {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
          L"EnableVirtualizationBasedSecurity","VBS configured"},
@@ -2188,6 +2206,28 @@ static std::vector<Record> inspectFirmwareAndDmaIndicators(){
          L"DenyUnspecified","Device installation restrictions"},
         {L"SYSTEM\\CurrentControlSet\\Control\\Lsa",
          L"RunAsPPL","LSA protection configuration"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Config",
+         L"VulnerableDriverBlocklistEnable","Vulnerable driver blocklist"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+         L"VerifiedAndReputablePolicyState","Code integrity reputation policy"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+         L"FeatureSettingsOverride","Kernel mitigation feature override"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+         L"FeatureSettingsOverrideMask","Kernel mitigation override mask"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard",
+         L"Locked","Device Guard configuration lock"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+         L"Locked","HVCI configuration lock"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+         L"WasEnabledBy","HVCI configuration provenance"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot",
+         L"AvailableUpdates","Secure Boot update configuration"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\SecureBoot",
+         L"UEFICA2023Status","UEFI certificate update status"},
+        {L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+         L"GlobalFlag","Image execution global diagnostic flags"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+         L"ProtectionMode","Session manager protection mode"},
     };
     for(const auto& check:checks){
         if(cancelRequested)break;
@@ -2536,11 +2576,14 @@ static std::vector<Record> inspectCheatNamedModules(
 }
 
 
-// Exact, case-insensitive executable filename indicators. These are leads
-// for manual review, never proof of FiveM cheating or successful injection.
+// Exact case-insensitive executable/DLL filename indicators.
+// DETECTED here means a named indicator was found, NOT confirmed cheating.
+// Always retain the evidence path and allow human review.
 static bool isKnownFiveMReviewFilename(const std::wstring& input){
     static const std::unordered_set<std::wstring> names={
-        L"cheat.exe",L"inject.exe",L"injecthelp.exe",
+        L"cheat.exe",L"cheat.dll",L"bypass.exe",L"bypass.dll",
+        L"fivembypass.exe",L"fivembypass.dll",L"anticheatbypass.dll",
+        L"inject.dll",L"inject.exe",L"injecthelp.exe",
         L"shark.exe",L"sharkmenu.exe",
         L"redengine.exe",L"eulen.exe",L"skript.gg.exe",
         L"tzproject.exe",L"lynxmenu.exe",L"hammafia.exe",
@@ -2571,6 +2614,147 @@ static bool isKnownFiveMReviewFilename(const std::wstring& input){
         L"esp.exe",L"wallhack.exe",L"silentaim.exe"
     };
     return names.find(lowerPath(fs::path(input).filename().wstring()))!=names.end();
+}
+
+// V63: safe, bounded static triage based on the supplied JS detection
+// families. This is NOT execution tracing or memory-injection detection.
+static std::string inspectStaticBehaviorIndicators(const fs::path& file){
+    const std::wstring filename=lowerPath(file.filename().wstring());
+    const std::wstring full=lowerPath(file.wstring());
+    std::vector<std::string> flags;
+    // Suspicious masquerading and double extensions from custom3.js.
+    const wchar_t* decoys[]={L".pdf.exe",L".doc.exe",L".docx.exe",
+        L".jpg.exe",L".png.exe",L".txt.exe",L".zip.exe",L".mp4.exe",
+        L".pdf.scr",L".doc.scr"};
+    for(const wchar_t* suffix:decoys){
+        const std::wstring t=suffix;
+        if(filename.size()>=t.size() &&
+           filename.compare(filename.size()-t.size(),t.size(),t)==0){
+            flags.push_back("DOUBLE_EXTENSION");
+            break;
+        }
+    }
+    const wchar_t* impersonators[]={L"svch0st.exe",L"expl0rer.exe",
+        L"lsasss.exe",L"csrsss.exe",L"winlog0n.exe"};
+    for(const wchar_t* bad:impersonators)
+        if(filename==bad){flags.push_back("SYSTEM_PROCESS_LOOKALIKE");break;}
+    const bool userWritable=
+        full.find(L"\\downloads\\")!=std::wstring::npos ||
+        full.find(L"\\desktop\\")!=std::wstring::npos ||
+        full.find(L"\\temp\\")!=std::wstring::npos ||
+        full.find(L"\\appdata\\")!=std::wstring::npos;
+    // Scan a bounded portion only; do not execute or load the PE.
+    HANDLE h=CreateFileW(file.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+        OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return "";
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(h,&size) || size.QuadPart<64){
+        CloseHandle(h);return "";
+    }
+    constexpr DWORD maxRead=1024*1024;
+    const DWORD want=static_cast<DWORD>((std::min)(
+        size.QuadPart,static_cast<LONGLONG>(maxRead)));
+    std::vector<unsigned char> bytes(want);
+    DWORD got=0;
+    const bool readOK=ReadFile(h,bytes.data(),want,&got,nullptr)!=FALSE;
+    CloseHandle(h);
+    if(!readOK || got<64)return "";
+    bytes.resize(got);
+    if(bytes[0]!='M' || bytes[1]!='Z')return "";
+    DWORD peOffset=0;
+    memcpy(&peOffset,bytes.data()+0x3c,4);
+    if(peOffset>got || got-peOffset<24 ||
+       memcmp(bytes.data()+peOffset,"PE\0\0",4)!=0)return "";
+    IMAGE_FILE_HEADER fh{};
+    memcpy(&fh,bytes.data()+peOffset+4,sizeof(fh));
+    const size_t sectionsAt=static_cast<size_t>(peOffset)+24+fh.SizeOfOptionalHeader;
+    if(fh.NumberOfSections<=96 && sectionsAt<=got &&
+       fh.NumberOfSections<=(got-sectionsAt)/sizeof(IMAGE_SECTION_HEADER)){
+        size_t highEntropy=0,execWritable=0;
+        for(size_t i=0;i<fh.NumberOfSections;i++){
+            IMAGE_SECTION_HEADER sec{};
+            memcpy(&sec,bytes.data()+sectionsAt+i*sizeof(sec),sizeof(sec));
+            if((sec.Characteristics & IMAGE_SCN_MEM_EXECUTE) &&
+               (sec.Characteristics & IMAGE_SCN_MEM_WRITE))++execWritable;
+            if(sec.SizeOfRawData>=512 && sec.PointerToRawData<got &&
+               sec.SizeOfRawData<=got-sec.PointerToRawData){
+                // Entropy on up to 64 KiB of each fully readable section.
+                const size_t n=(std::min)(static_cast<size_t>(sec.SizeOfRawData),
+                    static_cast<size_t>(65536));
+                size_t freq[256]={};
+                for(size_t j=0;j<n;j++)++freq[bytes[sec.PointerToRawData+j]];
+                double entropy=0;
+                for(size_t count:freq)if(count){
+                    const double prob=static_cast<double>(count)/n;
+                    entropy-=prob*std::log2(prob);
+                }
+                if(entropy>=7.4)++highEntropy;
+            }
+        }
+        if(execWritable)flags.push_back("WRITABLE_EXECUTABLE_SECTION");
+        if(highEntropy)flags.push_back("HIGH_SECTION_ENTROPY");
+    }
+    // Import-name strings alone are only capabilities, not proof of usage.
+    // Require multiple related names plus a writable/user-controlled path.
+    if(userWritable){
+        const std::string blob(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+        auto has=[&](const char* api){return blob.find(api)!=std::string::npos;};
+        const bool alloc=has("VirtualAllocEx")||has("NtAllocateVirtualMemory");
+        const bool write=has("WriteProcessMemory")||has("NtWriteVirtualMemory");
+        const bool apc=has("QueueUserAPC")||has("NtQueueApcThread");
+        const bool remote=has("CreateRemoteThread")||has("NtCreateThreadEx");
+        const bool hollow=has("NtUnmapViewOfSection")||has("ZwUnmapViewOfSection");
+        if(alloc && write && (apc||remote||hollow))
+            flags.push_back("STATIC_INJECTION_API_STRING_CLUSTER");
+        else if(apc && (alloc||write))
+            flags.push_back("APC_API_STRING_CLUSTER");
+        if(hollow && has("SetThreadContext") && has("ResumeThread"))
+            flags.push_back("HOLLOWING_API_STRING_CLUSTER");
+    }
+    if(flags.empty())return "";
+    std::string joined;
+    for(const auto& f:flags){if(!joined.empty())joined+="; ";joined+=f;}
+    return joined;
+}
+
+// V62: bounded, read-only static PE header inspection. Never loads or
+// executes scanned binaries. A malformed header is not malware proof.
+static std::string inspectPortableExecutableHeader(const fs::path& file){
+    HANDLE h=CreateFileW(file.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+        OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return "UNREADABLE";
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(h,&size)){CloseHandle(h);return "UNREADABLE";}
+    if(size.QuadPart<64){CloseHandle(h);return "INVALID PE: file too small";}
+    unsigned char buf[4096]={};
+    DWORD got=0;
+    const BOOL ok=ReadFile(h,buf,sizeof(buf),&got,nullptr);
+    CloseHandle(h);
+    if(!ok || got<64)return "UNREADABLE";
+    if(buf[0]!='M' || buf[1]!='Z')return "INVALID PE: missing MZ signature";
+    DWORD offset=0;
+    memcpy(&offset,buf+0x3c,sizeof(offset));
+    if(offset>got || got-offset<sizeof(DWORD)+sizeof(IMAGE_FILE_HEADER))
+        return "REVIEW: PE header beyond first 4 KiB";
+    if(memcmp(buf+offset,"PE\0\0",4)!=0)
+        return "INVALID PE: missing PE signature";
+    IMAGE_FILE_HEADER fh{};
+    memcpy(&fh,buf+offset+4,sizeof(fh));
+    if(fh.NumberOfSections==0 || fh.NumberOfSections>96)
+        return "REVIEW: unusual PE section count "+std::to_string(fh.NumberOfSections);
+    if(fh.SizeOfOptionalHeader<2 ||
+       offset+4+sizeof(fh)+2>got)
+        return "INVALID PE: truncated optional header";
+    WORD magic=0;
+    memcpy(&magic,buf+offset+4+sizeof(fh),sizeof(magic));
+    if(magic!=IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+       magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return "INVALID PE: unsupported optional header";
+    if(fh.TimeDateStamp==0)
+        return "REVIEW: PE timestamp is zero";
+    return "";
 }
 
 // Read-only artifact inventory. Bounded directory traversal avoids unbounded
@@ -2698,6 +2882,9 @@ static std::vector<Record> inspectArtifactLocations(){
     DWORD drives=GetLogicalDrives();
     size_t volumeEntries=0,volumeErrors=0,volumeCaps=0,exactHits=0;
     size_t volumeCount=0;
+    size_t peChecked=0,peIssues=0,peUnreadable=0,fiveMNearby=0;
+    constexpr size_t maxPeChecks=120000;
+    constexpr size_t maxPeIssueRows=1500;
     std::unordered_set<std::wstring> exactPaths;
     for(int letter=0;letter<26 && !cancelRequested;++letter){
         if(!(drives&(1u<<letter)))continue;
@@ -2722,15 +2909,54 @@ static std::vector<Record> inspectArtifactLocations(){
             if(it->is_regular_file(fileEc) && !fileEc){
                 const fs::path candidate=it->path();
                 const std::wstring filename=lowerPath(candidate.filename().wstring());
+                const std::wstring extension=lowerPath(candidate.extension().wstring());
+                if((extension==L".exe" || extension==L".dll" || extension==L".sys")
+                   && peChecked<maxPeChecks){
+                    ++peChecked;
+                    const std::string issue=inspectPortableExecutableHeader(candidate);
+                    // Additional static indicators from custom1/2/3 and APC/hollowing
+                    // references; no memory scan is claimed.
+                    if(issue.empty() && peIssues<maxPeIssueRows){
+                        const std::string staticFlags=inspectStaticBehaviorIndicators(candidate);
+                        if(!staticFlags.empty()){
+                            ++peIssues;
+                            out.push_back({"Static Injection / PE Triage",
+                                utf8(candidate.filename().wstring()),
+                                "SUSPECT - STATIC INDICATORS | "+staticFlags+
+                                " | Path: "+utf8(candidate.wstring())+
+                                " | These are capabilities/metadata, not proof of injection."});
+                        }
+                    }
+                    if(issue=="UNREADABLE")++peUnreadable;
+                    else if(!issue.empty()){
+                        ++peIssues;
+                        if(peIssues<=maxPeIssueRows)
+                            out.push_back({"Executable / DLL Static Review",
+                                utf8(candidate.filename().wstring()),
+                                "SUSPECT - STATIC PE REVIEW | "+issue+
+                                " | Path: "+utf8(candidate.wstring())+
+                                " | Anomalous metadata does not prove cheating."});
+                    }
+                    const std::wstring full=lowerPath(candidate.wstring());
+                    if(full.find(L"fivem")!=std::wstring::npos &&
+                       fiveMNearby<500){
+                        ++fiveMNearby;
+                        out.push_back({"FiveM Nearby Binary Inventory",
+                            utf8(candidate.filename().wstring()),
+                            "INFO - EXE/DLL/SYS located in a path mentioning FiveM | Path: "+
+                            utf8(candidate.wstring())+
+                            " | Location alone is not evidence of injection."});
+                    }
+                }
                 if(isKnownFiveMReviewFilename(filename)){
                     const std::wstring normalized=lowerPath(candidate.wstring());
                     if(exactPaths.insert(normalized).second){
                         ++exactHits;
                         out.push_back({"FiveM Cheat Name Detection",
                             utf8(candidate.filename().wstring()),
-                            "SUSPECT - EXACT FILENAME MATCH | Known review filename on mounted volume. "
+                            "DETECTED - EXACT FILENAME INDICATOR MATCH | Named executable/DLL indicator on mounted volume. "
                             "Path: "+utf8(candidate.wstring())+
-                            " | Filename-only heuristic: benign software can share this name."});
+                            " | DETECTED refers to the filename indicator only; benign software may share this name."});
                     }
                 }
             }
@@ -2749,6 +2975,13 @@ static std::vector<Record> inspectArtifactLocations(){
                 "safety limit on this volume."});
         }
     }
+    out.push_back({"Executable / DLL Static Review","Whole-volume PE inspection coverage",
+        "READ-ONLY | EXE/DLL/SYS headers checked="+std::to_string(peChecked)+
+        " | Header anomalies="+std::to_string(peIssues)+
+        " | Unreadable="+std::to_string(peUnreadable)+
+        " | FiveM-path binaries listed="+std::to_string(fiveMNearby)+
+        " | Header-check cap="+std::to_string(maxPeChecks)+
+        " | Not a full binary disassembly, malware verdict or guarantee of whole-disk coverage."});
     out.push_back({"Artifact Scan Coverage","Exact review-filename discovery",
         "READ-ONLY | Mounted fixed/removable volumes="+std::to_string(volumeCount)+
         " | Entries visited="+std::to_string(volumeEntries)+
@@ -25490,9 +25723,9 @@ static void scanWorker() {
                isKnownFiveMReviewFilename(proc.path)){
                 exactRunningMatches.push_back({
                     "Running Process Filename Review",utf8(proc.name),
-                    "SUSPECT - EXACT RUNNING PROCESS NAME | PID "+
+                    "DETECTED - EXACT RUNNING PROCESS INDICATOR | PID "+
                     std::to_string(proc.pid)+" | Image: "+utf8(proc.path)+
-                    " | Name alone is not proof of cheating."});
+                    " | DETECTED refers to the filename indicator only; this is not proof of cheating."});
             }
         }
         std::unordered_map<DWORD,std::wstring> observedPrevious;
