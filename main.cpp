@@ -25615,7 +25615,7 @@ static float inspectionSmoothFraction(){
         now-inspectionDisplayLastTick),0.f,.1f);
     inspectionDisplayLastTick=now;
     // A damped, frame-rate-independent easing curve; no synthetic scan work.
-    const float alpha=1.f-std::exp(-7.f*dt);
+    const float alpha=1.f-std::exp(-.85f*dt);
     shown+=(target-shown)*alpha;
     if(target-shown<.0015f)shown=target;
     shown=std::clamp(shown,0.f,target);
@@ -27811,7 +27811,7 @@ static void drawAtlasProgress(bool compact=false){
     ImGui::ProgressBar(fraction,ImVec2(-1.f,compact?12.f:18.f),"");
     ImGui::PopStyleColor(2);
     ImGui::TextDisabled("%s",scanning.load()?"Collecting system evidence...":
-        done.load()?"Inspection complete.":"Ready for inspection.");
+        done.load()?"Scan complete - preparing results...":"Ready for inspection.");
     ImGui::PopID();
 }
 
@@ -27907,7 +27907,7 @@ static void beginStartupWindowExpand(){
 static void updateStartupWindowExpand(){
     if(!startupWindowExpandActive || !hwnd)return;
     const double elapsed=ImGui::GetTime()-startupWindowExpandAt;
-    const float progress=syncIntroEase(static_cast<float>(elapsed/1.20));
+    const float progress=syncIntroEase(static_cast<float>(elapsed/2.20));
     auto lerp=[&](int a,int b){return static_cast<int>(std::lround(
         static_cast<double>(a)+(static_cast<double>(b)-a)*progress));};
     const int x=lerp(startupWindowFrom.left,startupWindowTo.left);
@@ -27942,7 +27942,7 @@ static void renderSyncOpening() {
         return syncIntroEase((elapsed-begin)/duration);
     };
     const float welcomeOpacity=transitioning?1.f-fade(.10f,.65f):1.f;
-    const float loadingOpacity=transitioning?fade(.45f,.55f)*(1.f-fade(2.65f,.35f)):0.f;
+    const float loadingOpacity=transitioning?fade(.45f,.55f)*(1.f-fade(4.85f,.55f)):0.f;
     auto ink=[](int gray,float alpha) {
         return IM_COL32(gray,gray,gray,(int)(255.f*(std::max)(0.f,(std::min)(1.f,alpha))));
     };
@@ -28006,7 +28006,7 @@ static void renderSyncOpening() {
             "BYPASS HUNTER"
         };
         const float captionClock=(std::max)(0.f,elapsed-.20f);
-        const float captionDuration=.68f;
+        const float captionDuration=1.05f;
         const int captionIndex=(std::min)(3,static_cast<int>(captionClock/captionDuration));
         const float captionPhase=std::clamp(
             (captionClock-captionIndex*captionDuration)/captionDuration,0.f,1.f);
@@ -28032,7 +28032,7 @@ static void renderSyncOpening() {
                     ImVec2(x+segmentWidth*fill,cy+124.f),
                     ink(240,loadingOpacity*.8f),2.f);
         }
-        if(elapsed>=3.05f) {
+        if(elapsed>=5.35f) {
             syncIntroOpen=false;
             syncIntroRevealAt=now;
         }
@@ -28127,6 +28127,62 @@ static void drawReviewQueueNew() {
         ImGui::EndTable();
     }
     // A bounded preview avoids excessive ImGui draw calls for very large scans.
+}
+
+
+// Read-only visibility review. Does not modify capture protection, hooks,
+// injected modules, process memory, or other applications.
+static void drawStreamproofReview(){
+    sectionTitle("REM STREAMPROOF","Scan indicators and visibility review");
+    const bool running=scanning.load();
+    const bool finished=done.load() && !running && !scanFailed.load() && !scanCancelled.load();
+    struct StreamproofFinding {std::string category,name,detail;};
+    std::vector<StreamproofFinding> matches;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& r:records){
+            std::string value=r.category+" "+r.name+" "+r.detail;
+            std::transform(value.begin(),value.end(),value.begin(),
+                [](unsigned char c){return static_cast<char>(std::tolower(c));});
+            if(value.find("streamproof")==std::string::npos &&
+               value.find("stream proof")==std::string::npos &&
+               value.find("capture exclusion")==std::string::npos &&
+               value.find("display affinity")==std::string::npos)continue;
+            matches.push_back({r.category,r.name,r.detail});
+        }
+    }
+    ImGui::Spacing();
+    if(running){
+        ImGui::TextColored(ImVec4(.94f,.75f,.37f,1.f),"STREAMPROOF CHECK IN PROGRESS");
+        ImGui::TextWrapped("Results may change until the scan finishes.");
+    }else if(!finished){
+        ImGui::TextDisabled("Run a scan to review streamproof indicators.");
+    }else if(!matches.empty()){
+        ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"STREAMPROOF DETECTED");
+        ImGui::TextWrapped("%zu indicator(s) matched scan evidence. "
+            "Review the entries below; a text match alone does not confirm "
+            "that an injected bypass is currently active.",matches.size());
+    }else{
+        ImGui::TextColored(ImVec4(.45f,.83f,.57f,1.f),"NO STREAMPROOF INDICATORS FOUND");
+        ImGui::TextWrapped("The scan did not find known indicators in its collected evidence. "
+            "This does not guarantee that streamproof is absent.");
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("MATCHING SCAN EVIDENCE");
+    for(size_t i=0;i<matches.size() && i<80;++i){
+        const auto& r=matches[i];
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::TextWrapped("%s",r.name.c_str());
+        ImGui::TextDisabled("%s",r.category.c_str());
+        ImGui::TextWrapped("%s",r.detail.c_str());
+        ImGui::Separator();
+        ImGui::PopID();
+    }
+    if(matches.size()>80)
+        ImGui::TextDisabled("Showing first 80 of %zu matches.",matches.size());
+    ImGui::Spacing();
+    ImGui::TextDisabled("Read-only inspection: no capture settings or processes are modified.");
 }
 
 static void renderUI() {
@@ -28273,8 +28329,8 @@ static void renderUI() {
     const float uiNow=(float)ImGui::GetTime();
     if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; }
     const char* nav[]={"OVERVIEW","VERDICT","SCAN RESULTS","ARTIFACTS",
-                       "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS"};
-    const int navPages[]={0,11,2,9,3,7,6,8,10,4};
+                       "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS","REM STREAMPROOF"};
+    const int navPages[]={0,11,2,9,3,7,6,8,10,4,12};
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
         for(int shortcut=0;shortcut<9;shortcut++){
@@ -28295,8 +28351,8 @@ static void renderUI() {
         ImGui::Separator();
         ImGui::TextDisabled("WORKSPACE");
         ImGui::Dummy(ImVec2(0,5));
-        const int simpleNavIndices[]={0,1,2,3,9};
-        const int visibleNavCount=simplifiedInterface?5:10;
+        const int simpleNavIndices[]={0,1,2,3,10,9};
+        const int visibleNavCount=simplifiedInterface?6:11;
         for(int visible=0;visible<visibleNavCount;visible++){
             const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
             if(i==4 || i==7){
@@ -28351,7 +28407,7 @@ static void renderUI() {
     const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
         page==3?"SECURITY ACTIVITY":page==6?"BINARY INTELLIGENCE":
         page==7?"NETWORK CONNECTIONS":page==8?"DRIVER AUDIT":
-        page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":"PREFERENCES";
+        page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":page==12?"STREAMPROOF REVIEW":"PREFERENCES";
     // A short title entrance signals navigation without obscuring the tables.
     const float elapsed=uiNow-navTransitionStart;
     const float entrance=reducedMotion?0.f:(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.24f);
@@ -31495,16 +31551,7 @@ zula.exe)FIVEMSTR";
                 drawEvidenceSourcesTab();
                 ImGui::EndTabItem();
             }
-            if(ImGui::BeginTabItem("Scan Quality")) {
-                drawScanQualityTab();
-                ImGui::EndTabItem();
-            }
-            if(ImGui::BeginTabItem("Scan Comparison")){
-                ImGui::TextDisabled("Scan Comparison is unavailable in single-scan mode.");
-                ImGui::TextWrapped("Restart the application to run a new verification. "
-                    "This mode does not compare two scans in one session.");
-                ImGui::EndTabItem();
-            }
+
             if(ImGui::BeginTabItem("Service Review")) {
                 drawServiceReviews();
                 ImGui::EndTabItem();
@@ -31901,7 +31948,7 @@ zula.exe)FIVEMSTR";
         }
         ImGui::Dummy(ImVec2(0,7));
         const char* types[]={"All artifacts","EXE","DLL","SYS","Prefetch",
-                             "Scripts / shortcuts","Cheat / External name matches","BAT / CMD name matches"};
+                             "Scripts","External matches","CMD matches"};
         ImGui::SetNextItemWidth(215);
         ImGui::Combo("Type##artifact", &artifactType,types,IM_ARRAYSIZE(types));
         ImGui::SameLine();
@@ -32004,6 +32051,8 @@ zula.exe)FIVEMSTR";
             }
             ImGui::EndTable();
         }
+    } else if(page==12) {
+        drawStreamproofReview();
     } else if(page==6) {
         binaryInspector::draw();
     } else if(page==4) {
