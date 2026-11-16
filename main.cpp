@@ -2564,9 +2564,21 @@ static std::vector<Record> inspectArtifactLocations(){
         addRoot(user/L"Desktop","Desktop",7);
         addRoot(user/L"Downloads","Downloads",8);
         addRoot(user/L"Documents","Documents",6);
+        addRoot(user/L"Pictures","Pictures",4);
+        addRoot(user/L"Videos","Videos",4);
+        addRoot(user/L"Music","Music",4);
+        addRoot(user/L"Saved Games","Saved Games",5);
         addRoot(user/L"AppData"/L"Local","Local AppData",5);
         addRoot(user/L"AppData"/L"Roaming","Roaming AppData",5);
     }
+    const fs::path onedrive=envRoot(L"OneDrive");
+    if(!onedrive.empty()){
+        addRoot(onedrive/L"Desktop","OneDrive Desktop",7);
+        addRoot(onedrive/L"Documents","OneDrive Documents",7);
+    }
+    const fs::path publicProfile=envRoot(L"PUBLIC");
+    if(!publicProfile.empty())
+        addRoot(publicProfile/L"Desktop","Public Desktop",5);
     const fs::path appdata=envRoot(L"APPDATA");
     if(!appdata.empty())
         addRoot(appdata/L"Microsoft"/L"Windows"/L"Start Menu"/
@@ -2578,14 +2590,22 @@ static std::vector<Record> inspectArtifactLocations(){
     const wchar_t* extensions[]={L".exe",L".dll",L".sys",L".pf",
                                   L".ps1",L".bat",L".cmd",L".vbs",L".js",L".lnk"};
     size_t inventoryCount=0,matchCount=0;
+    size_t totalVisited=0,totalSupported=0,failedDirectories=0;
+    size_t cappedRoots=0;
     std::unordered_set<std::wstring> seenMatches;
     for(const auto& root:roots){
         if(cancelRequested)break;
         std::error_code ec;
         fs::recursive_directory_iterator it(root.path,
             fs::directory_options::skip_permission_denied,ec),end;
+        if(ec){
+            ++failedDirectories;
+            out.push_back({"Artifact Scan Coverage",root.label,
+                "INCOMPLETE | Unable to enumerate directory: "+ec.message()});
+            continue;
+        }
         size_t visited=0;
-        while(it!=end && !cancelRequested && visited<20000){
+        while(it!=end && !cancelRequested && visited<60000){
             if(it.depth()>=root.depth)it.disable_recursion_pending();
             std::error_code fileEc;
             if(it->is_symlink(fileEc))it.disable_recursion_pending();
@@ -2595,6 +2615,7 @@ static std::vector<Record> inspectArtifactLocations(){
                 bool supported=false;
                 for(const wchar_t* x:extensions)if(ext==x){supported=true;break;}
                 if(supported){
+                    ++totalSupported;
                     const bool match=isCheatNameRuleMatch(path.filename().wstring());
                     const std::string name=utf8(path.filename().wstring());
                     const std::string fullPath=utf8(path.wstring());
@@ -2620,15 +2641,30 @@ static std::vector<Record> inspectArtifactLocations(){
                 }
             }
             ++visited;
+            ++totalVisited;
             it.increment(ec);
-            if(ec)ec.clear();
+            if(ec){
+                ++failedDirectories;
+                ec.clear();
+            }
         }
-        if(visited>=20000){
+        if(visited>=60000){
+            ++cappedRoots;
             out.push_back({"Artifact Scan Coverage",root.label,
-                "PARTIAL SCAN | Directory visit limit reached (20,000 entries). "
+                "PARTIAL SCAN | Directory visit limit reached (60,000 entries). "
                 "Some files in this location may not have been checked."});
         }
     }
+    out.push_back({"Artifact Scan Coverage","File discovery summary",
+        "READ-ONLY | Roots requested="+std::to_string(roots.size())+
+        " | Entries visited="+std::to_string(totalVisited)+
+        " | Supported files seen="+std::to_string(totalSupported)+
+        " | Name-rule matches="+std::to_string(matchCount)+
+        " | Inventory rows capped at 2200="+
+            std::string(totalSupported>2200?"yes":"no")+
+        " | Roots at visit limit="+std::to_string(cappedRoots)+
+        " | Enumeration errors="+std::to_string(failedDirectories)+
+        " | This is not a whole-disk scan and absence of matches is not proof of safety."});
     return out;
 }
 
@@ -26571,13 +26607,6 @@ static void modulesList() {
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(0.076f,0.076f,0.076f,1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(16.f,14.f));
         ImGui::BeginChild("##tool",ImVec2(width,180),ImGuiChildFlags_Borders);
-        if(!reducedMotion && cardT<.999f){
-            const ImVec2 p=ImGui::GetWindowPos();
-            ImGui::GetWindowDrawList()->AddLine(
-                ImVec2(p.x+2.f,p.y+2.f),
-                ImVec2(p.x+2.f+(width-4.f)*cardT,p.y+2.f),
-                IM_COL32(240,240,240,(int)(165.f*(1.f-cardT))),2.f);
-        }
         // Inner padding keeps text away from card edges; no decorative stripe
         // overlaid on the module label.
         ImGui::SetCursorPos(ImVec2(16.f,14.f));
