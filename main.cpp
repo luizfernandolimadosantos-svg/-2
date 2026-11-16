@@ -28873,37 +28873,32 @@ static void renderSyncOpening() {
     // on the fullscreen background, with no enclosing rectangle.
     // Fine editorial rails; subtle enough not to compete with text.
 
-    // V69: centered animated wordmark, with SYNC as the visual focal point.
-    // Draw-list animation is decorative only; it never changes scan results.
+    // V71: editorial stacked identity, clear of the monitor illustration.
+    // SYNC is the hero word; PC CHECKER is a restrained tracking label.
     ImFont* wordFont=ImGui::GetFont();
-    const float wordSize=ImGui::GetFontSize()*1.28f;
+    const float wordSize=ImGui::GetFontSize()*2.15f;
+    const float labelSize=ImGui::GetFontSize()*.93f;
     const char* syncWord="SYNC";
-    const char* restWord=" PC CHECKER";
+    const char* restWord="P C   C H E C K E R";
     const ImVec2 syncSize=wordFont->CalcTextSizeA(wordSize,FLT_MAX,0.f,syncWord);
-    const ImVec2 restSize=wordFont->CalcTextSizeA(wordSize,FLT_MAX,0.f,restWord);
-    const float wordX=cx-(syncSize.x+restSize.x)*.5f;
-    const float wordY=lo.y+22.f;
-    const float pulse=animate?(.5f+.5f*std::sin(clock*2.15f)):1.f;
-    // Soft monochrome glow and a restrained horizontal shimmer on SYNC.
+    const ImVec2 restSize=wordFont->CalcTextSizeA(labelSize,FLT_MAX,0.f,restWord);
+    // Keep both lines above the monitor, even on a compact viewport.
+    const float wordY=(std::max)(p.y+12.f,cy-238.f);
+    const float wordX=cx-syncSize.x*.5f;
+    const float labelY=wordY+wordSize+5.f;
+    const float pulse=animate?(.5f+.5f*std::sin(clock*1.65f)):.6f;
+    // Tiny soft glow, avoiding blurred / doubled letters.
     if(animate){
-        for(int ring=3;ring>=1;--ring){
-            const float spread=(float)ring*.8f;
-            const int alpha=(int)(7.f+9.f*pulse);
-            d->AddText(wordFont,wordSize,
-                ImVec2(wordX-spread,wordY),IM_COL32(240,240,240,alpha),syncWord);
-            d->AddText(wordFont,wordSize,
-                ImVec2(wordX+spread,wordY),IM_COL32(240,240,240,alpha),syncWord);
-        }
+        d->AddText(wordFont,wordSize,ImVec2(wordX-1.f,wordY),
+            ink(190,.10f+.07f*pulse),syncWord);
+        d->AddText(wordFont,wordSize,ImVec2(wordX+1.f,wordY),
+            ink(190,.10f+.07f*pulse),syncWord);
     }
     d->AddText(wordFont,wordSize,ImVec2(wordX,wordY),
-        ink(255,.82f+.18f*pulse),syncWord);
-    d->AddText(wordFont,wordSize,
-        ImVec2(wordX+syncSize.x,wordY),ink(190,.85f),restWord);
-    const float underlineWidth=syncSize.x*(animate?
-        (.30f+.70f*(.5f+.5f*std::sin(clock*1.35f))):1.f);
-    d->AddRectFilled(ImVec2(wordX,wordY+wordSize+5.f),
-        ImVec2(wordX+underlineWidth,wordY+wordSize+6.5f),
-        ink(230,.30f+.35f*pulse));
+        ink(255,.92f+.08f*pulse),syncWord);
+    d->AddText(wordFont,labelSize,ImVec2(cx-restSize.x*.5f,labelY),
+        ink(180,.74f+.14f*pulse),restWord);
+    // Clean wordmark: no subtitle or decorative interface caption.
     const float illustrationScale=(std::min)(1.f,
         (std::min)(cardW/590.f,cardH/405.f));
     drawSyncComputerMagnifier(d,cx,cy,illustrationScale,animate,clock);
