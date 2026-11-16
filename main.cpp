@@ -28270,12 +28270,7 @@ static void renderSyncOpening() {
     // Fine editorial rails; subtle enough not to compete with text.
     d->AddLine(ImVec2(lo.x+24.f,lo.y+55.f),
         ImVec2(hi.x-24.f,lo.y+55.f),ink(225,.24f),1.f);
-    d->AddLine(ImVec2(lo.x+24.f,hi.y-48.f),
-        ImVec2(hi.x-24.f,hi.y-48.f),ink(225,.20f),1.f);
     d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC / PC CHECKER");
-    const char* edition="NOIR  //  V46";
-    d->AddText(ImVec2(hi.x-25.f-ImGui::CalcTextSize(edition).x,lo.y+23.f),
-        ink(178,.84f),edition);
     // V46: cinematic monochrome computer + magnifier illustration.
     // All primitives are vector draw calls: no images, external assets or fonts.
     const float scale=(std::min)(1.f,(std::min)(cardW/590.f,cardH/405.f));
@@ -28308,14 +28303,14 @@ static void renderSyncOpening() {
         "SIG::VERIFY  0x8A","01011100  11100001"
     };
     const int lineCount=static_cast<int>(sizeof(terminalLines)/sizeof(terminalLines[0]));
-    const float lineHeight=10.2f*scale;
-    const float travel=animate?std::fmod(clock*13.f*scale,
+    const float lineHeight=12.0f*scale;
+    const float travel=animate?std::fmod(clock*7.f*scale,
         lineHeight*lineCount):0.f;
     for(int k=0;k<lineCount+9;++k){
         const int idx=k%lineCount;
         const float y=screenMin.y+19.f*scale+k*lineHeight-travel;
         if(y<screenMin.y+14.f*scale || y>screenMax.y-6.f*scale)continue;
-        d->AddText(nullptr,10.5f*scale,
+        d->AddText(nullptr,10.0f*scale,
             ImVec2(screenMin.x+8.f*scale,y),
             ink((k%4==0)?245:173,(k%4==0)?.88f:.64f),
             terminalLines[idx]);
@@ -28365,19 +28360,14 @@ static void renderSyncOpening() {
         d->AddCircleFilled(ImVec2(px,py),(k%3==0?1.6f:1.f)*scale,
             ink(240,.12f+.35f*pulse),8);
     }
-    const char* heading=transitioning?"INITIALIZING WORKSPACE":"SYSTEM INSPECTION";
+    const char* heading=transitioning?"OPENING CHECKER":"CHECKER";
     const ImVec2 headingSize=ImGui::CalcTextSize(heading);
     const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
     d->AddText(ImVec2(cx-headingSize.x*.5f,cy+25.f-8.f*entrance),
         ink(249,headingOpacity),heading);
-    const char* sub=transitioning?"Preparing the scanner interface":
-        "Read-only security diagnostics for FiveM";
-    const ImVec2 subSize=ImGui::CalcTextSize(sub);
-    d->AddText(ImVec2(cx-subSize.x*.5f,cy+51.f),
-        ink(164,headingOpacity*.9f),sub);
     if(!transitioning){
         const float buttonW=(std::min)(255.f,cardW-44.f);
-        ImGui::SetCursorScreenPos(ImVec2(cx-buttonW*.5f,cy+94.f));
+        ImGui::SetCursorScreenPos(ImVec2(cx-buttonW*.5f,cy+78.f));
         ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.88f,.88f,.88f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
@@ -28389,8 +28379,8 @@ static void renderSyncOpening() {
         ImGui::PopStyleColor(4);
         if(animate){
             const float sweep=.5f+.5f*std::sin(clock*1.8f);
-            d->AddLine(ImVec2(cx-buttonW*.5f+8.f,cy+144.f),
-                ImVec2(cx-buttonW*.5f+8.f+buttonW*sweep*.75f,cy+144.f),
+            d->AddLine(ImVec2(cx-buttonW*.5f+8.f,cy+128.f),
+                ImVec2(cx-buttonW*.5f+8.f+buttonW*sweep*.75f,cy+128.f),
                 ink(220,.25f),1.f);
         }
     }else{
@@ -28411,10 +28401,10 @@ static void renderSyncOpening() {
         const float trackW=(std::min)(310.f,cardW-70.f);
         const float trackX=cx-trackW*.5f;
         d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW,cy+144.f),ink(80,.65f*opacity),2.f);
+            ImVec2(trackX+trackW,cy+128.f),ink(80,.65f*opacity),2.f);
         const float progress=(std::min)(1.f,(std::max)(0.f,elapsed/4.65f));
         d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW*progress,cy+144.f),
+            ImVec2(trackX+trackW*progress,cy+128.f),
             ink(248,.98f*opacity),2.f);
         // A thin white scanning beam moves across the transition track.
         if(animate && progress>.01f){
@@ -28427,8 +28417,6 @@ static void renderSyncOpening() {
             syncIntroRevealAt=now;
         }
     }
-    const char* footer="FIVEM SECURITY  /  READ-ONLY ANALYSIS";
-    d->AddText(ImVec2(lo.x+25.f,hi.y-32.f),ink(168,.85f),footer);
     ImGui::End();
     ImGui::PopStyleColor();
 }
