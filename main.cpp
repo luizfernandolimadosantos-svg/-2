@@ -26605,7 +26605,7 @@ static void applyTheme() {
     st.TabRounding=10.f;
     st.GrabRounding=9.f;
     st.WindowBorderSize=0.f;
-    st.ChildBorderSize=1.f;
+    st.ChildBorderSize=0.f; // Remove the thin rounded outline around child panels.
     st.FrameBorderSize=0.f;
     st.PopupBorderSize=1.f;
     st.WindowPadding=ImVec2(25.f,23.f);
