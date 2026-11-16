@@ -25593,32 +25593,37 @@ static double inspectionPresentationFraction(){
 }
 // Presentation-only counter: never exceeds completed real scan milestones.
 // Advances one integer percentage at a time, even when a stage finishes at once.
+// Smooth presentation of completed scan milestones; never exceed real work.
 static double inspectionDisplayLastTick=-1.0;
-static int inspectionDisplayPercent(){
-    static int displayed=0;
-    double& lastTick=inspectionDisplayLastTick;
+static float inspectionSmoothFraction(){
     static double scanIdentity=-1.0;
+    static float shown=0.f;
     const double now=ImGui::GetTime();
-    if(scanIdentity!=inspectionProgressStart){
+    if(scanIdentity!=inspectionProgressStart || now<inspectionDisplayLastTick){
         scanIdentity=inspectionProgressStart;
-        displayed=0;
-        lastTick=now;
+        shown=0.f;
+        inspectionDisplayLastTick=now;
     }
-    if(inspectionProgressStart<=0.0){
-        displayed=0;
-        lastTick=now;
-        return 0;
+    if(inspectionProgressStart<=0.0) {
+        shown=0.f;
+        inspectionDisplayLastTick=now;
+        return shown;
     }
-    const int actual=std::clamp(
-        static_cast<int>(std::floor(inspectionPresentationFraction()*100.0+0.00001)),
-        0,100);
-    if(lastTick<0.0 || now<lastTick)lastTick=now;
-    // Limit to one increment per rendered frame; never jump over numbers.
-    if(displayed<actual && now-lastTick>=0.45){
-        ++displayed;
-        lastTick=now;
-    }
-    return displayed;
+    const float target=std::clamp(
+        static_cast<float>(inspectionPresentationFraction()),0.f,1.f);
+    const float dt=std::clamp(static_cast<float>(
+        now-inspectionDisplayLastTick),0.f,.1f);
+    inspectionDisplayLastTick=now;
+    // A damped, frame-rate-independent easing curve; no synthetic scan work.
+    const float alpha=1.f-std::exp(-7.f*dt);
+    shown+=(target-shown)*alpha;
+    if(target-shown<.0015f)shown=target;
+    shown=std::clamp(shown,0.f,target);
+    return shown;
+}
+static int inspectionDisplayPercent(){
+    return std::clamp(static_cast<int>(
+        std::floor(inspectionSmoothFraction()*100.f+.00001f)),0,100);
 }
 
 // Results are only presented after the worker finishes AND the single
@@ -27795,23 +27800,19 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::PopID();
 }
 static void drawAtlasProgress(bool compact=false){
-    // Single progress bar. Percentage comes only from completed scan milestones.
-    // No artificial stage animation or extra progress rails.
-    const int verified=inspectionDisplayPercent();
-    // Smooth continuous fill between integer labels, never ahead of verified work.
-    // One displayed percentage point takes at least 450 ms (~45 s total).
-    const float actual=static_cast<float>(inspectionPresentationFraction());
-    const double elapsed=(std::max)(0.0,ImGui::GetTime()-inspectionDisplayLastTick);
-    const float between=std::clamp(static_cast<float>(elapsed/0.45),0.f,0.999f);
-    const float fraction=std::clamp(
-        (verified+((actual*100.f>verified)?between:0.f))/100.f,
-        0.f,actual);
-    const float width=(std::max)(150.f,ImGui::GetContentRegionAvail().x);
-    ImGui::TextDisabled("%s",localized("FULL INSPECTION"));
+    const float fraction=inspectionSmoothFraction();
+    const int percent=std::clamp(static_cast<int>(std::round(fraction*100.f)),0,100);
+    ImGui::PushID("main_scan_progress");
+    ImGui::TextDisabled("SYSTEM INSPECTION");
     ImGui::SameLine();
-    ImGui::Text("%d%%",verified);
-    drawProfessionalProgressTrack("overall","Overall inspection",
-                                  fraction,width,compact?14.f:19.f);
+    ImGui::Text("%d%%",percent);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.88f,.89f,.91f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,ImVec4(.16f,.17f,.19f,1.f));
+    ImGui::ProgressBar(fraction,ImVec2(-1.f,compact?12.f:18.f),"");
+    ImGui::PopStyleColor(2);
+    ImGui::TextDisabled("%s",scanning.load()?"Collecting system evidence...":
+        done.load()?"Inspection complete.":"Ready for inspection.");
+    ImGui::PopID();
 }
 
 static bool simplifiedInterface=true;
@@ -27878,9 +27879,50 @@ static bool syncIntroOpen=true;
 static double syncIntroTransition=-1.0;
 static float syncIntroEase(float x) {
     x=(std::max)(0.f,(std::min)(1.f,x));
-    return x*x*(3.f-2.f*x);
+    return x*x*x*(x*(x*6.f-15.f)+10.f);
 }
 static double syncIntroRevealAt=-1.0;
+
+// The native Win32 window begins compact and grows into the selected workspace.
+// Animation changes only the presentation; scanner and detection logic are untouched.
+static bool startupWindowExpandActive=false;
+static double startupWindowExpandAt=-1.0;
+static RECT startupWindowFrom{},startupWindowTo{};
+static void beginStartupWindowExpand(){
+    if(!hwnd || startupWindowExpandActive)return;
+    GetWindowRect(hwnd,&startupWindowFrom);
+    static const int dims[][2]={{1024,720},{1280,800},{1440,900},{1600,900},{1920,1080}};
+    const int index=std::clamp(windowPreset,0,4);
+    RECT work{};SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
+    const int availableW=work.right-work.left,availableH=work.bottom-work.top;
+    const int w=(std::min)(dims[index][0],availableW);
+    const int h=(std::min)(dims[index][1],availableH);
+    startupWindowTo={work.left+(availableW-w)/2,
+                     work.top+(availableH-h)/2,
+                     work.left+(availableW+w)/2,
+                     work.top+(availableH+h)/2};
+    startupWindowExpandAt=ImGui::GetTime();
+    startupWindowExpandActive=true;
+}
+static void updateStartupWindowExpand(){
+    if(!startupWindowExpandActive || !hwnd)return;
+    const double elapsed=ImGui::GetTime()-startupWindowExpandAt;
+    const float progress=syncIntroEase(static_cast<float>(elapsed/1.20));
+    auto lerp=[&](int a,int b){return static_cast<int>(std::lround(
+        static_cast<double>(a)+(static_cast<double>(b)-a)*progress));};
+    const int x=lerp(startupWindowFrom.left,startupWindowTo.left);
+    const int y=lerp(startupWindowFrom.top,startupWindowTo.top);
+    const int w=lerp(startupWindowFrom.right-startupWindowFrom.left,
+                     startupWindowTo.right-startupWindowTo.left);
+    const int h=lerp(startupWindowFrom.bottom-startupWindowFrom.top,
+                     startupWindowTo.bottom-startupWindowTo.top);
+    RECT current{};GetWindowRect(hwnd,&current);
+    if(current.left!=x || current.top!=y ||
+       current.right-current.left!=w || current.bottom-current.top!=h)
+        SetWindowPos(hwnd,nullptr,x,y,w,h,SWP_NOZORDER|SWP_NOACTIVATE);
+    if(progress>=1.f)startupWindowExpandActive=false;
+}
+
 static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
@@ -27899,8 +27941,8 @@ static void renderSyncOpening() {
     auto fade=[&](float begin,float duration) {
         return syncIntroEase((elapsed-begin)/duration);
     };
-    const float welcomeOpacity=transitioning?1.f-fade(.10f,.48f):1.f;
-    const float loadingOpacity=transitioning?fade(.58f,.38f)*(1.f-fade(2.10f,.36f)):0.f;
+    const float welcomeOpacity=transitioning?1.f-fade(.10f,.65f):1.f;
+    const float loadingOpacity=transitioning?fade(.45f,.55f)*(1.f-fade(2.65f,.35f)):0.f;
     auto ink=[](int gray,float alpha) {
         return IM_COL32(gray,gray,gray,(int)(255.f*(std::max)(0.f,(std::min)(1.f,alpha))));
     };
@@ -27915,10 +27957,10 @@ static void renderSyncOpening() {
     d->AddLine(ImVec2(p.x+32,p.y+68),ImVec2(p.x+sz.x-32,p.y+68),ink(255,.11f));
     d->AddText(ImVec2(p.x+36,p.y+35),ink(230,.90f),"SYNC PC CHECKER");
     d->AddText(ImVec2(p.x+sz.x-113,p.y+35),ink(150,.7f),"FIVEM SECURITY");
-    const float pulse=.5f+.5f*std::sin(t*1.65f);
-    const float logoY=cy-115.f-(transitioning?fade(.15f,.65f)*22.f:0.f);
+    const float pulse=.5f+.5f*std::sin(t*1.35f);
+    const float logoY=cy-115.f-(transitioning?fade(.15f,.75f)*18.f:0.f);
     for(int i=3;i>=1;--i) {
-        const float radius=44.f+i*18.f+pulse*3.f;
+        const float radius=44.f+i*18.f+pulse*2.f;
         d->AddCircle(ImVec2(cx,logoY),radius,ink(220,(.035f+.014f*pulse)/i),96,1.0f);
     }
     if(syncLogoTexture)
@@ -27939,23 +27981,58 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.75f,.75f,.75f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.065f,.065f,.065f,1.f));
-        if(ImGui::Button("Start System Scan  ->",ImVec2(230.f,46.f)))
+        if(ImGui::Button("Start System Scan  ->",ImVec2(230.f,46.f))) {
             syncIntroTransition=now;
+            beginStartupWindowExpand();
+        }
         ImGui::PopStyleColor(4);
     } else {
         // The sequence is visual only; it does not pretend to run a scan.
-        const float line=fade(.48f,.95f);
-        d->AddLine(ImVec2(cx-145.f*line,cy+68.f),
-                   ImVec2(cx+145.f*line,cy+68.f),ink(226,.75f*loadingOpacity),1.5f);
-        const char* label="Preparing security workspace";
-        const ImVec2 ls=ImGui::CalcTextSize(label);
-        d->AddText(ImVec2(cx-ls.x*.5f,cy+88.f),ink(205,loadingOpacity),label);
-        for(int i=0;i<3;++i) {
-            float beat=.24f+.76f*(.5f+.5f*std::sin(t*5.f-i*.8f));
-            d->AddCircleFilled(ImVec2(cx+(i-1)*16.f,cy+124.f),2.5f,
-                               ink(220,loadingOpacity*beat),16);
+        // One continuous reveal line with a gentle moving highlight.
+        const float line=fade(.30f,1.15f);
+        const float lineWidth=140.f*line;
+        d->AddLine(ImVec2(cx-lineWidth,cy+68.f),
+                   ImVec2(cx+lineWidth,cy+68.f),ink(215,.22f*loadingOpacity),1.2f);
+        const float travel=std::fmod((std::max)(0.f,elapsed)*.52f,1.f);
+        const float headX=cx-lineWidth+2.f*lineWidth*travel;
+        d->AddLine(ImVec2(headX-20.f*line,cy+68.f),
+                   ImVec2(headX,cy+68.f),ink(255,.78f*loadingOpacity),2.f);
+
+        // Existing captions are unchanged; cross-fade and glide between them.
+        static constexpr const char* openingCaptions[]={
+            "SYNC PC CHECKER",
+            "ADVANCED ANTI-CHEAT",
+            "FOR FIVEM",
+            "BYPASS HUNTER"
+        };
+        const float captionClock=(std::max)(0.f,elapsed-.20f);
+        const float captionDuration=.68f;
+        const int captionIndex=(std::min)(3,static_cast<int>(captionClock/captionDuration));
+        const float captionPhase=std::clamp(
+            (captionClock-captionIndex*captionDuration)/captionDuration,0.f,1.f);
+        const float fadeIn=syncIntroEase(captionPhase/.24f);
+        const float fadeOut=1.f-syncIntroEase((captionPhase-.73f)/.27f);
+        const float captionFade=fadeIn*fadeOut;
+        const char* caption=openingCaptions[captionIndex];
+        const ImVec2 captionSize=ImGui::CalcTextSize(caption);
+        const float captionOffset=(1.f-fadeIn)*11.f-fadeOut*4.f;
+        d->AddText(ImVec2(cx-captionSize.x*.5f,cy+88.f+captionOffset),
+                   ink(238,loadingOpacity*captionFade),caption);
+
+        // Small timeline segments show where the opening sequence is.
+        const float segmentWidth=44.f;
+        for(int i=0;i<4;++i){
+            const float x=cx-2.f*segmentWidth-9.f+i*(segmentWidth+6.f);
+            const float fill=i<captionIndex?1.f:
+                i==captionIndex?syncIntroEase(captionPhase):0.f;
+            d->AddRectFilled(ImVec2(x,cy+121.f),
+                ImVec2(x+segmentWidth,cy+124.f),ink(105,loadingOpacity*.35f),2.f);
+            if(fill>.001f)
+                d->AddRectFilled(ImVec2(x,cy+121.f),
+                    ImVec2(x+segmentWidth*fill,cy+124.f),
+                    ink(240,loadingOpacity*.8f),2.f);
         }
-        if(elapsed>=2.50f) {
+        if(elapsed>=3.05f) {
             syncIntroOpen=false;
             syncIntroRevealAt=now;
         }
@@ -28138,16 +28215,6 @@ static void renderUI() {
     ImGui::TextColored(accentInk,"ADVANCED ANTI-CHEAT FOR FIVEM");
     ImGui::SameLine(0,22.f);
     ImGui::TextDisabled("STATUS / %s",stateText());
-    // Presentation progress remains visible while completed results await unlocking.
-    if(inspectionProgressStart>0.0 && inspectionDisplayPercent()<100 && (scanning || done)){
-        const ImVec2 wp=ImGui::GetWindowPos();
-        const ImVec2 ws=ImGui::GetWindowSize();
-        const float fraction=inspectionDisplayPercent()/100.f;
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            ImVec2(wp.x,wp.y+ws.y-2.f),
-            ImVec2(wp.x+ws.x*fraction,wp.y+ws.y),
-            IM_COL32(150,150,150,220));
-    }
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
     if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
@@ -31190,30 +31257,6 @@ zula.exe)FIVEMSTR";
         ImGui::Text("Evidence records: %zu",recordCount.load());
         ImGui::Text("Files checked: %zu",fileCount.load());
         ImGui::Text("Status: %s",stateText());
-        // Real scan completion indicator, using the existing inspection milestones.
-        // The progress bar is not a fabricated animation or a verdict score.
-        if(scanning || (done && !scanFailed && !scanCancelled)){
-            const int scanPercent=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
-            char scanLabel[40]={};
-            snprintf(scanLabel,sizeof(scanLabel),"%d%%",scanPercent);
-            ImGui::Dummy(ImVec2(0,9));
-            ImGui::TextDisabled("SCAN PROGRESS");
-            ImGui::ProgressBar(scanPercent/100.0f,ImVec2(-1.f,18.f),scanLabel);
-            if(scanning && presentationHold.load())
-                ImGui::TextDisabled("Finalizing results...");
-        }
-        // Real scan completion indicator, using the existing inspection milestones.
-        // The progress bar is not a fabricated animation or a verdict score.
-        if(scanning || (done && !scanFailed && !scanCancelled)){
-            const int scanPercent=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
-            char scanLabel[40]={};
-            snprintf(scanLabel,sizeof(scanLabel),"%d%%",scanPercent);
-            ImGui::Dummy(ImVec2(0,9));
-            ImGui::TextDisabled("SCAN PROGRESS");
-            ImGui::ProgressBar(scanPercent/100.0f,ImVec2(-1.f,18.f),scanLabel);
-            if(scanning && presentationHold.load())
-                ImGui::TextDisabled("Finalizing results...");
-        }
         if(scanFailed){
             ImGui::Separator();
             ImGui::TextColored(ImVec4(1.f,.37f,.37f,1.f),
@@ -31260,6 +31303,10 @@ zula.exe)FIVEMSTR";
             }
             ImGui::Dummy(ImVec2(0.f,9.f));
         }
+        if(ImGui::CollapsingHeader("SCAN COVERAGE & SOURCE HEALTH",
+                ImGuiTreeNodeFlags_None)) {
+            drawScanSummaryNew();
+        }
         // Existing scan controls and detailed modules remain intact.
         const ImVec4 pale(.96f,.96f,.96f,1),quiet(.62f,.62f,.62f,1),accent(.78f,.78f,.78f,1);
         const float full=ImGui::GetContentRegionAvail().x;
@@ -31280,7 +31327,7 @@ zula.exe)FIVEMSTR";
                 ImGui::TextColored(accent,"SCAN COMPLETE - RESULT PRESENTATION DELAY");
                 ImGui::Text("Forensic work finished. Displaying results in about %u s.",
                     presentationWaitRemaining.load());
-                ImGui::TextDisabled("This is an intentional display wait, not extra analysis.");
+                ImGui::TextDisabled("Scan completed; preparing the result view.");
             }else{
                 ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             }
@@ -31526,10 +31573,6 @@ zula.exe)FIVEMSTR";
             }
             if(ImGui::BeginTabItem("Modules")) {
                 modulesList();ImGui::EndTabItem();
-            }
-            if(ImGui::BeginTabItem("Scan Summary")) {
-                drawScanSummaryNew();
-                ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Review Queue")) {
                 drawReviewQueueNew();
@@ -32159,7 +32202,17 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     loadSettings();
     loadCustomDetections();
-    applyWindowPreset();
+    // Compact opening window; expand to the configured size when Start is pressed.
+    {
+        RECT work{};SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
+        const int availableW=work.right-work.left,availableH=work.bottom-work.top;
+        const int startW=(std::min)(720,availableW);
+        const int startH=(std::min)(480,availableH);
+        if(startW>0 && startH>0)
+            SetWindowPos(hwnd,nullptr,work.left+(availableW-startW)/2,
+                work.top+(availableH-startH)/2,startW,startH,
+                SWP_NOZORDER|SWP_NOACTIVATE);
+    }
     applyTheme();
     ImGui::GetIO().FontGlobalScale=interfaceScale;
     // Use Windows' modern UI font when available; fallback to the built-in font.
@@ -32178,6 +32231,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         }
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
+        updateStartupWindowExpand();
         renderUI();
         // Reveal the existing scanner smoothly, without changing its scan logic.
         if(!syncIntroOpen && syncIntroRevealAt>=0.0) {
