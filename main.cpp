@@ -25447,6 +25447,17 @@ static void scanWorker() {
         stage=1;
         setSequentialItem("Running enumerateProcesses");
         auto p=enumerateProcesses();
+        std::vector<Record> exactRunningMatches;
+        for(const auto& proc:p){
+            if(lowerPath(fs::path(proc.name).filename().wstring())==L"cheat.exe" ||
+               lowerPath(fs::path(proc.path).filename().wstring())==L"cheat.exe"){
+                exactRunningMatches.push_back({
+                    "Running Process Filename Review","cheat.exe",
+                    "SUSPECT - EXACT RUNNING PROCESS NAME | PID "+
+                    std::to_string(proc.pid)+" | Image: "+utf8(proc.path)+
+                    " | Name alone is not proof of cheating."});
+            }
+        }
         std::unordered_map<DWORD,std::wstring> observedPrevious;
         std::unordered_set<DWORD> observedEver;
         std::vector<Record> observedEvents=
@@ -25847,6 +25858,7 @@ static void scanWorker() {
         stageWorkItems[4]=forensicProducedRecords.load();
         markInspectionStage(5);
         stage=5;
+        services.insert(services.end(),exactRunningMatches.begin(),exactRunningMatches.end());
         services.insert(services.end(),observedEvents.begin(),observedEvents.end());
         services.insert(services.end(),processChanges.begin(),processChanges.end());
         services.insert(services.end(),startup.begin(),startup.end());
@@ -29329,42 +29341,13 @@ static void renderUI() {
                     size_t shown=0, total=0;
                     {
                         std::lock_guard<std::mutex> guard(dataMutex);
-                        static const char* specific[]={
-                            "cheatfivem.exe","p5m_location.ini","pc5m_pvp.ini",
-                            "p5m_free.ini","clrloader.dll","fivem-premium.dll","geist.dll"
-                        };
-                        static const char* contextual[]={
-                            "mhyprot.sys","inpoutx64.sys","mavinject.exe",
-                            "hxxd64.sys","nfextlag.sys","ggkernel64.sys",
-                            "x64launcher.dll","loader_log.txt"
-                        };
                         for(const auto& r:records) {
-                            std::string hay=r.name+" "+r.detail;
-                            std::transform(hay.begin(),hay.end(),hay.begin(),
-                                [](unsigned char c){return static_cast<char>(std::tolower(c));});
-                            const char* label=nullptr;
-                            for(const char* t:specific)if(hay.find(t)!=std::string::npos){
-                                label="FiveM specific";break;
-                            }
-                            if(!label)for(const char* t:contextual)
-                                if(hay.find(t)!=std::string::npos){label="Context only";break;}
-                            if(!label && (hay.find("bypass")!=std::string::npos ||
-                                hay.find("tamper")!=std::string::npos ||
-                                hay.find("evasion")!=std::string::npos))
-                                label="Keyword review";
-                            if(!label && (hay.find("injector")!=std::string::npos ||
-                                hay.find("executor")!=std::string::npos ||
-                                hay.find("aimbot")!=std::string::npos ||
-                                hay.find("triggerbot")!=std::string::npos ||
-                                hay.find("wallhack")!=std::string::npos ||
-                                hay.find("silentaim")!=std::string::npos ||
-                                hay.find("spoofer")!=std::string::npos ||
-                                hay.find("manual map")!=std::string::npos))
-                                label="Behavior keyword";
-                            if(!label)continue;
+                            if(!isSuspectRecord(r) && !isDetectedRecord(r))continue;
+                            std::string hay=r.category+" "+r.name+" "+r.detail;
+                            const char* label=isDetectedRecord(r)?"DETECTED":"SUSPECT";
                             if(!verdictEvidenceFilter.PassFilter(hay.c_str()))continue;
                             ++total;
-                            if(shown++>=80)continue;
+                            ++shown;
                             ImGui::TableNextRow();
                             tintEvidenceRow(r);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(label);
@@ -29375,12 +29358,14 @@ static void renderUI() {
                         }
                     }
                     ImGui::EndTable();
-                    if(total>80)ImGui::TextDisabled("Showing 80 of %zu matching records.",total);
+                    ImGui::TextDisabled("Showing %zu of %zu matching records.",shown,total);
                     if(!total && suspiciousProcesses>0)
                         ImGui::TextDisabled("Suspicious process flags: %zu. See Scan Results for process details.",suspiciousProcesses);
                 }
             }
             ImGui::SeparatorText("FiveM indicator review");
+            ImGui::TextDisabled("Specific filename matches counts only the legacy FiveM rules; "
+                                "see the evidence table above for all SUSPECT/DETECTED categories.");
             ImGui::Text("Specific filename matches: %zu",fivemStrong);
             ImGui::Text("Context-only matches: %zu",fivemContext);
             ImGui::Text("Independent evidence categories: %zu",correlatedSources);
