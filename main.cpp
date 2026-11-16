@@ -1855,6 +1855,7 @@ static std::vector<Record> inspectPeStructure(const std::vector<Process>& items)
 // Categories are based on evidence; unknown information must not be called clean.
 static bool isDetectedRecord(const Record& r) {
     return r.detail.find("DETECTED |")!=std::string::npos ||
+           r.detail.find("DETECTED -")!=std::string::npos ||
            (r.category=="Defender Detection" &&
             r.detail.find("Detection")!=std::string::npos);
 }
@@ -1863,18 +1864,30 @@ static bool isSuspectRecord(const Record& r) {
            r.category=="Defender Threat" ||
            r.category=="FiveM Cheat Name Detection" ||
            r.detail.find("SUSPECT |")!=std::string::npos ||
+           r.detail.find("SUSPECT:")!=std::string::npos ||
            r.detail.find("SUSPECT - NAME RULE")!=std::string::npos ||
            r.detail.find("REVIEW:")!=std::string::npos;
 }
 static const char* evidenceLabel(const Record& r) {
     return isDetectedRecord(r)?"DETECTED":isSuspectRecord(r)?"SUSPECT":"INFO";
 }
+static bool isCleanRecord(const Record& r) {
+    // A green row requires an explicit successful check, never an inventory
+    // entry or an absence of suspicious keywords.
+    return r.detail.rfind("CLEAN |",0)==0 ||
+           r.detail.rfind("CLEAN -",0)==0 ||
+           r.detail.rfind("PASS |",0)==0;
+}
 static void tintEvidenceRow(const Record& r) {
+    // Bright source hues survive the NOIR post-render grayscale filter;
+    // low alpha keeps all row text readable on the dark theme.
     if(isDetectedRecord(r))
-        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(94,31,37,105));
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(225,43,55,78));
     else if(isSuspectRecord(r))
-        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(95,72,29,95));
-    // UNKNOWN is not CLEAN: an informational record is not a negative test.
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(231,183,38,70));
+    else if(isCleanRecord(r))
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(43,202,101,64));
+    // INFO / REVIEW ONLY are not automatically CLEAN.
 }
 
 
@@ -28232,51 +28245,20 @@ static void updateStartupWindowExpand(){
     if(progress>=1.f)startupWindowExpandActive=false;
 }
 
-static void renderSyncOpening() {
-    // V46: redesigned opening — animated computer, code and magnifier,
-    // animated typography and a genuine, clickable Open Scanner action.
-    ImGuiViewport* vp=ImGui::GetMainViewport();
-    const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
-    ImGui::SetNextWindowPos(p);
-    ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
-    ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
-        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
-        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
-    ImDrawList* d=ImGui::GetWindowDrawList();
-    const double now=ImGui::GetTime();
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
-    const float cardW=(std::max)(200.f,(std::min)(sz.x-28.f,590.f));
-    const float cardH=(std::max)(230.f,(std::min)(sz.y-28.f,405.f));
-    const ImVec2 lo(cx-cardW*.5f,cy-cardH*.50f);
-    const ImVec2 hi(cx+cardW*.5f,cy+cardH*.50f);
-    const bool transitioning=syncIntroTransition>=0.0;
-    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
-    auto ease=[&](float start,float duration){
-        return syncIntroEase((elapsed-start)/duration);
-    };
-    auto ink=[](int g,float opacity){
+// Shared illustration: identical moving monitor, terminal code and magnifier
+// on the opening screen and in the main scanner dashboard.
+static void drawSyncComputerMagnifier(ImDrawList* d,float cx,float cy,
+                                      float scale,bool animate,float clock){
+    auto ink=[](int gray,float opacity){
         const float a=(std::max)(0.f,(std::min)(1.f,opacity));
-        return IM_COL32(g,g,g,(int)(255.f*a));
+        return IM_COL32(gray,gray,gray,(int)(255.f*a));
     };
-    const bool animate=brandAnimation && !reducedMotion;
-    const float clock=animate?(float)now:0.f;
-    const float entrance=transitioning?ease(.05f,.70f):0.f;
-    const float exit=transitioning?ease(4.65f,.60f):0.f;
-    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
-    d->AddRectFilledMultiColor(lo,hi,IM_COL32(26,26,26,255),
-        IM_COL32(17,17,17,255),IM_COL32(13,13,13,255),IM_COL32(20,20,20,255));
-    d->AddRect(lo,hi,ink(132,.44f),12.f,0,1.2f);
-    // Fine editorial rails; subtle enough not to compete with text.
-
-    d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC PC CHECKER");
+    const float pulse=animate?(.5f+.5f*std::sin(clock*2.1f)):.65f;
     // V46: cinematic monochrome computer + magnifier illustration.
     // All primitives are vector draw calls: no images, external assets or fonts.
-    const float scale=(std::min)(1.f,(std::min)(cardW/590.f,cardH/405.f));
     const float screenW=174.f*scale, screenH=100.f*scale;
     const ImVec2 screenMin(cx-screenW*.5f,cy-155.f*scale);
     const ImVec2 screenMax(cx+screenW*.5f,screenMin.y+screenH);
-    const float pulse=animate?(.5f+.5f*std::sin(clock*2.1f)):.65f;
     // Monitor bezel, reflective glass and structural details.
     d->AddRectFilled(ImVec2(screenMin.x-8.f*scale,screenMin.y-8.f*scale),
         ImVec2(screenMax.x+8.f*scale,screenMax.y+8.f*scale),
@@ -28359,6 +28341,49 @@ static void renderSyncOpening() {
         d->AddCircleFilled(ImVec2(px,py),(k%3==0?1.6f:1.f)*scale,
             ink(240,.12f+.35f*pulse),8);
     }
+}
+
+static void renderSyncOpening() {
+    // V46: redesigned opening — animated computer, code and magnifier,
+    // animated typography and a genuine, clickable Open Scanner action.
+    ImGuiViewport* vp=ImGui::GetMainViewport();
+    const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
+    ImGui::SetNextWindowPos(p);
+    ImGui::SetNextWindowSize(sz);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
+    ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
+    ImDrawList* d=ImGui::GetWindowDrawList();
+    const double now=ImGui::GetTime();
+    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
+    const float cardW=(std::max)(200.f,(std::min)(sz.x-28.f,590.f));
+    const float cardH=(std::max)(230.f,(std::min)(sz.y-28.f,405.f));
+    const ImVec2 lo(cx-cardW*.5f,cy-cardH*.50f);
+    const ImVec2 hi(cx+cardW*.5f,cy+cardH*.50f);
+    const bool transitioning=syncIntroTransition>=0.0;
+    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
+    auto ease=[&](float start,float duration){
+        return syncIntroEase((elapsed-start)/duration);
+    };
+    auto ink=[](int g,float opacity){
+        const float a=(std::max)(0.f,(std::min)(1.f,opacity));
+        return IM_COL32(g,g,g,(int)(255.f*a));
+    };
+    const bool animate=brandAnimation && !reducedMotion;
+    const float clock=animate?(float)now:0.f;
+    const float entrance=transitioning?ease(.05f,.70f):0.f;
+    const float exit=transitioning?ease(4.65f,.60f):0.f;
+    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
+    d->AddRectFilledMultiColor(lo,hi,IM_COL32(26,26,26,255),
+        IM_COL32(17,17,17,255),IM_COL32(13,13,13,255),IM_COL32(20,20,20,255));
+    d->AddRect(lo,hi,ink(132,.44f),12.f,0,1.2f);
+    // Fine editorial rails; subtle enough not to compete with text.
+
+    d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC PC CHECKER");
+    const float illustrationScale=(std::min)(1.f,
+        (std::min)(cardW/590.f,cardH/405.f));
+    drawSyncComputerMagnifier(d,cx,cy,illustrationScale,animate,clock);
     const char* heading=transitioning?"OPENING CHECKER":"CHECKER";
     const ImVec2 headingSize=ImGui::CalcTextSize(heading);
     const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
@@ -29248,6 +29273,7 @@ static void renderUI() {
                             ++total;
                             if(shown++>=80)continue;
                             ImGui::TableNextRow();
+                            tintEvidenceRow(r);
                             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(label);
                             ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
                             ImGui::TableSetColumnIndex(2);
@@ -31796,6 +31822,23 @@ zula.exe)FIVEMSTR";
         if(ImGui::Button("Inspect evidence",ImVec2(190,40)))page=2;
     } else if(page==0 && simplifiedInterface) {
         const ImVec4 muted(.67f,.67f,.67f,1.f);
+        // Same vector animation as the startup screen, centered in the scanner.
+        // Decorative only; does not imply that a scan is running.
+        {
+            const float availableWidth=ImGui::GetContentRegionAvail().x;
+            const float illustrationScale=(std::min)(1.f,
+                (std::max)(.60f,availableWidth/390.f));
+            const ImVec2 origin=ImGui::GetCursorScreenPos();
+            const float height=180.f*illustrationScale;
+            const float centerX=origin.x+availableWidth*.5f;
+            const float centerY=origin.y+155.f*illustrationScale;
+            drawSyncComputerMagnifier(ImGui::GetWindowDrawList(),
+                centerX,centerY,illustrationScale,
+                brandAnimation && !reducedMotion,
+                brandAnimation && !reducedMotion?(float)ImGui::GetTime():0.f);
+            ImGui::Dummy(ImVec2(0.f,height));
+            ImGui::Spacing();
+        }
         ImGui::SetWindowFontScale(1.12f);
         ImGui::TextUnformatted("PC Inspection");
         ImGui::SetWindowFontScale(1.f);
