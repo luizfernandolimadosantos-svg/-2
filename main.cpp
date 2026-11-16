@@ -28875,7 +28875,7 @@ static void renderSyncOpening() {
 
     // V69: centered animated wordmark, with SYNC as the visual focal point.
     // Draw-list animation is decorative only; it never changes scan results.
-    const ImFont* wordFont=ImGui::GetFont();
+    ImFont* wordFont=ImGui::GetFont();
     const float wordSize=ImGui::GetFontSize()*1.28f;
     const char* syncWord="SYNC";
     const char* restWord=" PC CHECKER";
@@ -28889,15 +28889,15 @@ static void renderSyncOpening() {
         for(int ring=3;ring>=1;--ring){
             const float spread=(float)ring*.8f;
             const int alpha=(int)(7.f+9.f*pulse);
-            d->AddText((ImFont*)wordFont,wordSize,
+            d->AddText(wordFont,wordSize,
                 ImVec2(wordX-spread,wordY),IM_COL32(240,240,240,alpha),syncWord);
-            d->AddText((ImFont*)wordFont,wordSize,
+            d->AddText(wordFont,wordSize,
                 ImVec2(wordX+spread,wordY),IM_COL32(240,240,240,alpha),syncWord);
         }
     }
-    d->AddText((ImFont*)wordFont,wordSize,ImVec2(wordX,wordY),
+    d->AddText(wordFont,wordSize,ImVec2(wordX,wordY),
         ink(255,.82f+.18f*pulse),syncWord);
-    d->AddText((ImFont*)wordFont,wordSize,
+    d->AddText(wordFont,wordSize,
         ImVec2(wordX+syncSize.x,wordY),ink(190,.85f),restWord);
     const float underlineWidth=syncSize.x*(animate?
         (.30f+.70f*(.5f+.5f*std::sin(clock*1.35f))):1.f);
