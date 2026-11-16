@@ -588,8 +588,8 @@ static void drawCustomDetectionFindings() {
 static const char* accentNames[]={"Orange","Red","Blue","Purple","Green","Custom"};
 static const char* themeNames[]={"Obsidian","Graphite","Charcoal"};
 static const char* densityNames[]={"Compact","Comfortable","Spacious"};
-// This preference changes ONLY the percentage label in the scan progress
-// bar. All other UI elements stay strictly black, white and gray.
+// This preference colors the scan progress percentage. Other UI colors
+// remain monochrome except semantic CLEAN/SUSPECT/DETECTED indicators.
 static ImVec4 accentColor() {
     switch(accentIndex){
         case 0:return ImVec4(.98f,.48f,.20f,1.f); // Orange
@@ -26423,6 +26423,31 @@ static void applyTheme() {
     c[ImGuiCol_ResizeGripHovered]=ImVec4(.7f,.7f,.7f,.65f);
     c[ImGuiCol_ResizeGripActive]=accentHot;
     c[ImGuiCol_ModalWindowDimBg]=ImVec4(.01f,.01f,.01f,.82f);
+    // Theme variants remain grayscale but visibly change the entire workspace.
+    if(themeIndex==1){ // Graphite: lighter graphite panels and controls
+        c[ImGuiCol_WindowBg]=ImVec4(.095f,.095f,.095f,1.f);
+        c[ImGuiCol_ChildBg]=ImVec4(.145f,.145f,.145f,1.f);
+        c[ImGuiCol_PopupBg]=ImVec4(.19f,.19f,.19f,1.f);
+        c[ImGuiCol_FrameBg]=ImVec4(.22f,.22f,.22f,1.f);
+        c[ImGuiCol_Button]=ImVec4(.29f,.29f,.29f,1.f);
+        c[ImGuiCol_ButtonHovered]=ImVec4(.39f,.39f,.39f,1.f);
+        c[ImGuiCol_Header]=ImVec4(.27f,.27f,.27f,1.f);
+        c[ImGuiCol_TableRowBg]=ImVec4(.18f,.18f,.18f,.48f);
+        c[ImGuiCol_TableRowBgAlt]=ImVec4(.25f,.25f,.25f,.44f);
+        c[ImGuiCol_ScrollbarBg]=ImVec4(.10f,.10f,.10f,1.f);
+    }else if(themeIndex==2){ // Charcoal: deeper black and crisp white contrast
+        c[ImGuiCol_WindowBg]=ImVec4(.008f,.008f,.008f,1.f);
+        c[ImGuiCol_ChildBg]=ImVec4(.035f,.035f,.035f,1.f);
+        c[ImGuiCol_PopupBg]=ImVec4(.075f,.075f,.075f,1.f);
+        c[ImGuiCol_FrameBg]=ImVec4(.075f,.075f,.075f,1.f);
+        c[ImGuiCol_Button]=ImVec4(.11f,.11f,.11f,1.f);
+        c[ImGuiCol_ButtonHovered]=ImVec4(.23f,.23f,.23f,1.f);
+        c[ImGuiCol_Header]=ImVec4(.10f,.10f,.10f,1.f);
+        c[ImGuiCol_TableRowBg]=ImVec4(.035f,.035f,.035f,.45f);
+        c[ImGuiCol_TableRowBgAlt]=ImVec4(.11f,.11f,.11f,.35f);
+        c[ImGuiCol_ScrollbarBg]=ImVec4(.012f,.012f,.012f,1.f);
+        c[ImGuiCol_Border]=ImVec4(.39f,.39f,.39f,.8f);
+    }
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -28223,7 +28248,7 @@ static void drawAtlasProgress(bool compact=false){
     ImGui::PushID("main_scan_progress");
     ImGui::TextColored(ImVec4(.75f,.80f,.85f,1.f),"SYSTEM INSPECTION");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(.95f,.96f,.98f,1.f),"%d%%",percent);
+    ImGui::TextColored(accentColor(),"%d%%",percent);
     const ImVec2 start=ImGui::GetCursorScreenPos();
     const float width=(std::max)(80.f,ImGui::GetContentRegionAvail().x);
     const float height=compact?11.f:15.f;
@@ -33055,7 +33080,16 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                         g*10u>=r*6u;
                     const bool greenStatus = g>=145u && g>r*12u/10u &&
                         g>b*11u/10u && r<170u;
-                    if(redStatus || yellowStatus || greenStatus){
+                    // Only the scan percentage uses the selected accent color.
+                    // Preserve its exact packed RGB in the monochrome pass.
+                    const ImVec4 percentageAccent=accentColor();
+                    const unsigned int ar=(unsigned int)(percentageAccent.x*255.f+.5f);
+                    const unsigned int ag=(unsigned int)(percentageAccent.y*255.f+.5f);
+                    const unsigned int ab=(unsigned int)(percentageAccent.z*255.f+.5f);
+                    const bool selectedPercentageColor=
+                        r==ar && g==ag && b==ab;
+                    if(redStatus || yellowStatus || greenStatus ||
+                       selectedPercentageColor){
                         vertex.col=color;
                     }else{
                         vertex.col=(gray<<IM_COL32_R_SHIFT)
