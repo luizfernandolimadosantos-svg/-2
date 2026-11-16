@@ -25991,116 +25991,113 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
 
 static ImVec4 orange(){return ImVec4(.88f,.88f,.88f,1.f);}
 static void applyTheme() {
-    // Sync PC Checker UI refresh: one centralized, predictable theme.
+    // V36 / NOIR EDITION: native black-and-white design, scanner rules untouched.
     ImGui::StyleColorsDark();
     ImGuiStyle& st=ImGui::GetStyle();
-    st.WindowRounding=14.f;
+    st.WindowRounding=10.f;
     st.ChildRounding=12.f;
-    st.FrameRounding=cornerStyle==0?5.f:cornerStyle==1?9.f:12.f;
-    st.PopupRounding=12.f;
-    st.ScrollbarRounding=8.f;
-    st.TabRounding=9.f;
-    st.GrabRounding=7.f;
+    st.FrameRounding=cornerStyle==0?7.f:cornerStyle==1?11.f:14.f;
+    st.PopupRounding=13.f;
+    st.ScrollbarRounding=12.f;
+    st.TabRounding=10.f;
+    st.GrabRounding=9.f;
     st.WindowBorderSize=0.f;
     st.ChildBorderSize=1.f;
-    st.FrameBorderSize=1.f;
+    st.FrameBorderSize=0.f;
     st.PopupBorderSize=1.f;
-    st.WindowPadding=ImVec2(22.f,20.f);
-    st.FramePadding=ImVec2(12.f,densityIndex==0?7.f:densityIndex==2?11.f:9.f);
-    st.ItemSpacing=ImVec2(12.f,densityIndex==0?9.f:densityIndex==2?14.f:11.f);
-    st.ItemInnerSpacing=ImVec2(9.f,7.f);
-    st.CellPadding=ImVec2(15.f,densityIndex==0?10.f:densityIndex==2?16.f:13.f);
+    st.WindowPadding=ImVec2(25.f,23.f);
+    st.FramePadding=ImVec2(13.f,densityIndex==0?8.f:densityIndex==2?12.f:10.f);
+    st.ItemSpacing=ImVec2(14.f,densityIndex==0?11.f:densityIndex==2?16.f:13.f);
+    st.ItemInnerSpacing=ImVec2(10.f,8.f);
+    st.CellPadding=ImVec2(14.f,densityIndex==0?9.f:densityIndex==2?15.f:12.f);
     st.ScrollbarSize=scrollbarWidth==0?12.f:scrollbarWidth==1?15.f:18.f;
     st.GrabMinSize=15.f;
-    st.GrabMinSize=15.f;
-    st.TouchExtraPadding=ImVec2(2.f,2.f);
-    st.IndentSpacing=21.f;
+    st.IndentSpacing=22.f;
     st.DisplaySafeAreaPadding=ImVec2(8.f,8.f);
     st.AntiAliasedLines=true;
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
-    const ImVec4 bg(.035f,.041f,.050f,1.f);
-    const ImVec4 panel(.063f,.072f,.086f,1.f);
-    const ImVec4 raised(.112f,.125f,.145f,1.f);
-    const ImVec4 accent(.84f,.84f,.84f,1.f);
-    const ImVec4 accentHover(1.f,1.f,1.f,1.f);
-    const ImVec4 text(.94f,.96f,.98f,1.f);
+    // V36 / NOIR: native grayscale theme, not merely a post-render filter.
+    const ImVec4 bg(.025f,.025f,.025f,1.f);
+    const ImVec4 panel(.058f,.058f,.058f,1.f);
+    const ImVec4 elevated(.105f,.105f,.105f,1.f);
+    const ImVec4 accent(.86f,.86f,.86f,1.f);
+    const ImVec4 accentHot(1.f,1.f,1.f,1.f);
+    const ImVec4 ink(.96f,.96f,.96f,1.f);
+    c[ImGuiCol_Text]=ink;
+    c[ImGuiCol_TextDisabled]=ImVec4(.63f,.63f,.63f,1.f);
     c[ImGuiCol_WindowBg]=bg;
     c[ImGuiCol_ChildBg]=panel;
-    c[ImGuiCol_PopupBg]=raised;
-    c[ImGuiCol_Border]=ImVec4(0.297f,0.297f,0.297f,.85f);
-    c[ImGuiCol_Separator]=ImVec4(.31f,.37f,.45f,.65f);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.105f,.126f,.151f,1.f);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(.24f,.29f,.35f,.9f);
-    c[ImGuiCol_TableBorderLight]=ImVec4(.20f,.24f,.29f,.55f);
-    c[ImGuiCol_TableRowBg]=ImVec4(.07f,.08f,.095f,.28f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.13f,.15f,.18f,.25f);
-    c[ImGuiCol_NavHighlight]=ImVec4(.66f,.76f,.88f,.65f);
-    c[ImGuiCol_Text]=text;
-    c[ImGuiCol_TextDisabled]=ImVec4(.64f,.69f,.75f,1.f);
-    c[ImGuiCol_FrameBg]=raised;
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.18f,.22f,.27f,1.f);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.22f,.27f,.33f,1.f);
-    c[ImGuiCol_Button]=ImVec4(.15f,.17f,.20f,1.f);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.23f,.27f,.32f,1.f);
-    c[ImGuiCol_ButtonActive]=ImVec4(0.407f,0.407f,0.407f,1.f);
-    c[ImGuiCol_Header]=ImVec4(0.220f,0.220f,0.220f,1.f);
-    c[ImGuiCol_HeaderHovered]=ImVec4(0.307f,0.307f,0.307f,1.f);
-    c[ImGuiCol_HeaderActive]=ImVec4(0.383f,0.383f,0.383f,1.f);
-    c[ImGuiCol_CheckMark]=accent;
+    c[ImGuiCol_PopupBg]=elevated;
+    c[ImGuiCol_Border]=ImVec4(.28f,.28f,.28f,.85f);
+    c[ImGuiCol_BorderShadow]=ImVec4(0,0,0,0);
+    c[ImGuiCol_FrameBg]=ImVec4(.13f,.13f,.13f,1.f);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.21f,.21f,.21f,1.f);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.29f,.29f,.29f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.18f,.18f,.18f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.29f,.29f,.29f,1.f);
+    c[ImGuiCol_ButtonActive]=ImVec4(.38f,.38f,.38f,1.f);
+    c[ImGuiCol_Header]=ImVec4(.18f,.18f,.18f,.95f);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.28f,.28f,.28f,1.f);
+    c[ImGuiCol_HeaderActive]=ImVec4(.36f,.36f,.36f,1.f);
+    c[ImGuiCol_CheckMark]=accentHot;
     c[ImGuiCol_SliderGrab]=accent;
-    c[ImGuiCol_SliderGrabActive]=accentHover;
-    c[ImGuiCol_Tab]=ImVec4(0.112f,0.112f,0.112f,1.f);
-    c[ImGuiCol_TabHovered]=ImVec4(0.287f,0.287f,0.287f,1.f);
-    c[ImGuiCol_TabSelected]=ImVec4(0.330f,0.330f,0.330f,1.f);
-    c[ImGuiCol_TabDimmed]=ImVec4(0.075f,0.075f,0.075f,1.f);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(0.170f,0.170f,0.170f,1.f);
-    c[ImGuiCol_TableBorderStrong]=ImVec4(0.330f,0.330f,0.330f,1.f);
-    c[ImGuiCol_TableBorderLight]=ImVec4(0.223f,0.223f,0.223f,1.f);
-    c[ImGuiCol_TableRowBg]=ImVec4(0.085f,0.085f,0.085f,1.f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.135f,.14f,.15f,.55f);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(0.497f,0.497f,0.497f,.38f);
+    c[ImGuiCol_SliderGrabActive]=accentHot;
+    c[ImGuiCol_Separator]=ImVec4(.32f,.32f,.32f,.75f);
+    c[ImGuiCol_Tab]=ImVec4(.11f,.11f,.11f,1.f);
+    c[ImGuiCol_TabHovered]=ImVec4(.25f,.25f,.25f,1.f);
+    c[ImGuiCol_TabSelected]=ImVec4(.32f,.32f,.32f,1.f);
+    c[ImGuiCol_TabDimmed]=ImVec4(.065f,.065f,.065f,1.f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.16f,.16f,.16f,1.f);
+    c[ImGuiCol_TableBorderStrong]=ImVec4(.37f,.37f,.37f,.9f);
+    c[ImGuiCol_TableBorderLight]=ImVec4(.23f,.23f,.23f,.7f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.09f,.09f,.09f,.42f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.19f,.19f,.19f,.36f);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.7f,.7f,.7f,.35f);
     c[ImGuiCol_ScrollbarBg]=bg;
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(0.330f,0.330f,0.330f,1.f);
-    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.427f,0.427f,0.427f,1.f);
-    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(0.523f,0.523f,0.523f,1.f);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.32f,.32f,.32f,1.f);
+    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(.47f,.47f,.47f,1.f);
+    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(.62f,.62f,.62f,1.f);
     c[ImGuiCol_NavHighlight]=accent;
     c[ImGuiCol_TitleBg]=bg;
     c[ImGuiCol_TitleBgActive]=panel;
     c[ImGuiCol_MenuBarBg]=panel;
     c[ImGuiCol_PlotLines]=accent;
     c[ImGuiCol_PlotHistogram]=accent;
-    c[ImGuiCol_ResizeGrip]=ImVec4(0.607f,0.607f,0.607f,.24f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(0.607f,0.607f,0.607f,.65f);
-    c[ImGuiCol_ResizeGripActive]=accent;
-    c[ImGuiCol_ModalWindowDimBg]=ImVec4(0.023f,0.023f,0.023f,.75f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(.5f,.5f,.5f,.24f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(.7f,.7f,.7f,.65f);
+    c[ImGuiCol_ResizeGripActive]=accentHot;
+    c[ImGuiCol_ModalWindowDimBg]=ImVec4(.01f,.01f,.01f,.82f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::PushID(title);
-    ImGui::Dummy(ImVec2(0,5.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.085f,.092f,.105f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.22f,.25f,.28f,.8f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(20.f,15.f));
-    ImGui::BeginChild("##section_heading",ImVec2(0,description?77.f:57.f),
+    ImGui::Dummy(ImVec2(0,6.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.107f,.143f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.20f,.35f,.44f,.75f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22.f,17.f));
+    ImGui::BeginChild("##obsidian_section",ImVec2(0,description?86.f:66.f),
                       ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
-    const ImVec2 p=ImGui::GetWindowPos();
-    const ImVec2 sz=ImGui::GetWindowSize();
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        ImVec2(p.x,p.y+12.f),ImVec2(p.x+3.f,p.y+sz.y-12.f),
-        IM_COL32(144,164,185,220),2.f);
-    ImGui::SetWindowFontScale(1.18f);
-    ImGui::TextColored(ImVec4(.96f,.97f,.99f,1.f),"%s",title);
+    const ImVec2 pos=ImGui::GetWindowPos(), size=ImGui::GetWindowSize();
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(pos.x,pos.y+12.f),
+                      ImVec2(pos.x+4.f,pos.y+size.y-12.f),
+                      IM_COL32(87,194,226,230),2.f);
+    dl->AddLine(ImVec2(pos.x+20.f,pos.y+size.y-1.f),
+                ImVec2(pos.x+size.x-20.f,pos.y+size.y-1.f),
+                IM_COL32(63,116,143,80),1.f);
+    ImGui::SetWindowFontScale(1.19f);
+    ImGui::TextColored(ImVec4(.95f,.98f,1.f,1.f),"%s",title);
     ImGui::SetWindowFontScale(1.f);
-    if(description && description[0]) {
-        ImGui::TextColored(ImVec4(.68f,.74f,.81f,1.f),"%s",description);
-    }
+    if(description && description[0])
+        ImGui::TextColored(ImVec4(.62f,.75f,.83f,1.f),"%s",description);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
     ImGui::Dummy(ImVec2(0,8.f));
     ImGui::PopID();
 }
+
 static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
     if(scanFailed)return "Failed";
@@ -28412,7 +28409,7 @@ static void renderUI() {
     const ImVec4 titleInk(.94f,.97f,1.f,1);
     const ImVec4 subtleInk(.65f,.66f,.69f,1);
     const ImVec4 accentInk(.84f,.85f,.87f,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.08f,.09f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.057f,.082f,.112f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##atlasHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
@@ -28441,7 +28438,7 @@ static void renderUI() {
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.08f);
-    ImGui::TextColored(titleInk,"SYNC PC CHECKER");
+    ImGui::TextColored(titleInk,"SYNC PC CHECKER  /  OBSIDIAN");
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
@@ -28465,7 +28462,7 @@ static void renderUI() {
         }
     }
     ImGui::SameLine(0,30);
-    ImGui::TextColored(accentInk,"ADVANCED ANTI-CHEAT FOR FIVEM");
+    ImGui::TextColored(ImVec4(.51f,.81f,.94f,1.f),"ADVANCED ANTI-CHEAT FOR FIVEM");
     ImGui::SameLine(0,22.f);
     ImGui::TextDisabled("STATUS / %s",stateText());
     float right=ImGui::GetWindowContentRegionMax().x;
@@ -28476,7 +28473,7 @@ static void renderUI() {
     ImGui::EndChild();
 
     // Compact, factual status strip: no inferred malware verdict.
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.086f,.101f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.072f,.112f,.148f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
@@ -28538,19 +28535,20 @@ static void renderUI() {
         }
     }
     // V8: investigation cockpit. Persistent navigation rail, separate evidence workspace.
-    const float railWidth = ImGui::GetContentRegionAvail().x < 790.f ? 172.f : 222.f;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.069f,.077f,1.f));
+    const float railWidth = ImGui::GetContentRegionAvail().x < 790.f ? 180.f : 234.f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.052f,.075f,.103f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_None)){
-        ImGui::TextColored(ImVec4(.98f,.98f,.98f,1.f),"SYNC");
-        ImGui::TextDisabled("ADVANCED ANTI-CHEAT / FIVEM");
+        ImGui::TextColored(ImVec4(.50f,.84f,.96f,1.f),"SYNC / WORKSPACE");
+        ImGui::TextDisabled("SYSTEM ANALYSIS CONSOLE");
         ImGui::Dummy(ImVec2(0,12));
         ImGui::Separator();
         ImGui::TextDisabled("WORKSPACE");
         ImGui::Dummy(ImVec2(0,5));
         const int simpleNavIndices[]={0,1,2,3,10,9};
         const int visibleNavCount=simplifiedInterface?6:11;
+        static float navMarkerY=-1.f;
         for(int visible=0;visible<visibleNavCount;visible++){
             const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
             if(i==4 || i==7){
@@ -28561,13 +28559,34 @@ static void renderUI() {
             const bool active=page==navPages[i];
             ImGui::PushID(i+9800);
             ImGui::PushStyleColor(ImGuiCol_Button,active?
-                ImVec4(.89f,.90f,.92f,1.f):ImVec4(.105f,.112f,.125f,1.f));
+                ImVec4(.13f,.28f,.36f,1.f):ImVec4(.085f,.12f,.16f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,active?
-                ImVec4(.98f,.98f,.99f,1.f):ImVec4(.19f,.20f,.22f,1.f));
+                ImVec4(.17f,.34f,.43f,1.f):ImVec4(.14f,.22f,.29f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Text,active?
-                ImVec4(.055f,.060f,.070f,1.f):ImVec4(.85f,.87f,.90f,1.f));
-            if(ImGui::Button(localized(nav[i]),ImVec2(-1.f,35.f))){
-                page=navPages[i]; navTransitionStart=uiNow; lastNavPage=page;
+                ImVec4(.76f,.94f,1.f,1.f):ImVec4(.75f,.82f,.89f,1.f));
+            const bool clicked=ImGui::Button(localized(nav[i]),ImVec2(-1.f,40.f));
+            const ImVec2 itemMin=ImGui::GetItemRectMin();
+            const ImVec2 itemMax=ImGui::GetItemRectMax();
+            if(active){
+                // The selection marker glides to its new row without moving controls.
+                const float targetY=itemMin.y;
+                if(navMarkerY<0.f || reducedMotion)navMarkerY=targetY;
+                else navMarkerY+=(targetY-navMarkerY)*
+                    (1.f-std::exp(-10.f*ImGui::GetIO().DeltaTime));
+                ImDrawList* railDraw=ImGui::GetWindowDrawList();
+                railDraw->AddRectFilled(ImVec2(itemMin.x-3.f,navMarkerY+5.f),
+                    ImVec2(itemMin.x,navMarkerY+35.f),
+                    IM_COL32(95,215,245,245),2.f);
+                railDraw->AddRect(itemMin,itemMax,
+                    IM_COL32(65,142,176,190),10.f);
+                railDraw->AddLine(
+                    ImVec2(itemMin.x+13.f,itemMax.y-3.f),
+                    ImVec2(itemMax.x-13.f,itemMax.y-3.f),
+                    IM_COL32(74,199,231,100),1.f);
+            }
+            if(clicked && !active){
+                page=navPages[i]; navTransitionStart=uiNow;
+                syncPageAnimationAt=uiNow; lastNavPage=page;
             }
             ImGui::PopStyleColor(3);
             ImGui::PopID();
@@ -28583,7 +28602,7 @@ static void renderUI() {
     ImGui::PopStyleColor();
     ImGui::SameLine(0.f,10.f);
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.055f,.060f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.044f,.062f,.086f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22,16));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
@@ -28595,11 +28614,11 @@ static void renderUI() {
         dl->PushClipRect(origin,ImVec2(origin.x+extent.x,origin.y+extent.y),true);
         dl->AddRectFilledMultiColor(
             origin,ImVec2(origin.x+extent.x,origin.y+210.f),
-            IM_COL32(32,32,32,255),IM_COL32(27,27,27,255),
-            IM_COL32(18,18,18,255),IM_COL32(23,23,23,255));
+            IM_COL32(23,44,59,255),IM_COL32(17,33,47,255),
+            IM_COL32(12,23,37,255),IM_COL32(15,31,44,255));
         dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
                     ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
-                    IM_COL32(100,100,100,33),1.f);
+                    IM_COL32(90,166,196,55),1.f);
         dl->PopClipRect();
     }
     const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
@@ -28608,9 +28627,9 @@ static void renderUI() {
         page==9?"ARTIFACT EXPLORER":page==10?"KERNEL MEMORY DUMP":page==12?"STREAMPROOF REVIEW":"PREFERENCES";
     // A short title entrance signals navigation without obscuring the tables.
     const float elapsed=uiNow-navTransitionStart;
-    const float entrance=reducedMotion?0.f:(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.24f);
-    const float titleAlpha=1.f-.42f*entrance;
-    const float titleOffset=10.f*entrance;
+    const float entrance=reducedMotion?0.f:(std::max)(0.f,1.f-(std::max)(0.f,elapsed)/.38f);
+    const float titleAlpha=1.f-.58f*entrance;
+    const float titleOffset=24.f*entrance;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX()+titleOffset);
     ImGui::TextColored(ImVec4(accentInk.x,accentInk.y,accentInk.z,titleAlpha),
                        "SYNC / %s",section);
@@ -28669,9 +28688,48 @@ static void renderUI() {
     // Fade the whole page content on every navigation, including revisits.
     // Module cards receive an additional individual stagger below.
     const float pageAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
-    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.52f);
+    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.76f);
+    const float transitionAmount=reducedMotion?0.f:1.f-pageFade;
+    // A brief entrance fade preserves text readability and avoids full-screen flashes.
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-        ImGui::GetStyle().Alpha*(0.35f+0.65f*pageFade));
+        ImGui::GetStyle().Alpha*(0.42f+0.58f*pageFade));
+    // V36: grayscale editorial wipe, moving progress rule and corner bracket.
+    // Rendered behind the page widgets; does not intercept input.
+    if(transitionAmount>.001f){
+        const ImVec2 at=ImGui::GetCursorScreenPos();
+        const ImVec2 space=ImGui::GetContentRegionAvail();
+        if(space.x>60.f && space.y>60.f){
+            ImDrawList* bgDraw=ImGui::GetWindowDrawList();
+            const float eased=pageFade;
+            const float x=at.x+space.x*eased;
+            const int fade=(int)(transitionAmount*180.f);
+            bgDraw->AddRectFilledMultiColor(
+                at,ImVec2(at.x+space.x,at.y+space.y),
+                IM_COL32(65,65,65,fade/3),
+                IM_COL32(20,20,20,0),
+                IM_COL32(20,20,20,0),
+                IM_COL32(65,65,65,fade/5));
+            // High-contrast moving line and a subdued trailing glow.
+            bgDraw->AddRectFilled(
+                ImVec2(x-45.f,at.y+1.f),
+                ImVec2(x+5.f,at.y+5.f),
+                IM_COL32(145,145,145,fade/2),2.f);
+            bgDraw->AddRectFilled(
+                ImVec2(x-4.f,at.y),
+                ImVec2(x+4.f,at.y+5.f),
+                IM_COL32(255,255,255,(std::min)(255,fade+65)),2.f);
+            // Bracket expands downward to emphasize the new workspace.
+            const float bracket=38.f+110.f*eased;
+            bgDraw->AddLine(
+                ImVec2(at.x,at.y+7.f),
+                ImVec2(at.x,at.y+bracket),
+                IM_COL32(235,235,235,fade),2.f);
+            bgDraw->AddLine(
+                ImVec2(at.x,at.y+bracket),
+                ImVec2(at.x+24.f,at.y+bracket),
+                IM_COL32(235,235,235,fade),2.f);
+        }
+    }
     if((waitingForPresentation || (unlocking && !reducedMotion)) &&
        page!=0 && page!=4) {
         const float opening=unlocking?
@@ -32536,7 +32594,33 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
         ImGui::Render();
-        const float clear[4]={.035f,.035f,.035f,1.f};
+        // V35 monochrome rendering pass: applies to all custom-drawn widgets,
+        // legacy colored badges, effects, and ImGui controls consistently.
+        // Preserve alpha and apply contrast-aware luminance, without modifying
+        // the scanner's underlying status or evidence classification.
+        if(ImDrawData* monochromeData=ImGui::GetDrawData()){
+            for(int listIndex=0;listIndex<monochromeData->CmdListsCount;++listIndex){
+                ImDrawList* list=monochromeData->CmdLists[listIndex];
+                for(int vertexIndex=0;vertexIndex<list->VtxBuffer.Size;++vertexIndex){
+                    ImDrawVert& vertex=list->VtxBuffer[vertexIndex];
+                    const ImU32 color=vertex.col;
+                    const unsigned int r=(color>>IM_COL32_R_SHIFT)&255u;
+                    const unsigned int g=(color>>IM_COL32_G_SHIFT)&255u;
+                    const unsigned int b=(color>>IM_COL32_B_SHIFT)&255u;
+                    const unsigned int a=(color>>IM_COL32_A_SHIFT)&255u;
+                    const unsigned int lum=(54u*r+183u*g+19u*b+128u)>>8;
+                    // Lift bright text while keeping dark panels nearly black.
+                    const unsigned int gray=lum>170u
+                        ? (std::min)(255u,lum+((lum-170u)/4u))
+                        : lum<55u ? (lum*3u)/4u : lum;
+                    vertex.col=(gray<<IM_COL32_R_SHIFT)
+                              |(gray<<IM_COL32_G_SHIFT)
+                              |(gray<<IM_COL32_B_SHIFT)
+                              |(a<<IM_COL32_A_SHIFT);
+                }
+            }
+        }
+        const float clear[4]={.025f,.025f,.025f,1.f};
         context->OMSetRenderTargets(1,&target,nullptr);
         context->ClearRenderTargetView(target,clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
