@@ -28268,9 +28268,8 @@ static void renderSyncOpening() {
         IM_COL32(17,17,17,255),IM_COL32(13,13,13,255),IM_COL32(20,20,20,255));
     d->AddRect(lo,hi,ink(132,.44f),12.f,0,1.2f);
     // Fine editorial rails; subtle enough not to compete with text.
-    d->AddLine(ImVec2(lo.x+24.f,lo.y+55.f),
-        ImVec2(hi.x-24.f,lo.y+55.f),ink(225,.24f),1.f);
-    d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC / PC CHECKER");
+
+    d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC PC CHECKER");
     // V46: cinematic monochrome computer + magnifier illustration.
     // All primitives are vector draw calls: no images, external assets or fonts.
     const float scale=(std::min)(1.f,(std::min)(cardW/590.f,cardH/405.f));
