@@ -28233,7 +28233,7 @@ static void updateStartupWindowExpand(){
 }
 
 static void renderSyncOpening() {
-    // V39: redesigned opening — monochrome orbital scanner, shutter reveal,
+    // V46: redesigned opening — animated computer, code and magnifier,
     // animated typography and a genuine, clickable Open Scanner action.
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
@@ -28273,42 +28273,98 @@ static void renderSyncOpening() {
     d->AddLine(ImVec2(lo.x+24.f,hi.y-48.f),
         ImVec2(hi.x-24.f,hi.y-48.f),ink(225,.20f),1.f);
     d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC / PC CHECKER");
-    const char* edition="NOIR  //  V39";
+    const char* edition="NOIR  //  V46";
     d->AddText(ImVec2(hi.x-25.f-ImGui::CalcTextSize(edition).x,lo.y+23.f),
         ink(178,.84f),edition);
-    const float orbitY=cy-78.f;
-    const ImVec2 center(cx,orbitY);
-    const float orbitRadius=52.f;
-    // Rotating orbital segments, not a flashing texture.
-    for(int ring=0;ring<3;++ring){
-        const float radius=orbitRadius+ring*12.f;
-        const float start=clock*(ring%2?-.42f:.57f)+ring*1.4f;
-        const float sweep=1.15f+ring*.19f;
-        d->PathClear();
-        for(int k=0;k<=28;++k){
-            const float theta=start+sweep*k/28.f;
-            d->PathLineTo(ImVec2(center.x+std::cos(theta)*radius,
-                center.y+std::sin(theta)*radius));
-        }
-        d->PathStroke(ink(238,ring==0?.80f:.25f),0,ring==0?2.4f:1.1f);
-    }
-    d->AddCircle(center,36.f,ink(215,.30f),64,1.0f);
-    // Crosshair and a minimal vector shield.
-    d->AddLine(ImVec2(cx-9.f,orbitY),ImVec2(cx+9.f,orbitY),
-        ink(248,.55f),1.f);
-    d->AddLine(ImVec2(cx,orbitY-9.f),ImVec2(cx,orbitY+9.f),
-        ink(248,.55f),1.f);
-    ImVec2 shield[6]={
-        ImVec2(cx-16.f,orbitY-22.f),ImVec2(cx,orbitY-28.f),
-        ImVec2(cx+16.f,orbitY-22.f),ImVec2(cx+14.f,orbitY+5.f),
-        ImVec2(cx,orbitY+23.f),ImVec2(cx-14.f,orbitY+5.f)
+    // V46: cinematic monochrome computer + magnifier illustration.
+    // All primitives are vector draw calls: no images, external assets or fonts.
+    const float scale=(std::min)(1.f,(std::min)(cardW/590.f,cardH/405.f));
+    const float screenW=174.f*scale, screenH=100.f*scale;
+    const ImVec2 screenMin(cx-screenW*.5f,cy-155.f*scale);
+    const ImVec2 screenMax(cx+screenW*.5f,screenMin.y+screenH);
+    const float pulse=animate?(.5f+.5f*std::sin(clock*2.1f)):.65f;
+    // Monitor bezel, reflective glass and structural details.
+    d->AddRectFilled(ImVec2(screenMin.x-8.f*scale,screenMin.y-8.f*scale),
+        ImVec2(screenMax.x+8.f*scale,screenMax.y+8.f*scale),
+        ink(48,.96f),7.f*scale);
+    d->AddRect(ImVec2(screenMin.x-8.f*scale,screenMin.y-8.f*scale),
+        ImVec2(screenMax.x+8.f*scale,screenMax.y+8.f*scale),
+        ink(233,.72f),7.f*scale,0,1.6f*scale);
+    d->AddRectFilled(screenMin,screenMax,ink(9,1.f),3.f*scale);
+    d->AddRectFilled(screenMin,ImVec2(screenMax.x,screenMin.y+12.f*scale),
+        ink(52,.9f),3.f*scale);
+    for(int k=0;k<3;++k)
+        d->AddCircleFilled(ImVec2(screenMin.x+(8.f+8.f*k)*scale,
+            screenMin.y+6.f*scale),1.4f*scale,ink(220,.55f),10);
+    // Animated terminal lines, clipped to the monitor.
+    d->PushClipRect(ImVec2(screenMin.x+4.f*scale,screenMin.y+15.f*scale),
+        ImVec2(screenMax.x-4.f*scale,screenMax.y-4.f*scale),true);
+    static constexpr const char* terminalLines[]={
+        "0x7F  01001010  [SYS]","SCAN::KERNEL  0x00AF",
+        "for(i=0;i<n;i++)","SHA256  A9F2...B41C",
+        "PROC > VERIFY(0xFF)","11001001  00101110",
+        "MODULE::CHECK_OK","0x004F  01101010",
+        "STATUS = INSPECT","READ_ONLY  TRUE",
+        "SIG::VERIFY  0x8A","01011100  11100001"
     };
-    d->AddConvexPolyFilled(shield,6,ink(24,.97f));
-    d->AddPolyline(shield,6,ink(245,.90f),ImDrawFlags_Closed,1.8f);
-    d->AddLine(ImVec2(cx-7.f,orbitY-1.f),ImVec2(cx-1.f,orbitY+6.f),
-        ink(255,.96f),2.f);
-    d->AddLine(ImVec2(cx-1.f,orbitY+6.f),ImVec2(cx+9.f,orbitY-8.f),
-        ink(255,.96f),2.f);
+    const int lineCount=static_cast<int>(sizeof(terminalLines)/sizeof(terminalLines[0]));
+    const float lineHeight=10.2f*scale;
+    const float travel=animate?std::fmod(clock*13.f*scale,
+        lineHeight*lineCount):0.f;
+    for(int k=0;k<lineCount+9;++k){
+        const int idx=k%lineCount;
+        const float y=screenMin.y+19.f*scale+k*lineHeight-travel;
+        if(y<screenMin.y+14.f*scale || y>screenMax.y-6.f*scale)continue;
+        d->AddText(nullptr,10.5f*scale,
+            ImVec2(screenMin.x+8.f*scale,y),
+            ink((k%4==0)?245:173,(k%4==0)?.88f:.64f),
+            terminalLines[idx]);
+    }
+    const float scanLine=screenMin.y+16.f*scale+
+        (animate?std::fmod(clock*26.f*scale,screenH-22.f*scale):
+            (screenH-22.f*scale)*.5f);
+    d->AddRectFilled(ImVec2(screenMin.x+3.f*scale,scanLine-3.f*scale),
+        ImVec2(screenMax.x-3.f*scale,scanLine+4.f*scale),
+        ink(230,.07f),0.f);
+    d->AddLine(ImVec2(screenMin.x+3.f*scale,scanLine),
+        ImVec2(screenMax.x-3.f*scale,scanLine),ink(255,.32f),1.f);
+    d->PopClipRect();
+    // Monitor stand and base.
+    d->AddRectFilled(ImVec2(cx-5.f*scale,screenMax.y+8.f*scale),
+        ImVec2(cx+5.f*scale,screenMax.y+22.f*scale),ink(155,.72f),2.f*scale);
+    d->AddRectFilled(ImVec2(cx-34.f*scale,screenMax.y+21.f*scale),
+        ImVec2(cx+34.f*scale,screenMax.y+25.f*scale),ink(220,.76f),2.f*scale);
+    // Lens follows a gentle figure-eight search trajectory over the code.
+    const float lx=cx+47.f*scale+
+        (animate?std::sin(clock*1.15f)*29.f*scale:0.f);
+    const float ly=screenMin.y+51.f*scale+
+        (animate?std::sin(clock*1.68f)*16.f*scale:0.f);
+    const float lensR=26.f*scale;
+    d->AddCircleFilled(ImVec2(lx,ly),lensR+3.f*scale,ink(12,.88f),48);
+    d->AddCircle(ImVec2(lx,ly),lensR+3.f*scale,ink(250,.95f),48,3.f*scale);
+    d->AddCircle(ImVec2(lx,ly),lensR-3.f*scale,ink(225,.28f),48,1.f*scale);
+    // Magnified code inside lens, clipped to a square inset.
+    d->PushClipRect(ImVec2(lx-lensR*.72f,ly-lensR*.58f),
+        ImVec2(lx+lensR*.72f,ly+lensR*.58f),true);
+    d->AddText(nullptr,13.f*scale,
+        ImVec2(lx-20.f*scale,ly-13.f*scale),ink(255,.96f),"0xFF");
+    d->AddText(nullptr,12.f*scale,
+        ImVec2(lx-21.f*scale,ly+1.f*scale),ink(205,.83f),"10101");
+    d->PopClipRect();
+    const ImVec2 handleStart(lx+lensR*.72f,ly+lensR*.72f);
+    const ImVec2 handleEnd(handleStart.x+24.f*scale,
+        handleStart.y+24.f*scale);
+    d->AddLine(handleStart,handleEnd,ink(250,.95f),7.f*scale);
+    d->AddLine(handleStart,handleEnd,ink(75,.95f),3.f*scale);
+    // Searching particles; deterministic movement and reduced-motion support.
+    for(int k=0;k<9;++k){
+        const float t=clock*(.35f+.045f*k)+k*1.91f;
+        const float px=cx+std::cos(t)*(110.f+12.f*(k%3))*scale;
+        const float py=screenMin.y+54.f*scale+
+            std::sin(t*1.2f)*(34.f+6.f*(k%2))*scale;
+        d->AddCircleFilled(ImVec2(px,py),(k%3==0?1.6f:1.f)*scale,
+            ink(240,.12f+.35f*pulse),8);
+    }
     const char* heading=transitioning?"INITIALIZING WORKSPACE":"SYSTEM INSPECTION";
     const ImVec2 headingSize=ImGui::CalcTextSize(heading);
     const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
