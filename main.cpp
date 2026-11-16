@@ -26305,7 +26305,7 @@ static void modulesList() {
         if(i%columns)ImGui::SameLine(0,gap);
         // Each module enters individually on every navigation to this page.
         const float cardAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
-        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.095f)/0.38f);
+        const float cardT=reducedMotion?1.f:syncEase((cardAge-i*0.055f)/0.44f);
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
             ImGui::GetStyle().Alpha*(0.02f+0.98f*cardT));
         // Keep the card's layout stable; do not show or activate it before its turn.
@@ -27849,8 +27849,7 @@ static void drawAtlasProgress(bool compact=false){
             IM_COL32(244,248,255,alpha),3.f);
     }
     if(scanning.load()){
-        const int stages=(std::max)(0,(std::min)(completedStages.load(),6));
-        ImGui::TextDisabled("Evidence collection | %d of 6 stages completed",stages);
+        ImGui::TextDisabled("Collecting system evidence...");
     }else{
         ImGui::TextDisabled("%s",done.load()?"Scan complete - preparing results...":
             "Ready for inspection.");
@@ -28403,21 +28402,6 @@ static void renderUI() {
     ImGui::PopStyleColor();
 
     // Show incomplete coverage across the entire workspace, not only in Overview.
-    if(done.load() && !scanning.load() && processChecksUnavailable.load()>0){
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.22f,.17f,.075f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.53f,.40f,.15f,.85f));
-        if(ImGui::BeginChild("##partialCoverageWarning",ImVec2(0,47.f),
-            ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
-            ImGui::TextColored(ImVec4(.98f,.78f,.36f,1.f),
-                "PARTIAL SCAN COVERAGE");
-            ImGui::SameLine(0,15.f);
-            ImGui::TextDisabled("%llu checks unavailable - no automatic CLEAN conclusion",
-                processChecksUnavailable.load());
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
-    }
-
     // Global alert appears on every main page after a completed scan.
     if(bypassCorrelatedAlert.load() && !scanning.load()){
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.29f,.055f,.065f,1.f));
@@ -28439,7 +28423,7 @@ static void renderUI() {
     static int lastNavPage=-1;
     static float navTransitionStart=-100.f;
     const float uiNow=(float)ImGui::GetTime();
-    if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; }
+    if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; syncPageAnimationAt=uiNow; }
     const char* nav[]={"OVERVIEW","VERDICT","SCAN RESULTS","ARTIFACTS",
                        "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS","REM STREAMPROOF"};
     const int navPages[]={0,11,2,9,3,7,6,8,10,4,12};
@@ -28447,7 +28431,7 @@ static void renderUI() {
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
         for(int shortcut=0;shortcut<9;shortcut++){
             if(ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1+shortcut),false)){
-                page=navPages[shortcut]; navTransitionStart=uiNow; lastNavPage=page;
+                page=navPages[shortcut]; navTransitionStart=uiNow; lastNavPage=page; syncPageAnimationAt=uiNow;
             }
         }
     }
@@ -28583,9 +28567,9 @@ static void renderUI() {
     // Fade the whole page content on every navigation, including revisits.
     // Module cards receive an additional individual stagger below.
     const float pageAge=static_cast<float>(ImGui::GetTime()-syncPageAnimationAt);
-    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.42f);
+    const float pageFade=reducedMotion?1.f:syncEase(pageAge/0.52f);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
-        ImGui::GetStyle().Alpha*(0.04f+0.96f*pageFade));
+        ImGui::GetStyle().Alpha*(0.35f+0.65f*pageFade));
     if((waitingForPresentation || (unlocking && !reducedMotion)) &&
        page!=0 && page!=4) {
         const float opening=unlocking?
@@ -32285,45 +32269,31 @@ zula.exe)FIVEMSTR";
         ImGui::EndChild();
     }
     ImGui::PopStyleVar(); // page content fade
-    // Atlas navigation transition: a short monochrome cinematic wipe.
-    // Rendered over the content only, so navigation and the top bar stay
-    // responsive. No result state, scan progress or evidence is modified.
+    // V26: non-obscuring page reveal, with soft vertical highlight.
+    // Drawn only in the content workspace, not over navigation or controls.
     if(!reducedMotion && navTransitionStart>0.f){
         const float dt=static_cast<float>(ImGui::GetTime())-navTransitionStart;
-        constexpr float duration=.22f;
+        constexpr float duration=.48f;
         if(dt>=0.f && dt<duration){
-            const float progress=std::clamp(dt/duration,0.f,1.f);
-            const float smooth=progress*progress*(3.f-2.f*progress);
+            const float t=std::clamp(dt/duration,0.f,1.f);
+            const float eased=1.f-std::pow(1.f-t,3.f);
+            const float opacity=(1.f-eased)*(1.f-eased);
             const ImVec2 lo=ImGui::GetWindowPos();
             const ImVec2 sz=ImGui::GetWindowSize();
-            const ImVec2 hi(lo.x+sz.x,lo.y+sz.y);
-            ImDrawList* transitionDraw=ImGui::GetWindowDrawList();
-            transitionDraw->PushClipRect(lo,hi,true);
-            // The initial dark veil lifts, making the destination appear.
-            const float veil=(1.f-smooth)*(1.f-smooth);
-            transitionDraw->AddRectFilled(lo,hi,
-                IM_COL32(9,9,9,static_cast<int>(42.f*veil)));
-            // Bright scanning edge travels across the content horizontally.
-            const float edgeX=lo.x-70.f+(sz.x+140.f)*smooth;
-            const float edgeAlpha=std::sin(progress*3.14159265f);
-            for(int stripe=4;stripe>=0;--stripe){
-                const float x=edgeX-static_cast<float>(stripe)*5.f;
-                const int alpha=static_cast<int>(
-                    38.f*edgeAlpha*(1.f-stripe/5.f));
-                transitionDraw->AddRectFilled(
-                    ImVec2(x,lo.y),ImVec2(x+5.f,hi.y),
-                    IM_COL32(222,222,222,alpha));
-            }
-            transitionDraw->AddLine(
-                ImVec2(edgeX,lo.y+12.f),ImVec2(edgeX,hi.y-12.f),
-                IM_COL32(245,245,245,
-                    static_cast<int>(85.f*edgeAlpha)),1.6f);
-            // Brief top-edge confirmation flash, no colored highlights.
-            transitionDraw->AddRectFilled(
-                ImVec2(lo.x,lo.y),ImVec2(hi.x,lo.y+2.f),
-                IM_COL32(234,234,234,
-                    static_cast<int>(125.f*edgeAlpha)));
-            transitionDraw->PopClipRect();
+            ImDrawList* dl=ImGui::GetWindowDrawList();
+            const float x=lo.x+22.f;
+            const float y=lo.y+5.f;
+            const float w=(std::max)(0.f,sz.x-44.f);
+            dl->PushClipRect(lo,ImVec2(lo.x+sz.x,lo.y+sz.y),true);
+            // A short accent sweep replaces the old full-screen flash.
+            const float trail=w*eased;
+            dl->AddRectFilled(ImVec2(x,y),ImVec2(x+trail,y+2.f),
+                IM_COL32(177,195,215,static_cast<int>(170.f*(1.f-t))));
+            // Subtle brightness bloom across the heading only.
+            dl->AddRectFilled(ImVec2(x,lo.y+13.f),
+                ImVec2(x+w,lo.y+48.f),
+                IM_COL32(155,173,195,static_cast<int>(13.f*opacity)));
+            dl->PopClipRect();
         }
     }
     // End the animation after all visible tabs have appeared.
