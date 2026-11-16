@@ -27657,6 +27657,9 @@ static void drawAtlasProgress(bool compact=false){
 }
 
 static bool simplifiedInterface=true;
+// UI-only transition state. Kept independent from scanner execution.
+static float viewTransitionStart = -100.0f;
+static bool viewTransitionActive = false;
 
 static void drawEvidenceSourcesTab() {
     std::lock_guard<std::mutex> lock(dataMutex);
@@ -28100,7 +28103,7 @@ static void renderUI() {
     ImGui::SameLine(0.f,10.f);
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.055f,.060f,1));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18,10));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22,16));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
     // No moving rings, artificial radar sweeps or fabricated activity.
@@ -31890,7 +31893,7 @@ zula.exe)FIVEMSTR";
     // responsive. No result state, scan progress or evidence is modified.
     if(!reducedMotion && navTransitionStart>0.f){
         const float dt=static_cast<float>(ImGui::GetTime())-navTransitionStart;
-        constexpr float duration=.56f;
+        constexpr float duration=.22f;
         if(dt>=0.f && dt<duration){
             const float progress=std::clamp(dt/duration,0.f,1.f);
             const float smooth=progress*progress*(3.f-2.f*progress);
@@ -31902,14 +31905,14 @@ zula.exe)FIVEMSTR";
             // The initial dark veil lifts, making the destination appear.
             const float veil=(1.f-smooth)*(1.f-smooth);
             transitionDraw->AddRectFilled(lo,hi,
-                IM_COL32(9,9,9,static_cast<int>(208.f*veil)));
+                IM_COL32(9,9,9,static_cast<int>(42.f*veil)));
             // Bright scanning edge travels across the content horizontally.
             const float edgeX=lo.x-70.f+(sz.x+140.f)*smooth;
             const float edgeAlpha=std::sin(progress*3.14159265f);
-            for(int stripe=12;stripe>=0;--stripe){
+            for(int stripe=4;stripe>=0;--stripe){
                 const float x=edgeX-static_cast<float>(stripe)*5.f;
                 const int alpha=static_cast<int>(
-                    100.f*edgeAlpha*(1.f-stripe/13.f));
+                    38.f*edgeAlpha*(1.f-stripe/5.f));
                 transitionDraw->AddRectFilled(
                     ImVec2(x,lo.y),ImVec2(x+5.f,hi.y),
                     IM_COL32(222,222,222,alpha));
@@ -31917,7 +31920,7 @@ zula.exe)FIVEMSTR";
             transitionDraw->AddLine(
                 ImVec2(edgeX,lo.y+12.f),ImVec2(edgeX,hi.y-12.f),
                 IM_COL32(245,245,245,
-                    static_cast<int>(190.f*edgeAlpha)),1.6f);
+                    static_cast<int>(85.f*edgeAlpha)),1.6f);
             // Brief top-edge confirmation flash, no colored highlights.
             transitionDraw->AddRectFilled(
                 ImVec2(lo.x,lo.y),ImVec2(hi.x,lo.y+2.f),
