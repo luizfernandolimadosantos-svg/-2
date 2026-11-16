@@ -1852,9 +1852,25 @@ static std::vector<Record> inspectPeStructure(const std::vector<Process>& items)
     return findings;
 }
 
+// V74: exact two-keyword name indicator, including shortcut names such as
+// "cheat fivem.exe.lnk". DETECTED means the naming rule matched, not
+// that the shortcut target or binary was verified as a cheat.
+static bool isFiveMCheatNamedEvidence(const Record& r){
+    std::string name=r.name;
+    for(char& ch:name)
+        if(ch>='A' && ch<='Z')ch=static_cast<char>(ch-'A'+'a');
+    return name.find("cheat")!=std::string::npos &&
+           name.find("fivem")!=std::string::npos &&
+           (r.category=="Artifact: Script/Shortcut" ||
+            r.category=="FiveM Cheat Name Detection" ||
+            r.category=="Artifact: EXE" ||
+            r.category=="Artifact: DLL" ||
+            r.category=="Startup File Review");
+}
 // Categories are based on evidence; unknown information must not be called clean.
 static bool isDetectedRecord(const Record& r) {
-    return r.detail.find("DETECTED |")!=std::string::npos ||
+    return isFiveMCheatNamedEvidence(r) ||
+           r.detail.find("DETECTED |")!=std::string::npos ||
            r.detail.find("DETECTED -")!=std::string::npos ||
            (r.category=="Defender Detection" &&
             r.detail.find("Detection")!=std::string::npos);
@@ -2894,8 +2910,14 @@ static std::vector<Record> inspectArtifactLocations(){
                     if(match && matchCount<1200 &&
                        seenMatches.insert(lowerPath(path.wstring())).second){
                         ++matchCount;
+                        const std::wstring lowName=lowerPath(path.filename().wstring());
+                        const bool explicitFiveMCheat=lowName.find(L"cheat")!=std::wstring::npos &&
+                            lowName.find(L"fivem")!=std::wstring::npos;
                         out.push_back({"FiveM Cheat Name Detection",name,
-                            "SUSPECT - NAME RULE | Filename contains CHEAT or EXTERNAL. "
+                            std::string(explicitFiveMCheat
+                                ? "DETECTED - CHEAT + FIVEM FILENAME INDICATOR | "
+                                : "SUSPECT - NAME RULE | ")+
+                            "Filename contains CHEAT or EXTERNAL. "
                             "Location: "+root.label+" | Path: "+fullPath+
                             " | This confirms a filename match, not actual cheating or malware."});
                     }
@@ -2906,7 +2928,11 @@ static std::vector<Record> inspectArtifactLocations(){
                             ext==L".dll"?"Artifact: DLL":
                             ext==L".exe"?"Artifact: EXE":"Artifact: Script/Shortcut";
                         out.push_back({category,name,
-                            std::string(match?"SUSPECT - NAME RULE":"INVENTORY")+
+                            std::string(
+                                lowerPath(path.filename().wstring()).find(L"cheat")!=std::wstring::npos &&
+                                lowerPath(path.filename().wstring()).find(L"fivem")!=std::wstring::npos
+                                ? "DETECTED - CHEAT + FIVEM FILENAME INDICATOR"
+                                : (match?"SUSPECT - NAME RULE":"INVENTORY"))+
                             " | Location: "+root.label+" | File: "+fullPath+
                             " | File presence alone does not prove malware."});
                     }
