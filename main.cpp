@@ -19,6 +19,7 @@
 #include <shellapi.h>
 #pragma comment(lib,"shell32.lib")
 #include <map>
+#include <set>
 #pragma comment(lib,"winhttp.lib")
 #include <tlhelp32.h>
 #include <psapi.h>
@@ -892,12 +893,12 @@ static std::vector<Record> enumerateTcp6() {
         addr.sin6_family = AF_INET6;
         addr.sin6_scope_id = scope;
         std::memcpy(&addr.sin6_addr, raw, 16);
-        char text[128]{};
-        DWORD len = static_cast<DWORD>(sizeof(text));
-        if (WSAAddressToStringA(reinterpret_cast<LPSOCKADDR>(&addr),
+        wchar_t text[128]{};
+        DWORD len = static_cast<DWORD>(sizeof(text) / sizeof(text[0]));
+        if (WSAAddressToStringW(reinterpret_cast<LPSOCKADDR>(&addr),
                                 sizeof(addr), nullptr, text, &len) != 0)
             return "[IPv6 address unavailable]";
-        return text;
+        return utf8(std::wstring(text));
     };
 
     WSADATA winsockData{};
@@ -1257,8 +1258,9 @@ static std::vector<Record> evaluateTaskRules(const TaskEvidence& e){
 static std::vector<Record> inspectExtendedEndpoint(){
     std::vector<Record> result;
     // Scheduled task XML inventory: read only, bounded, and no command execution.
-    const wchar_t* windir=_wgetenv(L"WINDIR");
-    std::wstring root=windir?windir:L"C:\\Windows";
+    wchar_t windir[MAX_PATH]{};
+    const DWORD windirLen=GetEnvironmentVariableW(L"WINDIR",windir,MAX_PATH);
+    std::wstring root=(windirLen>0 && windirLen<MAX_PATH)?windir:L"C:\\Windows";
     root+=L"\\System32\\Tasks";
     std::error_code ec;
     if(fs::exists(root,ec)){
@@ -1326,8 +1328,9 @@ static std::vector<Record> inspectExtendedEndpoint(){
         result.push_back({"Network Configuration","Automatic proxy configuration",
             "PAC URL: "+utf8(pac)+" | Informational"});
     // Browser extension inventory: IDs and directories only, no browser secrets.
-    const wchar_t* local=_wgetenv(L"LOCALAPPDATA");
-    if(local){
+    wchar_t local[MAX_PATH]{};
+    const DWORD localLen=GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH);
+    if(localLen>0 && localLen<MAX_PATH){
         const std::wstring base(local);
         const std::pair<const wchar_t*,const wchar_t*> browsers[]={
             {L"Chrome",L"\\Google\\Chrome\\User Data\\Default\\Extensions"},
@@ -3578,7 +3581,7 @@ static void drawEvidenceInspector(){
     static char query[160]{};
     ImGui::InputTextWithHint("##evidenceSearch","Search category, name or details...",query,sizeof(query));
     ImGui::SameLine();
-    if(ImGui::SmallButton("Clear evidence filter"))query[0]='\\0';
+    if(ImGui::SmallButton("Clear evidence filter"))query[0]='\0';
     ImGui::TextDisabled("Tip: use category, executable name, PID or rule number to narrow the evidence.");
     ImGui::TextDisabled("%zu records available | Read-only evidence inspector",records.size());
     ImGui::TextDisabled("Search ignores letter case. Findings are indicators, not verdicts.");
@@ -5342,11 +5345,7 @@ static void inspectProcessMitigations(Collector& out,const Process& proc) {
         out.emit("Process Mitigation Review",proc.path,
                  "PID "+std::to_string(proc.pid)+
                  " | DEP not enabled for process in user-writable directory");
-    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamic{};
-    if(GetProcessMitigationPolicy(h,ProcessDynamicCodePolicy,
-                                 &dynamic,sizeof(dynamic)) &&
-       dynamic.ProhibitDynamicCode)
-        ; // Positive mitigation: not a suspicious finding.
+    // No finding is emitted for positive dynamic-code mitigations.
     CloseHandle(h);
 }
 static void inspectAutostartKey(Collector& out,HKEY hive,
