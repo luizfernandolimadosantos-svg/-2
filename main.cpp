@@ -2616,6 +2616,57 @@ static bool isKnownFiveMReviewFilename(const std::wstring& input){
     return names.find(lowerPath(fs::path(input).filename().wstring()))!=names.end();
 }
 
+// V67: read-only Visual Studio .sln triage. A solution is source metadata,
+// not an executable or proof that a cheat/bypass was used.
+static std::string inspectFiveMSolution(const fs::path& file){
+    HANDLE h=CreateFileW(file.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,
+        OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return "";
+    LARGE_INTEGER size{};
+    if(!GetFileSizeEx(h,&size) || size.QuadPart<=0 ||
+       size.QuadPart>4LL*1024*1024){CloseHandle(h);return "";}
+    const DWORD want=static_cast<DWORD>((std::min)(
+        size.QuadPart,static_cast<LONGLONG>(128*1024)));
+    std::string content(want,'\0');
+    DWORD got=0;
+    const BOOL ok=ReadFile(h,content.data(),want,&got,nullptr);
+    CloseHandle(h);
+    if(!ok || !got)return "";
+    content.resize(got);
+    // Normalize ASCII keywords for both UTF-8 and UTF-16LE .sln text.
+    std::string normalized;
+    normalized.reserve(content.size());
+    for(unsigned char c:content){
+        if(c==0)continue;
+        normalized.push_back(c>='A'&&c<='Z'?char(c+32):char(c));
+    }
+    const std::wstring name=lowerPath(file.filename().wstring());
+    const std::wstring path=lowerPath(file.wstring());
+    const bool validSln=normalized.find("microsoft visual studio solution file")!=std::string::npos
+        || normalized.find("project(")!=std::string::npos;
+    if(!validSln)return "";
+    const bool fiveM=normalized.find("fivem")!=std::string::npos
+        || normalized.find("citizenfx")!=std::string::npos
+        || name.find(L"fivem")!=std::wstring::npos
+        || path.find(L"fivem")!=std::wstring::npos;
+    const char* terms[]={"cheat","bypass","inject","executor","spoofer",
+        "hwid","aimbot","triggerbot","wallhack","silentaim",
+        "manualmap","kdmapper","redengine","eulen"};
+    std::string matched;
+    for(const char* term:terms){
+        const std::wstring wterm(term,term+strlen(term));
+        if(normalized.find(term)!=std::string::npos ||
+           name.find(wterm)!=std::wstring::npos){
+            if(!matched.empty())matched+=", ";
+            matched+=term;
+        }
+    }
+    if(matched.empty() && !fiveM)return "";
+    return std::string(fiveM?"FIVEM_CONTEXT":"NO_FIVEM_CONTEXT")
+        +(matched.empty()?"":" | KEYWORDS: "+matched);
+}
+
 // V63: safe, bounded static triage based on the supplied JS detection
 // families. This is NOT execution tracing or memory-injection detection.
 static std::string inspectStaticBehaviorIndicators(const fs::path& file){
@@ -2883,6 +2934,9 @@ static std::vector<Record> inspectArtifactLocations(){
     size_t volumeEntries=0,volumeErrors=0,volumeCaps=0,exactHits=0;
     size_t volumeCount=0;
     size_t peChecked=0,peIssues=0,peUnreadable=0,fiveMNearby=0;
+    size_t slnChecked=0,slnFindings=0;
+    constexpr size_t maxSlnChecks=20000;
+    constexpr size_t maxSlnRows=750;
     constexpr size_t maxPeChecks=120000;
     constexpr size_t maxPeIssueRows=1500;
     std::unordered_set<std::wstring> exactPaths;
@@ -2948,6 +3002,24 @@ static std::vector<Record> inspectArtifactLocations(){
                             " | Location alone is not evidence of injection."});
                     }
                 }
+                if(extension==L".sln" && slnChecked<maxSlnChecks){
+                    ++slnChecked;
+                    const std::string slnFinding=inspectFiveMSolution(candidate);
+                    if(!slnFinding.empty()){
+                        ++slnFindings;
+                        if(slnFindings<=maxSlnRows){
+                            const bool hasCheatKeyword=
+                                slnFinding.find("KEYWORDS:")!=std::string::npos;
+                            out.push_back({"FiveM / Cheat / Bypass Solution Review",
+                                utf8(candidate.filename().wstring()),
+                                std::string(hasCheatKeyword?
+                                    "DETECTED - SOLUTION KEYWORD INDICATOR MATCH | ":
+                                    "INFO - FIVEM SOLUTION CONTEXT | ")+
+                                slnFinding+" | Path: "+utf8(candidate.wstring())+
+                                " | DETECTED means the configured keyword indicator matched, not confirmed cheating or execution."});
+                        }
+                    }
+                }
                 if(isKnownFiveMReviewFilename(filename)){
                     const std::wstring normalized=lowerPath(candidate.wstring());
                     if(exactPaths.insert(normalized).second){
@@ -2975,6 +3047,12 @@ static std::vector<Record> inspectArtifactLocations(){
                 "safety limit on this volume."});
         }
     }
+    out.push_back({"FiveM / Cheat / Bypass Solution Review",
+        "Visual Studio solution coverage",
+        "READ-ONLY | .sln inspected="+std::to_string(slnChecked)+
+        " | Relevant matches="+std::to_string(slnFindings)+
+        " | File cap="+std::to_string(maxSlnChecks)+
+        " | Entries capped per volume; metadata is not proof of execution."});
     out.push_back({"Executable / DLL Static Review","Whole-volume PE inspection coverage",
         "READ-ONLY | EXE/DLL/SYS headers checked="+std::to_string(peChecked)+
         " | Header anomalies="+std::to_string(peIssues)+
@@ -28765,6 +28843,8 @@ static void renderSyncOpening() {
     ImGui::SetNextWindowPos(p);
     ImGui::SetNextWindowSize(sz);
     ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0.f);
     ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
@@ -28789,9 +28869,8 @@ static void renderSyncOpening() {
     const float entrance=transitioning?ease(.05f,.70f):0.f;
     const float exit=transitioning?ease(4.65f,.60f):0.f;
     d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
-    d->AddRectFilledMultiColor(lo,hi,IM_COL32(26,26,26,255),
-        IM_COL32(17,17,17,255),IM_COL32(13,13,13,255),IM_COL32(20,20,20,255));
-    d->AddRect(lo,hi,ink(132,.44f),12.f,0,1.2f);
+    // No outer card fill or outline: opening content sits directly
+    // on the fullscreen background, with no enclosing rectangle.
     // Fine editorial rails; subtle enough not to compete with text.
 
     d->AddText(ImVec2(lo.x+25.f,lo.y+23.f),ink(246,.94f),"SYNC PC CHECKER");
@@ -28856,6 +28935,7 @@ static void renderSyncOpening() {
         }
     }
     ImGui::End();
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 }
 
