@@ -29567,8 +29567,21 @@ namespace syncLive {
     // The admin listener is bound to 127.0.0.1, never exposed to the LAN.
     static std::string status="pending",message;
     static bool send(const std::string& route,const std::string& report=""){
+        // Optional remote URL: sync_admin_url.txt beside the current working directory.
         const char* urlEnv=std::getenv("SYNC_ADMIN_URL");
-        const std::string base="http://127.0.0.1:8765";
+        std::string base=(urlEnv&&*urlEnv)?urlEnv:"http://127.0.0.1:8765";
+        if(!(urlEnv&&*urlEnv)){
+            std::ifstream endpointFile("sync_admin_url.txt");
+            std::string configured;
+            if(endpointFile&&std::getline(endpointFile,configured)){
+                while(!configured.empty()&&(configured.back()=='\\r'||
+                      configured.back()==' '||configured.back()=='\\n'))
+                    configured.pop_back();
+                if(configured.rfind("https://",0)==0 &&
+                   configured.size()<512)base=configured;
+            }
+        }
+        if(base.size()>1&&base.back()=='/')base.pop_back();
         const std::string id=deviceId();
         if(id.empty()){message="Device ID unavailable.";return false;}
         std::string body="{\"device\":\""+id+"\"";
@@ -29662,29 +29675,60 @@ static void renderUI() {
         syncLive::send("/hello");
     }
     if(syncLive::status!="unlocked"){syncLive::render();return;}
-    // Explicit opt-in: no scan data is transmitted without a user click.
-    if(done.load()){
-        ImGui::SetNextWindowBgAlpha(.94f);
-        ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x+15.f,
-            ImGui::GetMainViewport()->WorkPos.y+15.f),ImGuiCond_Always);
-        ImGui::Begin("SYNC / REPORT SHARING",nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse);
-        ImGui::TextDisabled("Share scan evidence with administrator?");
-        if(ImGui::Button("SEND FULL SCAN (CONSENT)")){
-            std::string report="SYNC PC CHECKER - scan evidence\n";
-            {
-                std::lock_guard<std::mutex> lock(dataMutex);
-                report+="Records: "+std::to_string(records.size())+"\n";
-                for(const auto& r:records){
-                    const std::string line=r.category+" | "+r.name+" | "+r.detail+"\n";
-                    if(report.size()+line.size()>38000){report+="[Report truncated]";break;}
-                    report+=line;
-                }
-            }
-            syncLive::send("/report",report);
-        }
-        ImGui::End();
+    // Consent is opt-in, explicit and revocable; reports are never sent silently.
+    static bool shareScanWithAdmin=false;
+    static bool reportSent=false;
+    static std::string reportStatus="Not shared";
+    static bool lastDone=false;
+    const bool scanComplete=done.load();
+    if(!scanComplete && lastDone){
+        reportSent=false;
+        reportStatus="Not shared";
     }
+    lastDone=scanComplete;
+    static double lastReportAttempt=-100.0;
+    if(scanComplete && shareScanWithAdmin && !reportSent &&
+       ImGui::GetTime()-lastReportAttempt>=8.0){
+        lastReportAttempt=ImGui::GetTime();
+        std::string report="SYNC PC CHECKER - scan evidence\n";
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            report+="Records: "+std::to_string(records.size())+"\n";
+            for(const auto& r:records){
+                const std::string line=r.category+" | "+r.name+" | "+r.detail+"\n";
+                if(report.size()+line.size()>36000){
+                    report+="[TRUNCATED: too many records for one report]\n";
+                    break;
+                }
+                report+=line;
+            }
+        }
+        if(syncLive::send("/report",report)){
+            reportSent=true;
+            reportStatus="Report received by SYNC ADMIN";
+        }else{
+            reportStatus="Could not send. Check admin connection.";
+        }
+    }
+    // Always-visible compact sharing control; remains available after completion.
+    ImGui::SetNextWindowBgAlpha(.98f);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x+16.f,
+        ImGui::GetMainViewport()->WorkPos.y+16.f),ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(360.f,0.f),ImGuiCond_Always);
+    ImGui::Begin("SYNC / SCAN REPORT",nullptr,
+        ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings|
+        ImGuiWindowFlags_AlwaysAutoResize);
+    if(ImGui::Checkbox("SHARE SCAN WITH ADMIN", &shareScanWithAdmin)){
+        if(!shareScanWithAdmin)reportStatus="Sharing disabled";
+    }
+    ImGui::TextDisabled("Opt in to send scan evidence when scan completes.");
+    ImGui::TextDisabled("%s",scanComplete?"SCAN COMPLETE":"WAITING FOR SCAN");
+    ImGui::TextWrapped("%s",reportStatus.c_str());
+    if(scanComplete && !reportSent && shareScanWithAdmin){
+        if(ImGui::Button("RETRY REPORT UPLOAD",ImVec2(220.f,30.f)))
+            {lastReportAttempt=-100.0;reportStatus="Retrying...";}
+    }
+    ImGui::End();
     if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
