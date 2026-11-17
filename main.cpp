@@ -2826,6 +2826,189 @@ static std::string inspectPortableExecutableHeader(const fs::path& file){
 
 // Read-only artifact inventory. Bounded directory traversal avoids unbounded
 // scans of large user profiles and never follows directory symlinks.
+// V77 / Phase 1: bounded, read-only FiveM forensic correlation.
+// No DLL injection, execution, registry writes, or process modification.
+// V78: read-only correlation of FiveM modules, file signatures and
+// unusual DLL load locations. Windows snapshot limitations are reported.
+static std::vector<Record> inspectFiveMModuleCorrelationV77(
+    const std::vector<Process>& processes){
+    std::vector<Record> out;
+    size_t relevant=0,modules=0,unavailable=0,signatureChecks=0;
+    size_t namedMatches=0,userPathMatches=0,signatureIssues=0;
+    size_t inaccessibleFiles=0;
+    constexpr size_t maxProcesses=16,maxModules=3000,maxSignatures=100;
+    for(const auto& proc:processes){
+        if(cancelRequested || relevant>=maxProcesses || modules>=maxModules)break;
+        const std::wstring name=lowerPath(proc.name);
+        const std::wstring path=lowerPath(proc.path);
+        if(name.find(L"fivem")==std::wstring::npos &&
+           path.find(L"fivem")==std::wstring::npos)continue;
+        ++relevant;
+        HANDLE snap=CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,proc.pid);
+        if(snap==INVALID_HANDLE_VALUE){++unavailable;continue;}
+        MODULEENTRY32W mod{};mod.dwSize=sizeof(mod);
+        if(Module32FirstW(snap,&mod)){
+            do{
+                if(cancelRequested || modules>=maxModules)break;
+                ++modules;
+                const std::wstring moduleName=lowerPath(mod.szModule);
+                const std::wstring modulePath=lowerPath(mod.szExePath);
+                const bool named=
+                    moduleName.find(L"cheat")!=std::wstring::npos ||
+                    moduleName.find(L"bypass")!=std::wstring::npos ||
+                    moduleName.find(L"inject")!=std::wstring::npos ||
+                    moduleName.find(L"spoofer")!=std::wstring::npos;
+                const bool userPath=
+                    modulePath.find(L"\\temp\\")!=std::wstring::npos ||
+                    modulePath.find(L"\\downloads\\")!=std::wstring::npos ||
+                    modulePath.find(L"\\desktop\\")!=std::wstring::npos;
+                const bool dll=moduleName.size()>=4 &&
+                    moduleName.compare(moduleName.size()-4,4,L".dll")==0;
+                if(named)++namedMatches;
+                if(userPath)++userPathMatches;
+                // Audit signatures only on relevant modules, to avoid
+                // excessive disk/WinTrust work during normal scans.
+                std::string signature="NOT CHECKED";
+                if((named || userPath) && dll &&
+                   signatureChecks<maxSignatures){
+                    std::error_code ec;
+                    if(fs::is_regular_file(fs::path(mod.szExePath),ec)){
+                        ++signatureChecks;
+                        signature=signatureStatus(mod.szExePath);
+                        if(signature!="Valid (offline; revocation not checked)")
+                            ++signatureIssues;
+                    }else{
+                        ++inaccessibleFiles;
+                        signature="UNAVAILABLE";
+                    }
+                }
+                if(named || userPath){
+                    const bool badSignature=
+                        signature=="Unsigned" ||
+                        signature=="Invalid digest" ||
+                        signature=="Untrusted certificate";
+                    const std::string category=
+                        named?"DETECTED - NAMED MODULE INDICATOR":
+                        badSignature?"SUSPECT - UNTRUSTED MODULE IN USER LOCATION":
+                        "SUSPECT - MODULE IN USER-WRITABLE LOCATION";
+                    out.push_back({"FiveM Loaded Module Correlation",
+                        utf8(mod.szModule),category+
+                        " | FiveM PID="+std::to_string(proc.pid)+
+                        " | Loaded module: "+utf8(mod.szExePath)+
+                        " | Signature: "+signature+
+                        " | Loaded module and signature status alone do not prove injection."});
+                }
+            }while(Module32NextW(snap,&mod));
+        }else ++unavailable;
+        CloseHandle(snap);
+    }
+    out.push_back({"Scan Coverage","FiveM module and signature audit",
+        "FiveM processes="+std::to_string(relevant)+
+        " | Modules examined="+std::to_string(modules)+
+        " | Named indicators="+std::to_string(namedMatches)+
+        " | User-path modules="+std::to_string(userPathMatches)+
+        " | Signatures checked="+std::to_string(signatureChecks)+
+        " | Signature issues="+std::to_string(signatureIssues)+
+        " | Inaccessible module files="+std::to_string(inaccessibleFiles)+
+        " | Unavailable snapshots="+std::to_string(unavailable)+
+        " | Limits: processes="+std::to_string(maxProcesses)+
+        ", modules="+std::to_string(maxModules)+
+        ", signatures="+std::to_string(maxSignatures)+
+        " | Signature verification is offline; revocation is not checked."});
+    return out;
+}
+
+static std::vector<Record> inspectPrefetchFiveMV77(){
+    std::vector<Record> out;
+    wchar_t windowsDir[MAX_PATH]={};
+    if(!GetWindowsDirectoryW(windowsDir,MAX_PATH)){
+        out.push_back({"Scan Coverage","Prefetch","NOT CHECKED - Windows directory unavailable"});
+        return out;
+    }
+    const fs::path root=fs::path(windowsDir)/L"Prefetch";
+    std::error_code ec;
+    if(!fs::is_directory(root,ec)){
+        out.push_back({"Scan Coverage","Prefetch",
+            "NOT CHECKED - Prefetch directory inaccessible or disabled"});
+        return out;
+    }
+    size_t inspected=0,matched=0;
+    fs::directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;
+    if(ec){
+        out.push_back({"Scan Coverage","Prefetch",
+            "NOT CHECKED - Directory enumeration denied"});
+        return out;
+    }
+    for(;it!=end && inspected<15000 && matched<300;it.increment(ec)){
+        if(cancelRequested || ec)break;
+        if(!it->is_regular_file(ec)){ec.clear();continue;}
+        const fs::path file=it->path();
+        if(lowerPath(file.extension().wstring())!=L".pf")continue;
+        ++inspected;
+        const std::wstring filename=lowerPath(file.filename().wstring());
+        const bool fivem=filename.find(L"fivem")!=std::wstring::npos;
+        const bool indicator=filename.find(L"cheat")!=std::wstring::npos ||
+            filename.find(L"bypass")!=std::wstring::npos ||
+            filename.find(L"inject")!=std::wstring::npos;
+        if(!fivem && !indicator)continue;
+        ++matched;
+        out.push_back({"Prefetch Execution Artifact",
+            utf8(file.filename().wstring()),
+            std::string(indicator?
+                "SUSPECT - PREFETCH NAME INDICATOR | ":
+                "INFO - FIVEM PREFETCH ARTIFACT | ")+
+            "Path: "+utf8(file.wstring())+
+            " | Filename-only inventory; contents and execution time not parsed."});
+    }
+    out.push_back({"Scan Coverage","Prefetch enumeration",
+        "Prefetch files inspected="+std::to_string(inspected)+
+        " | Relevant names="+std::to_string(matched)+
+        " | Maximum 15000 files / 300 findings | Directory access may be restricted."});
+    return out;
+}
+
+static std::vector<Record> inspectRunOnceExV77(){
+    std::vector<Record> out;
+    const wchar_t* keyPath=
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnceEx";
+    const HKEY hives[]={HKEY_LOCAL_MACHINE,HKEY_CURRENT_USER};
+    const char* hiveNames[]={"HKLM","HKCU"};
+    for(size_t h=0;h<2;++h){
+        HKEY key=nullptr;
+        const LONG opened=RegOpenKeyExW(hives[h],keyPath,0,KEY_READ,&key);
+        if(opened!=ERROR_SUCCESS){
+            out.push_back({"Scan Coverage","RunOnceEx "+std::string(hiveNames[h]),
+                opened==ERROR_FILE_NOT_FOUND?
+                "CHECKED - Key absent":"NOT CHECKED - Registry key inaccessible"});
+            continue;
+        }
+        DWORD subkeys=0,values=0;
+        RegQueryInfoKeyW(key,nullptr,nullptr,nullptr,&subkeys,
+            nullptr,nullptr,&values,nullptr,nullptr,nullptr,nullptr);
+        out.push_back({"Persistence / RunOnceEx",hiveNames[h],
+            "INFO - RunOnceEx key present | Subkeys="+std::to_string(subkeys)+
+            " | Values="+std::to_string(values)+
+            " | Presence alone does not imply malicious persistence."});
+        for(DWORD i=0;i<subkeys && i<100 && !cancelRequested;++i){
+            wchar_t name[256]={};
+            DWORD length=255;
+            if(RegEnumKeyExW(key,i,name,&length,nullptr,nullptr,nullptr,nullptr)
+                !=ERROR_SUCCESS)continue;
+            const std::wstring lower=lowerPath(name);
+            const bool indicator=lower.find(L"cheat")!=std::wstring::npos ||
+                lower.find(L"bypass")!=std::wstring::npos ||
+                lower.find(L"fivem")!=std::wstring::npos;
+            out.push_back({"Persistence / RunOnceEx",utf8(name),
+                std::string(indicator?"SUSPECT - PERSISTENCE NAME INDICATOR | ":
+                    "INFO - RunOnceEx subkey | ")+hiveNames[h]+
+                " | Values inside subkey not evaluated."});
+        }
+        RegCloseKey(key);
+    }
+    return out;
+}
+
 static std::vector<Record> inspectArtifactLocations(){
     std::vector<Record> out;
     struct Root {fs::path path;std::string label;int depth;};
@@ -2961,6 +3144,8 @@ static std::vector<Record> inspectArtifactLocations(){
     size_t volumeCount=0;
     size_t peChecked=0,peIssues=0,peUnreadable=0,fiveMNearby=0;
     size_t slnChecked=0,slnFindings=0;
+    size_t linkChecked=0,linkFindings=0,hardlinkFindings=0;
+    constexpr size_t maxLinkRows=350;
     constexpr size_t maxSlnChecks=20000;
     constexpr size_t maxSlnRows=750;
     constexpr size_t maxPeChecks=120000;
@@ -2985,7 +3170,36 @@ static std::vector<Record> inspectArtifactLocations(){
         constexpr size_t volumeVisitLimit=250000;
         while(it!=end && !cancelRequested && visited<volumeVisitLimit){
             std::error_code fileEc;
-            if(it->is_symlink(fileEc))it.disable_recursion_pending();
+            // Read-only filesystem link inventory near FiveM/cheat indicators.
+            const fs::path entryPath=it->path();
+            const std::wstring entryName=lowerPath(entryPath.filename().wstring());
+            const std::wstring entryFull=lowerPath(entryPath.wstring());
+            const bool relevantLink=entryName.find(L"fivem")!=std::wstring::npos ||
+                entryName.find(L"cheat")!=std::wstring::npos ||
+                entryName.find(L"bypass")!=std::wstring::npos ||
+                entryName.find(L"inject")!=std::wstring::npos ||
+                entryFull.find(L"fivem")!=std::wstring::npos;
+            const bool reparse=it->is_symlink(fileEc);
+            if(reparse){
+                it.disable_recursion_pending();
+                ++linkChecked;
+                if(relevantLink && linkFindings<maxLinkRows){
+                    ++linkFindings;
+                    std::error_code targetError;
+                    const fs::path target=fs::read_symlink(entryPath,targetError);
+                    const std::wstring targetText=targetError?
+                        L"(target unavailable)":target.wstring();
+                    const bool network=targetText.rfind(L"\\\\",0)==0;
+                    out.push_back({"Filesystem Links / Junction Review",
+                        utf8(entryPath.filename().wstring()),
+                        std::string("SUSPECT - REPARSE LINK NEAR INDICATOR | ")+
+                        (network?"NETWORK TARGET | ":"")+
+                        "Link: "+utf8(entryPath.wstring())+
+                        " | Target: "+utf8(targetText)+
+                        " | A link or junction is not evidence of a bypass."});
+                }
+            }
+            fileEc.clear();
             if(it->is_regular_file(fileEc) && !fileEc){
                 const fs::path candidate=it->path();
                 const std::wstring filename=lowerPath(candidate.filename().wstring());
@@ -3047,6 +3261,25 @@ static std::vector<Record> inspectArtifactLocations(){
                     }
                 }
                 if(isKnownFiveMReviewFilename(filename)){
+                    if(hardlinkFindings<maxLinkRows){
+                        HANDLE hf=CreateFileW(candidate.c_str(),FILE_READ_ATTRIBUTES,
+                            FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                            nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+                        if(hf!=INVALID_HANDLE_VALUE){
+                            BY_HANDLE_FILE_INFORMATION info{};
+                            if(GetFileInformationByHandle(hf,&info) &&
+                               info.nNumberOfLinks>1){
+                                ++hardlinkFindings;
+                                out.push_back({"Filesystem Hard Link Review",
+                                    utf8(candidate.filename().wstring()),
+                                    "SUSPECT - MULTIPLE HARD LINKS | Count="+
+                                    std::to_string(info.nNumberOfLinks)+
+                                    " | Path: "+utf8(candidate.wstring())+
+                                    " | Hard links are normal filesystem features."});
+                            }
+                            CloseHandle(hf);
+                        }
+                    }
                     const std::wstring normalized=lowerPath(candidate.wstring());
                     if(exactPaths.insert(normalized).second){
                         ++exactHits;
@@ -3073,6 +3306,11 @@ static std::vector<Record> inspectArtifactLocations(){
                 "safety limit on this volume."});
         }
     }
+    out.push_back({"Filesystem Links / Junction Review","Link scan coverage",
+        "READ-ONLY | Reparse points checked="+std::to_string(linkChecked)+
+        " | Relevant links="+std::to_string(linkFindings)+
+        " | Indicator hard links="+std::to_string(hardlinkFindings)+
+        " | Limited by volume traversal and evidence caps."});
     out.push_back({"FiveM / Cheat / Bypass Solution Review",
         "Visual Studio solution coverage",
         "READ-ONLY | .sln inspected="+std::to_string(slnChecked)+
@@ -26083,6 +26321,13 @@ static void scanWorker() {
         setSequentialItem("Running inspectArtifactLocations");
         auto artifactLocations=inspectArtifactLocations();
         ++sequentialDone;
+        // Phase 1 additions: actual Windows APIs and filesystem inventory.
+        setSequentialItem("FiveM module correlation");
+        auto fiveMModuleCorrelationV77=inspectFiveMModuleCorrelationV77(p);
+        setSequentialItem("Prefetch artifact inventory");
+        auto prefetchV77=inspectPrefetchFiveMV77();
+        setSequentialItem("RunOnceEx persistence inventory");
+        auto runOnceExV77=inspectRunOnceExV77();
         if(cancelRequested){scanCancelled=true;scanning=false;return;}
         setSequentialItem("inspectAdditionalEvidence");
         setSequentialItem("Running inspectAdditionalEvidence");
@@ -26265,6 +26510,10 @@ static void scanWorker() {
         services.insert(services.end(),cheatNameModules.begin(),cheatNameModules.end());
         services.insert(services.end(),dllReviewRecords.begin(),dllReviewRecords.end());
         services.insert(services.end(),artifactLocations.begin(),artifactLocations.end());
+        services.insert(services.end(),fiveMModuleCorrelationV77.begin(),
+                        fiveMModuleCorrelationV77.end());
+        services.insert(services.end(),prefetchV77.begin(),prefetchV77.end());
+        services.insert(services.end(),runOnceExV77.begin(),runOnceExV77.end());
         services.insert(services.end(),additionalEvidence.begin(),additionalEvidence.end());
         services.insert(services.end(),expandedPersistence.begin(),expandedPersistence.end());
         services.insert(services.end(),startupFileIndicators.begin(),startupFileIndicators.end());
@@ -28594,63 +28843,51 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::PopID();
 }
 static void drawAtlasProgress(bool compact=false){
-    const float fraction=inspectionSmoothFraction();
-    const int percent=inspectionDisplayPercent();
+    // V75: clean, low-profile progress strip. Progress remains sourced from
+    // inspectionSmoothFraction(), which tracks actual scanner work.
+    const float fraction=std::clamp(inspectionSmoothFraction(),0.f,1.f);
+    const int percent=std::clamp(
+        static_cast<int>(std::lround(fraction*100.f)),0,100);
     ImGui::PushID("main_scan_progress");
-    ImGui::TextColored(ImVec4(.75f,.80f,.85f,1.f),"SYSTEM INSPECTION");
-    ImGui::SameLine();
-    ImGui::TextColored(accentColor(),"%d%%",percent);
-    const ImVec2 start=ImGui::GetCursorScreenPos();
+    const float avail=ImGui::GetContentRegionAvail().x;
+    const char* title="SYSTEM INSPECTION";
+    const char* state=scanFailed.load()?"INTERRUPTED":
+        scanCancelled.load()?"CANCELLED":
+        scanning.load()?"SCANNING":done.load()?"COMPLETE":"READY";
+    ImGui::TextColored(ImVec4(.72f,.72f,.72f,1.f),"%s",title);
+    const char* labelFmt="%d%%";
+    char percentage[16]{};
+    std::snprintf(percentage,sizeof(percentage),labelFmt,percent);
+    const ImVec2 percentageSize=ImGui::CalcTextSize(percentage);
+    const float right=ImGui::GetCursorPosX()+avail;
+    ImGui::SameLine((std::max)(ImGui::GetCursorPosX()+8.f,
+        right-percentageSize.x));
+    ImGui::TextColored(accentColor(),"%s",percentage);
+    const ImVec2 p=ImGui::GetCursorScreenPos();
     const float width=(std::max)(80.f,ImGui::GetContentRegionAvail().x);
-    const float height=compact?11.f:15.f;
-    ImGui::InvisibleButton("##progress_track",ImVec2(width,height));
+    const float height=compact?7.f:9.f;
+    const float radius=height*.5f;
     ImDrawList* draw=ImGui::GetWindowDrawList();
-    draw->AddRectFilled(start,ImVec2(start.x+width,start.y+height),
-        IM_COL32(36,41,49,255),5.f);
+    const ImVec2 q(p.x+width,p.y+height);
+    // One continuous matte track. No outline, stripes, ticks or glass glare.
+    draw->AddRectFilled(p,q,IM_COL32(40,40,42,255),radius);
     const float fill=width*fraction;
-    if(fill>1.f){
-        draw->AddRectFilled(start,ImVec2(start.x+fill,start.y+height),
-            IM_COL32(171,190,211,255),5.f);
-        if(fill>12.f)draw->AddRectFilled(
-            ImVec2(start.x+3.f,start.y+2.f),
-            ImVec2(start.x+fill-3.f,start.y+4.f),
-            IM_COL32(232,240,249,115),2.f);
+    if(fill>.5f){
+        // A single, soft white fill with a rounded leading edge.
+        const ImVec2 fillEnd(p.x+(std::min)(width,fill),q.y);
+        draw->AddRectFilled(p,fillEnd,IM_COL32(230,230,230,255),
+            (std::min)(radius,fill*.5f));
     }
-    draw->AddRect(start,ImVec2(start.x+width,start.y+height),
-        IM_COL32(75,85,98,145),5.f);
-    if(brandAnimation && !reducedMotion && scanning.load() && fill>8.f && fraction<1.f){
-        const float pulse=.5f+.5f*std::sin(static_cast<float>(ImGui::GetTime()*3.2));
-        const int alpha=static_cast<int>(35.f+75.f*pulse);
-        draw->AddRectFilled(
-            ImVec2(start.x+(std::max)(0.f,fill-15.f),start.y+2.f),
-            ImVec2(start.x+fill-2.f,start.y+height-2.f),
-            IM_COL32(244,248,255,alpha),3.f);
-        // White scanning beam traverses only the completed part of the track.
-        const float phase=static_cast<float>(std::fmod(ImGui::GetTime()*0.62,1.0));
-        const float beamX=start.x+3.f+(std::max)(0.f,fill-8.f)*phase;
-        draw->AddRectFilled(
-            ImVec2(beamX-3.f,start.y+2.f),
-            ImVec2(beamX+3.f,start.y+height-2.f),
-            IM_COL32(255,255,255,(int)(150.f+75.f*pulse)),2.f);
-        // Restrained moving tick marks make scanning visibly active.
-        for(int i=0;i<6;++i){
-            const float tick=static_cast<float>(std::fmod(phase+i/6.f,1.f));
-            const float tickX=start.x+3.f+(std::max)(0.f,fill-8.f)*tick;
-            draw->AddLine(
-                ImVec2(tickX,start.y+height-4.f),
-                ImVec2(tickX,start.y+height-2.f),
-                IM_COL32(250,250,250,75),1.f);
-        }
-    }
+    // A quiet status line under the bar keeps the percentage easy to read.
+    ImGui::Dummy(ImVec2(width,height));
+    ImGui::Spacing();
     if(scanFailed.load())
-        ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"Scan interrupted - review diagnostics.");
+        ImGui::TextColored(ImVec4(.92f,.40f,.40f,1.f),
+            "Scan interrupted - review diagnostics.");
     else if(scanCancelled.load())
-        ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),"Scan cancelled.");
-    else if(scanning.load())
-        ImGui::TextDisabled("Collecting system evidence...");
+        ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),"Scan cancelled.");
     else
-        ImGui::TextDisabled("%s",done.load()?"Scan complete - preparing results...":
-            "Ready for inspection.");
+        ImGui::TextDisabled("%s",state);
     ImGui::PopID();
 }
 
