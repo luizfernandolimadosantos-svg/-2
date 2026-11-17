@@ -16,6 +16,8 @@
 #include <cmath>
 #include <iterator>
 #include <winhttp.h>
+#include <bcrypt.h>
+#pragma comment(lib,"bcrypt.lib")
 #include <shellapi.h>
 #pragma comment(lib,"shell32.lib")
 #include <map>
@@ -29520,7 +29522,176 @@ static void drawStreamproofReview(){
     ImGui::TextDisabled("Read-only review. Historical artifacts and text matches do not prove an active injected bypass.");
 }
 
+
+// V79: opt-in server-authorized PIN gate. Set SYNC_PIN_SERVER to your
+// HTTPS portal URL. The request token is never displayed to the operator.
+
+// V81: Offline, administrator-signed access. No PIN server, website, or
+// shared secret embedded in the executable. The administrator's private
+// signing key must NEVER be distributed with the scanner.
+namespace syncOfflineLicense {
+    static constexpr unsigned char PUBLIC_EXPONENT[] = {0x01,0x00,0x01};
+    static constexpr unsigned char PUBLIC_MODULUS[] = {0x97,0xab,0x0e,0x97,0xd3,0x4c,0x89,0xc2,0x3c,0x56,0xdd,0xce,0xcb,0x65,0x55,0xfc,0xac,0x7e,0x96,0x36,0x28,0x9d,0x0a,0x51,0x5f,0x92,0x2e,0x4f,0x69,0x71,0xa1,0xa0,0x98,0xc7,0xfd,0x75,0xeb,0xc9,0xcd,0x50,0x44,0x0b,0x92,0x9b,0x18,0xb1,0xb4,0xed,0x9f,0x86,0x94,0x87,0x09,0x21,0x6e,0x88,0x40,0x46,0xc3,0x58,0x6d,0x88,0x85,0x77,0x3b,0x8c,0x5d,0x70,0x86,0x34,0xb8,0xa5,0x81,0x9f,0x70,0x78,0x5c,0xab,0xc4,0xa4,0xc0,0xd5,0x0c,0xc5,0x28,0x7a,0x15,0x72,0x9a,0x0b,0x87,0x89,0x96,0xad,0x75,0x3e,0x91,0x89,0xdf,0xd0,0x5c,0x69,0x81,0x97,0xc0,0x19,0x5f,0x9b,0x44,0x2e,0x73,0x47,0x2c,0xc4,0x52,0x0b,0x7d,0x29,0x7b,0x9c,0x6c,0x99,0x21,0xfe,0x91,0x05,0x9b,0x60,0xcf,0x37,0x25,0x30,0x24,0xec,0x8c,0xd2,0x8e,0x86,0x41,0x51,0x63,0xd7,0xd3,0xc4,0xb1,0xfd,0x14,0xe5,0x3e,0x5c,0x65,0x94,0x82,0x54,0xda,0x8d,0xf7,0xd4,0x32,0x9c,0xa0,0xaa,0x63,0xc0,0xde,0xc0,0xe8,0xa6,0xb7,0x29,0x33,0xa4,0x60,0xb8,0xb8,0xc9,0xa6,0xe4,0xdd,0xb5,0x16,0x03,0x03,0x6a,0x85,0x09,0x07,0x7d,0x36,0x04,0x0d,0xd4,0x92,0x05,0xd0,0x65,0x93,0x0e,0xa6,0x40,0xae,0x2a,0x1a,0x62,0x08,0xab,0x1c,0xd5,0xc6,0x6a,0x28,0xf7,0x48,0x64,0x5a,0x73,0xeb,0x53,0x06,0x53,0x2d,0xe7,0x06,0x2f,0xef,0x85,0x4c,0x68,0xa1,0x80,0x97,0xaa,0xf0,0x4e,0xb3,0x47,0x03,0xa4,0x9a,0x6b,0x06,0x71,0x63,0x1e,0x7b,0xd2,0xba,0xe7,0xd8,0x15,0x99,0x8f,0x74,0xf2,0xc4,0x0e,0x53,0x39,0xb1,0x80,0x40,0x4e,0x55,0x14,0x11,0x0e,0xb2,0xe9,0x05,0xe1,0x80,0xa1,0x64,0x10,0x91,0x91,0xb0,0x25,0x47,0xf5,0x4a,0xba,0xe4,0x07,0x8e,0x95,0xcc,0xef,0x6e,0x7c,0xc5,0xd3,0x33,0x1c,0x84,0xee,0xad,0xb3,0x93,0xfb,0x9b,0xd9,0x1f,0x40,0xc4,0x9d,0x80,0x44,0x01,0xd4,0x39,0x6d,0x02,0xa6,0x32,0x76,0x2e,0x7f,0xad,0xc6,0x29,0xa8,0xe6,0xb3,0x3c,0x44,0xfe,0x92,0x83,0x73,0x9e,0x26,0x4a,0x3b,0x43,0xdc,0x61,0xd8,0xd7,0x29,0x8b,0x7e,0x5e,0x56,0x96,0x3e,0x9a,0xb4,0x56,0x33,0x53,0x6f,0xcb,0xd1,0xf9,0x7b,0xa7,0xeb,0xae,0x0e,0x08,0x77,0x4f,0xf2,0x4e,0x0d,0xa8,0x98,0x32,0x80,0x79,0x34,0x36,0x53,0x3f,0x4a,0x4b,0x1f,0xa1,0x0c,0x35,0x70,0x68,0xf3};
+    static std::string deviceId(){
+        wchar_t guid[256]{};
+        DWORD bytes=sizeof(guid);
+        if(RegGetValueW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Cryptography",
+            L"MachineGuid",RRF_RT_REG_SZ,nullptr,guid,&bytes)!=ERROR_SUCCESS)
+            return {};
+        BCRYPT_ALG_HANDLE alg=nullptr;
+        BCRYPT_HASH_HANDLE hash=nullptr;
+        UCHAR digest[32]{};
+        std::string result;
+        if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,nullptr,0)>=0){
+            if(BCryptCreateHash(alg,&hash,nullptr,0,nullptr,0,0)>=0){
+                const std::wstring material=std::wstring(L"SYNC-PC-V81|")+guid;
+                if(BCryptHashData(hash,(PUCHAR)material.data(),
+                    (ULONG)(material.size()*sizeof(wchar_t)),0)>=0 &&
+                    BCryptFinishHash(hash,digest,sizeof(digest),0)>=0){
+                    const char* hex="0123456789abcdef";
+                    for(const auto value:digest){
+                        result.push_back(hex[value>>4]);
+                        result.push_back(hex[value&15]);
+                    }
+                }
+                BCryptDestroyHash(hash);
+            }
+            BCryptCloseAlgorithmProvider(alg,0);
+        }
+        SecureZeroMemory(guid,sizeof(guid));
+        return result;
+    }
+    static bool decodeHex(const std::string& text,std::vector<UCHAR>& bytes){
+        if(text.empty() || text.size()%2 || text.size()>2048)return false;
+        auto nibble=[](char c)->int{
+            if(c>='0'&&c<='9')return c-'0';
+            if(c>='a'&&c<='f')return c-'a'+10;
+            if(c>='A'&&c<='F')return c-'A'+10;
+            return -1;
+        };
+        for(size_t i=0;i<text.size();i+=2){
+            int a=nibble(text[i]),b=nibble(text[i+1]);
+            if(a<0||b<0)return false;
+            bytes.push_back(static_cast<UCHAR>((a<<4)|b));
+        }
+        return true;
+    }
+    static bool verify(const std::string& payload,const std::string& sigHex){
+        std::vector<UCHAR> signature;
+        if(!decodeHex(sigHex,signature)||
+           signature.size()!=sizeof(PUBLIC_MODULUS))return false;
+        BCRYPT_ALG_HANDLE rsa=nullptr,sha=nullptr;
+        BCRYPT_KEY_HANDLE pubKey=nullptr;
+        BCRYPT_HASH_HANDLE hash=nullptr;
+        bool ok=false;
+        if(BCryptOpenAlgorithmProvider(&rsa,BCRYPT_RSA_ALGORITHM,nullptr,0)<0)
+            return false;
+        if(BCryptOpenAlgorithmProvider(&sha,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0)
+            goto cleanup;
+        {
+            std::vector<UCHAR> blob(sizeof(BCRYPT_RSAKEY_BLOB)+
+                sizeof(PUBLIC_EXPONENT)+sizeof(PUBLIC_MODULUS));
+            auto* header=reinterpret_cast<BCRYPT_RSAKEY_BLOB*>(blob.data());
+            header->Magic=BCRYPT_RSAPUBLIC_MAGIC;
+            header->BitLength=static_cast<ULONG>(sizeof(PUBLIC_MODULUS)*8);
+            header->cbPublicExp=sizeof(PUBLIC_EXPONENT);
+            header->cbModulus=sizeof(PUBLIC_MODULUS);
+            header->cbPrime1=0;header->cbPrime2=0;
+            memcpy(blob.data()+sizeof(*header),PUBLIC_EXPONENT,
+                sizeof(PUBLIC_EXPONENT));
+            memcpy(blob.data()+sizeof(*header)+sizeof(PUBLIC_EXPONENT),
+                PUBLIC_MODULUS,sizeof(PUBLIC_MODULUS));
+            if(BCryptImportKeyPair(rsa,nullptr,BCRYPT_RSAPUBLIC_BLOB,
+                &pubKey,blob.data(),static_cast<ULONG>(blob.size()),0)<0)
+                goto cleanup;
+        }
+        {
+            UCHAR digest[32]{};
+            if(BCryptCreateHash(sha,&hash,nullptr,0,nullptr,0,0)<0)
+                goto cleanup;
+            if(BCryptHashData(hash,(PUCHAR)payload.data(),
+                static_cast<ULONG>(payload.size()),0)<0 ||
+                BCryptFinishHash(hash,digest,sizeof(digest),0)<0)
+                goto cleanup;
+            BCRYPT_PKCS1_PADDING_INFO pad{};
+            pad.pszAlgId=BCRYPT_SHA256_ALGORITHM;
+            ok=BCryptVerifySignature(pubKey,&pad,digest,sizeof(digest),
+                signature.data(),static_cast<ULONG>(signature.size()),
+                BCRYPT_PAD_PKCS1)>=0;
+        }
+    cleanup:
+        if(hash)BCryptDestroyHash(hash);
+        if(pubKey)BCryptDestroyKey(pubKey);
+        if(sha)BCryptCloseAlgorithmProvider(sha,0);
+        if(rsa)BCryptCloseAlgorithmProvider(rsa,0);
+        return ok;
+    }
+    static std::string filePath(){
+        const char* overridePath=std::getenv("SYNC_LICENSE_FILE");
+        return (overridePath&&*overridePath)?overridePath:"sync_license.txt";
+    }
+    static bool approved(){
+        std::ifstream file(filePath(),std::ios::binary);
+        if(!file)return false;
+        std::string payload,signature,extra;
+        if(!std::getline(file,payload)||!std::getline(file,signature)||
+           std::getline(file,extra))return false;
+        const auto divider=payload.find('|');
+        if(divider==std::string::npos||payload.find('|',divider+1)!=std::string::npos)
+            return false;
+        const std::string id=payload.substr(0,divider);
+        const std::string expiry=payload.substr(divider+1);
+        if(id.size()!=64||expiry.empty()||expiry.size()>12||
+           !std::all_of(expiry.begin(),expiry.end(),
+                [](char c){return c>='0'&&c<='9';}))return false;
+        try{
+            const long long expires=std::stoll(expiry);
+            const long long now=static_cast<long long>(std::time(nullptr));
+            if(expires<=now || expires>now+10LL*365*86400)return false;
+        }catch(...){return false;}
+        return id==deviceId()&&verify(payload,signature);
+    }
+    static void render(){
+        ImGuiViewport* vp=ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+            ImVec4(.035f,.035f,.04f,1.f));
+        ImGui::Begin("##syncOfflineLicense",nullptr,
+            ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|
+            ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
+        const float width=ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight()*.28f);
+        ImGui::SetCursorPosX((std::max)(15.f,(width-460.f)*.5f));
+        ImGui::BeginGroup();
+        ImGui::TextDisabled("SYNC / OFFLINE ACCESS");
+        ImGui::Spacing();
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::TextUnformatted("ACCESS LOCKED");
+        ImGui::SetWindowFontScale(1.f);
+        ImGui::TextWrapped("Send this installation code to the administrator.");
+        const std::string code=deviceId();
+        ImGui::TextWrapped("%s",code.empty()?"DEVICE ID UNAVAILABLE":code.c_str());
+        if(ImGui::Button("COPY DEVICE CODE",ImVec2(230.f,38.f)))
+            ImGui::SetClipboardText(code.c_str());
+        ImGui::Spacing();
+        ImGui::TextDisabled("Administrator must issue a signed sync_license.txt");
+        ImGui::TextDisabled("Place the file next to the scanner executable.");
+        ImGui::TextDisabled("License status is checked again automatically.");
+        ImGui::EndGroup();
+        ImGui::End();
+        ImGui::PopStyleColor();
+    }
+}
+
 static void renderUI() {
+    static double licenseLastCheck=-10.0;
+    static bool licenseAllowed=false;
+    if(ImGui::GetTime()-licenseLastCheck>=2.0){
+        licenseLastCheck=ImGui::GetTime();
+        licenseAllowed=syncOfflineLicense::approved();
+    }
+    if(!licenseAllowed){syncOfflineLicense::render();return;}
     if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
