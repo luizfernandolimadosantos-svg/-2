@@ -29563,34 +29563,15 @@ namespace syncLive {
         return result;
     }
 
-    static std::string auth(const std::string& id){
-        const char* env=std::getenv("SYNC_ADMIN_SECRET");
-        if(!env||strlen(env)<24)return {};
-        BCRYPT_ALG_HANDLE alg=nullptr;
-        BCRYPT_HASH_HANDLE hash=nullptr;
-        UCHAR digest[32]{};
-        std::string result;
-        if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,
-            nullptr,BCRYPT_ALG_HANDLE_HMAC_FLAG)<0)return {};
-        if(BCryptCreateHash(alg,&hash,nullptr,0,
-            (PUCHAR)env,(ULONG)strlen(env),0)>=0){
-            if(BCryptHashData(hash,(PUCHAR)id.data(),(ULONG)id.size(),0)>=0 &&
-                BCryptFinishHash(hash,digest,sizeof(digest),0)>=0){
-                const char* hex="0123456789abcdef";
-                for(UCHAR c:digest){result.push_back(hex[c>>4]);result.push_back(hex[c&15]);}
-            }
-            BCryptDestroyHash(hash);
-        }
-        BCryptCloseAlgorithmProvider(alg,0);
-        return result;
-    }
+    // Local-only pairing: no environment variable required.
+    // The admin listener is bound to 127.0.0.1, never exposed to the LAN.
     static std::string status="pending",message;
     static bool send(const std::string& route,const std::string& report=""){
         const char* urlEnv=std::getenv("SYNC_ADMIN_URL");
-        const std::string base=(urlEnv&&*urlEnv)?urlEnv:"http://127.0.0.1:8765";
-        const std::string id=deviceId(),key=auth(id);
-        if(id.empty()||key.empty()){message="SYNC_ADMIN_SECRET is not configured.";return false;}
-        std::string body="{\"device\":\""+id+"\",\"auth\":\""+key+"\"";
+        const std::string base="http://127.0.0.1:8765";
+        const std::string id=deviceId();
+        if(id.empty()){message="Device ID unavailable.";return false;}
+        std::string body="{\"device\":\""+id+"\"";
         if(route=="/report"){
             std::string escaped;
             for(unsigned char c:report){
