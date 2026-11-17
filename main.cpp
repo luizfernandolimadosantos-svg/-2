@@ -29565,26 +29565,49 @@ namespace syncLive {
 
     // Local-only pairing: no environment variable required.
     // The admin listener is bound to 127.0.0.1, never exposed to the LAN.
+    // Per-install random client credential stored in LOCALAPPDATA.
+    // Not a hardware attestation or tamper-proof identifier.
+    static std::string clientToken(){
+        static std::string cached;
+        if(!cached.empty())return cached;
+        wchar_t appdata[MAX_PATH]{};
+        DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",appdata,MAX_PATH);
+        if(n==0||n>=MAX_PATH)return {};
+        const std::wstring dir=std::wstring(appdata)+L"\\SYNC_PC_CHECKER";
+        CreateDirectoryW(dir.c_str(),nullptr);
+        const std::wstring path=dir+L"\\device_token.txt";
+        {
+            std::ifstream in(std::filesystem::path(path),std::ios::binary);
+            std::string value;
+            if(in>>value && value.size()==64 &&
+               std::all_of(value.begin(),value.end(),[](char c){
+                   return (c>='0'&&c<='9')||(c>='a'&&c<='f');
+               })){cached=value;return cached;}
+        }
+        UCHAR random[32]{};
+        if(BCryptGenRandom(nullptr,random,sizeof(random),
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0)return {};
+        const char* hex="0123456789abcdef";
+        for(UCHAR c:random){cached.push_back(hex[c>>4]);cached.push_back(hex[c&15]);}
+        std::ofstream out(std::filesystem::path(path),std::ios::binary|std::ios::trunc);
+        if(!out){cached.clear();return {};}
+        out<<cached;
+        return cached;
+    }
     static std::string status="pending",message;
     static bool send(const std::string& route,const std::string& report=""){
-        // Optional remote URL: sync_admin_url.txt beside the current working directory.
-        const char* urlEnv=std::getenv("SYNC_ADMIN_URL");
-        std::string base=(urlEnv&&*urlEnv)?urlEnv:"http://127.0.0.1:8765";
-        if(!(urlEnv&&*urlEnv)){
-            std::ifstream endpointFile("sync_admin_url.txt");
-            std::string configured;
-            if(endpointFile&&std::getline(endpointFile,configured)){
-                while(!configured.empty()&&(configured.back()=='\\r'||
-                      configured.back()==' '||configured.back()=='\\n'))
-                    configured.pop_back();
-                if(configured.rfind("https://",0)==0 &&
-                   configured.size()<512)base=configured;
-            }
+        // Configure once in your build; users do not configure anything.
+        // Replace this with your published Netlify HTTPS URL.
+        const std::string base="https://COLOQUE-SEU-SITE.netlify.app";
+        if(base.find("COLOQUE-SEU-SITE")!=std::string::npos){
+            message="Administrator must configure Netlify URL in the build.";
+            return false;
         }
-        if(base.size()>1&&base.back()=='/')base.pop_back();
+
         const std::string id=deviceId();
-        if(id.empty()){message="Device ID unavailable.";return false;}
-        std::string body="{\"device\":\""+id+"\"";
+        const std::string token=clientToken();
+        if(id.empty()||token.empty()){message="Device credentials unavailable.";return false;}
+        std::string body="{\"device\":\""+id+"\",\"token\":\""+token+"\"";
         if(route=="/report"){
             std::string escaped;
             for(unsigned char c:report){
@@ -29593,7 +29616,7 @@ namespace syncLive {
                 else if(c=='\r')escaped+="\\r";
                 else if(c>=32)escaped.push_back((char)c);
             }
-            body+=",\"report\":\""+escaped+"\"";
+            body+=",\"consent\":true,\"report\":\""+escaped+"\"";
         }
         body+="}";
         std::wstring wurl(base.begin(),base.end());
@@ -29602,13 +29625,14 @@ namespace syncLive {
         url.lpszHostName=host;url.dwHostNameLength=255;
         url.lpszUrlPath=path;url.dwUrlPathLength=1023;
         std::wstring target(route.begin(),route.end());
+        wurl+=L"/api";
         wurl+=target;
         if(!WinHttpCrackUrl(wurl.c_str(),0,0,&url))return false;
         HINTERNET session=WinHttpOpen(L"SYNC PC Checker/82",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
             WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
         if(!session)return false;
-        WinHttpSetTimeouts(session,1000,1000,1500,1500);
+        WinHttpSetTimeouts(session,1500,1500,3500,3500);
         HINTERNET connection=WinHttpConnect(session,host,url.nPort,0);
         HINTERNET request=connection?WinHttpOpenRequest(connection,L"POST",path,
             nullptr,WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,
