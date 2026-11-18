@@ -198,6 +198,110 @@ std::string decode() { return Value.decode(); }
 }
 #define XOR_STR(value) (::sync_xor::decode<::sync_xor::Literal{value}>())
 
+
+// KB-ECHO native read-only integration (conservative subset).
+// Original JavaScript sources are included in the distribution for audit.
+namespace kb_echo_native {
+struct Finding { std::string area, detail; };
+static std::vector<Finding> findings;
+static bool scanned=false;
+static void add(const char* area,const std::string& msg) {
+    if(findings.size()<250) findings.push_back({area,msg});
+}
+static std::string lower(std::string v) {
+    for(char& c:v)c=(char)std::tolower((unsigned char)c);
+    return v;
+}
+static std::string narrow(const std::wstring& w) {
+    if(w.empty())return {};
+    int n=WideCharToMultiByte(CP_UTF8,0,w.data(),(int)w.size(),nullptr,0,nullptr,nullptr);
+    if(n<=0)return {};
+    std::string r((size_t)n,'\0');
+    WideCharToMultiByte(CP_UTF8,0,w.data(),(int)w.size(),r.data(),n,nullptr,nullptr);
+    return r;
+}
+static bool existsKey(HKEY root,const wchar_t* path) {
+    HKEY key=nullptr;
+    LONG r=RegOpenKeyExW(root,path,0,KEY_READ,&key);
+    if(r==ERROR_SUCCESS)RegCloseKey(key);
+    return r==ERROR_SUCCESS;
+}
+static void registry() {
+    struct K {const wchar_t* path;const char* name;};
+    const K keys[]={
+        {L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths","Defender exclusion paths configured"},
+        {L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Extensions","Defender extension exclusions configured"},
+        {L"SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity","HVCI configuration present"}
+    };
+    for(const auto& k:keys) if(existsKey(HKEY_LOCAL_MACHINE,k.path))
+        add("Registry",std::string(k.name)+" (review configuration; not proof of tampering)");
+}
+static void game() {
+    wchar_t dir[MAX_PATH]{};
+    DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",dir,MAX_PATH);
+    if(n==0||n>=MAX_PATH)return;
+    std::filesystem::path root=std::filesystem::path(dir)/L"FiveM";
+    std::error_code ec;
+    if(!std::filesystem::exists(root,ec))return;
+    size_t inspected=0;
+    std::filesystem::recursive_directory_iterator it(root,
+        std::filesystem::directory_options::skip_permission_denied,ec),end;
+    while(!ec&&it!=end&&inspected<2500) {
+        if(it.depth()>7){it.disable_recursion_pending();}
+        if(it->is_regular_file(ec)) {
+            ++inspected;
+            auto ext=it->path().extension().wstring();
+            for(auto& c:ext)c=(wchar_t)towlower(c);
+            if(ext==L".asi") add("Game", "FiveM plugin (review): "+narrow(it->path().wstring()));
+        }
+        it.increment(ec);
+    }
+}
+static void kernel() {
+    // Read-only service inventory; no kernel memory access or driver loading.
+    SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_ENUMERATE_SERVICE);
+    if(!scm)return;
+    DWORD needed=0,count=0,resume=0;
+    EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,SERVICE_ACTIVE,
+        nullptr,0,&needed,&count,&resume,nullptr);
+    if(GetLastError()==ERROR_MORE_DATA&&needed&&needed<8*1024*1024) {
+        std::vector<BYTE> buf(needed);
+        resume=0;
+        if(EnumServicesStatusExW(scm,SC_ENUM_PROCESS_INFO,SERVICE_DRIVER,SERVICE_ACTIVE,
+            buf.data(),(DWORD)buf.size(),&needed,&count,&resume,nullptr)) {
+            auto* services=reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buf.data());
+            const std::set<std::wstring> markers={
+                L"winring0",L"winring0x64",L"rwdrv",L"capcom",L"gdrv",L"iqvw64e"};
+            for(DWORD i=0;i<count;++i) {
+                std::wstring name=services[i].lpServiceName;
+                for(auto& c:name)c=(wchar_t)towlower(c);
+                if(markers.count(name))
+                    add("Kernel","Driver name requires signature/version review: "+narrow(name));
+            }
+        }
+    }
+    CloseServiceHandle(scm);
+}
+static void scan() {
+    findings.clear();registry();game();kernel();scanned=true;
+}
+static void render() {
+    ImGui::Separator();
+    ImGui::TextUnformatted("KB-ECHO - native read-only checks");
+    ImGui::TextDisabled("Registry / FiveM plugins / active driver names");
+    if(ImGui::Button("Run KB-ECHO checks"))scan();
+    if(!scanned)ImGui::TextDisabled("Not scanned yet");
+    else ImGui::Text("Findings to review: %zu",findings.size());
+    if(ImGui::BeginChild("##kb_echo_findings",ImVec2(0,150),true)) {
+        for(const auto& f:findings)
+            ImGui::TextWrapped("[%s] %s",f.area.c_str(),f.detail.c_str());
+    }
+    ImGui::EndChild();
+    ImGui::TextWrapped("Heuristic matches are not proof of cheating. "
+      "Full JS runtime rules are not executed in this native subset.");
+}
+} // namespace kb_echo_native
+
 namespace fs=std::filesystem;
 
 // Diagnostics are local and transparent: no Defender exclusions, concealment,
@@ -29598,11 +29702,7 @@ namespace syncLive {
     static bool send(const std::string& route,const std::string& report=""){
         // Configure once in your build; users do not configure anything.
         // Replace this with your published Netlify HTTPS URL.
-        const std::string base="https://COLOQUE-SEU-SITE.netlify.app";
-        if(base.find("COLOQUE-SEU-SITE")!=std::string::npos){
-            message="Administrator must configure Netlify URL in the build.";
-            return false;
-        }
+        const std::string base="https://bucolic-rolypoly-f4eb1b.netlify.app";
 
         const std::string id=deviceId();
         const std::string token=clientToken();
@@ -30194,6 +30294,7 @@ static void renderUI() {
     } else if(page==11) {
         sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
         sync_module_audit::render();
+        kb_echo_native::render();
         ImGui::Spacing();
         drawCustomDetectionFindings();
         ImGui::Spacing();
