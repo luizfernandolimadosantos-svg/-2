@@ -41304,6 +41304,7 @@ zula.exe)FIVEMSTR";
             ImGui::SameLine(0,14.f);
             ImGui::BeginGroup();
             ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),false);
+            const ImVec4 accent = accentColor();
             {
             if(syncCategory==0) {
                 ImGui::TextColored(accent,"PROCESSOS E ALERTAS");
@@ -41449,7 +41450,7 @@ zula.exe)FIVEMSTR";
                 drawReviewQueueNew();
                 /* sidebar section end */
             }
-            if(syncCategory>=11 && syncCategory<=19) { if(syncCategory==12 || syncCategory==18) { sync_original_rules::render(); ImGui::Separator(); } sync_active_signatures::render(syncCategory-11); ImGui::Spacing(); sync_detect_browser::render(syncCategory-11); }
+            if(syncCategory>=11 && syncCategory<=19) { if(syncCategory==12 || syncCategory==18) { sync_original_rules::render(); ImGui::Separator(); } sync_detect_browser::sync_active_signatures::render(syncCategory-11); ImGui::Spacing(); sync_detect_browser::render(syncCategory-11); }
             ImGui::EndChild();
             ImGui::EndGroup();
         }
