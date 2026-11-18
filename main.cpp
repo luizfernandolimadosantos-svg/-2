@@ -41280,31 +41280,102 @@ zula.exe)FIVEMSTR";
         ImGui::TextDisabled("Categorias: processos | evidencias | servicos | arquivos | sistema | USB | inicializacao | auditorias | revisao");
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(15.f,9.f));
         static int syncCategory = 0;
-            const char* syncLabels[] = {"OVERVIEW / PROCESSES","EVIDENCE INSPECTOR","EVIDENCE SOURCES","WINDOWS SERVICES","FILE INTEGRITY","SYSTEM INVENTORY","USB DEVICES","STARTUP ENTRIES","EXTENDED AUDITS","DETECTION LIBRARY","REVIEW QUEUE","DETECTAC / PROCESSOS","DETECTAC / SCRIPTS","DETECTAC / ARQUIVOS","DETECTAC / REGISTRO","DETECTAC / USB","DETECTAC / SERVICOS","DETECTAC / JOURNAL","DETECTAC / CONTAS","DETECTAC / OUTROS"};
-            ImGui::BeginChild("##syncSidebar",ImVec2(260.f,0),true);
-            ImGui::TextColored(ImVec4(.30f,.78f,.96f,1.f),"SYNC / CONTROL CENTER");
-            ImGui::TextDisabled("FORENSIC WORKSPACE  |  v4");
-            ImGui::Separator();
-            for(int i=0;i<20;++i) {
-                if(i==0||i==11) {
-                    ImGui::Spacing();
-                    ImGui::TextDisabled(i==0?"CORE ANALYSIS":"DETECTAC / SIGNATURES");
-                    ImGui::Separator();
+            const char* syncLabels[] = {
+                "Overview & Processes", "Evidence Inspector", "Evidence Sources",
+                "Windows Services", "File Integrity", "System Inventory",
+                "USB Devices", "Startup Entries", "Extended Audits",
+                "Detection Library", "Review Queue", "Process Signatures",
+                "Script Signatures", "File Signatures", "Registry Signatures",
+                "USB Signatures", "Service Signatures", "History Signatures",
+                "Account Signatures", "General Signatures"
+            };
+            const char* syncDescriptions[] = {
+                "Running processes and contextual alerts", "Detailed collected evidence",
+                "Evidence sources and coverage", "Windows service inventory",
+                "File hashes and signature verification", "Operating system information",
+                "Connected device history", "Logon persistence entries",
+                "Module and configuration audits", "Searchable signature inventory",
+                "Findings requiring manual review", "Process-related patterns",
+                "Script-related patterns", "File-related patterns",
+                "Registry-related patterns", "Device-related patterns",
+                "Service-related patterns", "Execution history patterns",
+                "Account-related patterns", "Other patterns"
+            };
+            // SYNC workspace v5: responsive navigation and consistent page chrome.
+            const float syncAvailableWidth = ImGui::GetContentRegionAvail().x;
+            const bool syncCompact = syncAvailableWidth < 1000.f;
+            static char syncNavSearch[96] = "";
+            const ImVec4 syncBlue(.30f,.78f,.96f,1.f);
+            const ImVec4 syncMuted(.55f,.60f,.68f,1.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,10.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(9.f,9.f));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.075f,.105f,1.f));
+            if(syncCompact) {
+                ImGui::TextColored(syncBlue,"SYNC / WORKSPACE");
+                ImGui::SetNextItemWidth(-1.f);
+                if(ImGui::BeginCombo("##syncSectionSelect",syncLabels[syncCategory])) {
+                    for(int i=0;i<20;++i) {
+                        if(ImGui::Selectable(syncLabels[i],syncCategory==i))syncCategory=i;
+                        if(syncCategory==i)ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
                 }
-                ImGui::PushID(i);
-                if(syncCategory==i)
-                    ImGui::PushStyleColor(ImGuiCol_Header,ImVec4(.12f,.35f,.48f,1.f));
-                if(ImGui::Selectable(syncLabels[i],syncCategory==i,0,ImVec2(-1,34)))syncCategory=i;
-                if(syncCategory==i)ImGui::PopStyleColor();
-                ImGui::PopID();
+                ImGui::Spacing();
+            } else {
+                const float sideWidth = syncAvailableWidth < 1260.f ? 235.f : 270.f;
+                ImGui::BeginChild("##syncSidebar",ImVec2(sideWidth,0),true);
+                ImGui::TextColored(syncBlue,"SYNC / WORKSPACE");
+                ImGui::TextDisabled("SECURITY ANALYSIS");
+                ImGui::Separator();
+                ImGui::SetNextItemWidth(-1.f);
+                ImGui::InputTextWithHint("##syncNavSearch","Search sections...",syncNavSearch,sizeof(syncNavSearch));
+                ImGui::Spacing();
+                ImGui::BeginChild("##syncNavScroll",ImVec2(0,-40.f),false);
+                for(int i=0;i<20;++i) {
+                    std::string title=syncLabels[i];
+                    std::string query=syncNavSearch;
+                    std::transform(title.begin(),title.end(),title.begin(),[](unsigned char c){return (char)std::tolower(c);});
+                    std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
+                    if(!query.empty() && title.find(query)==std::string::npos)continue;
+                    if(query.empty()&&(i==0||i==11)){
+                        ImGui::Spacing();
+                        ImGui::TextColored(syncMuted,"%s",i==0?"SYSTEM / EVIDENCE":"SIGNATURE CATEGORIES");
+                        ImGui::Separator();
+                    }
+                    ImGui::PushID(i);
+                    if(syncCategory==i) {
+                        ImGui::PushStyleColor(ImGuiCol_Header,ImVec4(.11f,.29f,.40f,1.f));
+                        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,ImVec4(.13f,.34f,.47f,1.f));
+                    }
+                    if(ImGui::Selectable(syncLabels[i],syncCategory==i,0,ImVec2(-1,34.f)))syncCategory=i;
+                    if(syncCategory==i)ImGui::PopStyleColor(2);
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",syncDescriptions[i]);
+                    ImGui::PopID();
+                }
+                ImGui::EndChild();
+                ImGui::Separator();
+                ImGui::TextDisabled("Read-only  |  Review findings");
+                ImGui::EndChild();
+                ImGui::SameLine(0,12.f);
             }
-            ImGui::Separator();
-            ImGui::TextDisabled("Read-only  |  Review findings");
-            ImGui::EndChild();
-            ImGui::SameLine(0,14.f);
             ImGui::BeginGroup();
-            ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),false);
+            ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),true);
+            ImGui::TextColored(syncBlue,"SYNC / ANALYSIS CENTER");
+            ImGui::SameLine();
+            ImGui::TextDisabled("SECTION %02d / 20",syncCategory+1);
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::SetWindowFontScale(1.18f);
+            ImGui::TextUnformatted(syncLabels[syncCategory]);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::TextColored(syncMuted,"%s",syncDescriptions[syncCategory]);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
             const ImVec4 accent = accentColor();
+
             {
             if(syncCategory==0) {
                 ImGui::TextColored(accent,"PROCESSOS E ALERTAS");
@@ -41450,9 +41521,11 @@ zula.exe)FIVEMSTR";
                 drawReviewQueueNew();
                 /* sidebar section end */
             }
-            if(syncCategory>=11 && syncCategory<=19) { if(syncCategory==12 || syncCategory==18) { sync_original_rules::render(); ImGui::Separator(); } sync_detect_browser::sync_active_signatures::render(syncCategory-11); ImGui::Spacing(); sync_detect_browser::render(syncCategory-11); }
+            if(syncCategory>=11 && syncCategory<=19) { ImGui::TextDisabled("Signature matches are indicators, not definitive findings."); if(syncCategory==12 || syncCategory==18) { sync_original_rules::render(); ImGui::Separator(); } sync_detect_browser::sync_active_signatures::render(syncCategory-11); ImGui::Spacing(); sync_detect_browser::render(syncCategory-11); }
             ImGui::EndChild();
             ImGui::EndGroup();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar(4);
         }
         ImGui::PopStyleVar();
     } else if(page==3) {
