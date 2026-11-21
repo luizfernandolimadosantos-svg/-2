@@ -7715,8 +7715,8 @@ static void render(int category) {
             buckets.push_back(classify(lowercase(syncDetectStrings[i].module)));
     }
     const int current=category<0?9:category;
-    ImGui::TextColored(ImVec4(.35f,.72f,1.f,1.f),"DETECTAC / %s",category<0?"TODAS AS STRINGS":labels[category]);
-    ImGui::TextWrapped("Inventario de literais extraidos do codigo-fonte. Nao sao assinaturas validadas nem regras executadas.");
+    ImGui::TextColored(ImVec4(.35f,.72f,1.f,1.f),"SYNC INTELLIGENCE V8 / %s",category<0?"TODAS AS STRINGS":labels[category]);
+    ImGui::TextWrapped("Catalogo de indicadores para auditoria. Strings isoladas e caminhos de DLL nao comprovam alteracao ou malware.");
     ImGui::Separator();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*.58f);
     ImGui::InputTextWithHint("##detectQuery","Pesquisar modulo ou string...",query,sizeof(query));
@@ -7725,7 +7725,7 @@ static void render(int category) {
     ImGui::Checkbox("Filtrar por modulo",&exactModule);
     if(exactModule){
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(280);
+        ImGui::SetNextItemWidth((std::min)(280.f, ImGui::GetContentRegionAvail().x));
         const char* preview=modules.empty()?"":modules[(size_t)chosenModule].c_str();
         if(ImGui::BeginCombo("##moduleSelect",preview)){
             for(size_t i=0;i<modules.size();++i){
@@ -7734,27 +7734,51 @@ static void render(int category) {
             ImGui::EndCombo();
         }
     }
-    std::string needle=lowercase(query);
-    std::vector<int> indices;
-    indices.reserve(1024);
-    std::set<std::string> foundModules;
-    for(size_t i=0;i<syncDetectStringCount;++i){
-        if(category>=0 && buckets[i]!=category)continue;
-        const auto& item=syncDetectStrings[i];
-        if(exactModule && !modules.empty() && modules[(size_t)chosenModule]!=item.module)continue;
-        if(!needle.empty() && lowercase(item.module).find(needle)==std::string::npos &&
-            lowercase(item.value).find(needle)==std::string::npos)continue;
-        indices.push_back((int)i);
-        foundModules.insert(item.module);
+    // Cache the filtered catalog. Previously every ImGui frame performed
+    // thousands of lowercase conversions, allocations and set insertions.
+    // Recompute only when the user changes the search or selected category.
+    static std::string cachedNeedle;
+    static int cachedCategory = -999;
+    static int cachedModule = -999;
+    static bool cachedExactModule = false;
+    static std::vector<int> indices;
+    static size_t matchingModules = 0;
+    const std::string needle = lowercase(query);
+    const int safeModule = modules.empty() ? 0 :
+        (std::max)(0, (std::min)(chosenModule, (int)modules.size()-1));
+    if (cachedNeedle != needle || cachedCategory != category ||
+        cachedModule != safeModule || cachedExactModule != exactModule) {
+        cachedNeedle = needle;
+        cachedCategory = category;
+        cachedModule = safeModule;
+        cachedExactModule = exactModule;
+        indices.clear();
+        indices.reserve(1024);
+        std::unordered_set<std::string> foundModules;
+        std::unordered_set<std::string> uniqueEntries;
+        for (size_t i=0; i<syncDetectStringCount; ++i) {
+            if (category >= 0 && buckets[i] != category) continue;
+            const auto& item = syncDetectStrings[i];
+            if (exactModule && !modules.empty() &&
+                modules[(size_t)safeModule] != item.module) continue;
+            const std::string mod = lowercase(item.module);
+            const std::string val = lowercase(item.value);
+            if (!needle.empty() && mod.find(needle)==std::string::npos &&
+                val.find(needle)==std::string::npos) continue;
+            if (!uniqueEntries.insert(mod+"\n"+val).second) continue;
+            indices.push_back((int)i);
+            foundModules.insert(mod);
+        }
+        matchingModules = foundModules.size();
     }
-    ImGui::Text("%zu strings | %zu modulos | %zu total no inventario",
-        indices.size(),foundModules.size(),syncDetectStringCount);
-    if(ImGui::BeginTable("##detectacResults",3,ImGuiTableFlags_RowBg|
+    ImGui::Text("%zu indicadores unicos | %zu modulos | %zu entradas originais",
+        indices.size(),matchingModules,syncDetectStringCount);
+    if(ImGui::BeginTable("##syncIntelligenceResults",3,ImGuiTableFlags_RowBg|
         ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
         ImVec2(0,0))){
-        ImGui::TableSetupColumn("Modulo",ImGuiTableColumnFlags_WidthFixed,185.f);
-        ImGui::TableSetupColumn("Categoria",ImGuiTableColumnFlags_WidthFixed,175.f);
-        ImGui::TableSetupColumn("String / literal",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Modulo",ImGuiTableColumnFlags_WidthStretch,0.24f);
+        ImGui::TableSetupColumn("Categoria",ImGuiTableColumnFlags_WidthStretch,0.24f);
+        ImGui::TableSetupColumn("Indicador / literal",ImGuiTableColumnFlags_WidthStretch,0.52f);
         ImGui::TableSetupScrollFreeze(0,1);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
@@ -7837,6 +7861,17 @@ static void scan() {
   const auto& item=syncDetectStrings[i];
   std::string token=lower(item.value);
   if(token.size()<6||token.size()>256||observed.count(token)==0)continue;
+  // Generic runtime/API names are informational, not evidence of a bypass.
+  static const std::unordered_set<std::string> genericTokens={
+   "kernel32.dll","ntdll.dll","user32.dll","shell32.dll","advapi32.dll",
+   "getprocaddress","loadlibrarya","loadlibraryw","virtualalloc",
+   "createthread","closehandle","getlasterror","system32\\",
+   "microsoft corporation","getmodulehandlea","getmodulehandlew",
+   "windows\\temp\\","program files","appdata","username",
+   "java.exe","javaw.exe","opengl32.dll","d3d11.dll","dxgi.dll",
+   "this program cannot be run in dos mode."
+  };
+  if(genericTokens.count(token))continue;
   std::string key=std::string(item.module)+"\n"+token;
   if(!seen.insert(key).second)continue;
   matches.push_back({item.module,item.value,sync_detect_browser::classify(lower(item.module))});
@@ -7856,7 +7891,7 @@ static void render(int category) {
  ImGui::TextDisabled("Correspondencia exata de strings ASCII/UTF-16; limite 8 MiB.");
  if(!inspected)return;
  if(ImGui::BeginTable("##activeMatches",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_ScrollY,ImVec2(0,180))){
-  ImGui::TableSetupColumn("Modulo");ImGui::TableSetupColumn("Categoria");ImGui::TableSetupColumn("String");
+  ImGui::TableSetupColumn("Modulo",ImGuiTableColumnFlags_WidthStretch,0.25f);ImGui::TableSetupColumn("Categoria",ImGuiTableColumnFlags_WidthStretch,0.25f);ImGui::TableSetupColumn("Indicador",ImGuiTableColumnFlags_WidthStretch,0.5f);
   ImGui::TableHeadersRow();
   for(const auto& m:matches){
    if(category>=0&&m.category!=category)continue;
@@ -8998,7 +9033,20 @@ struct CachedSha256 {
     ULONGLONG bytes=0;
     FILETIME modified{};
     std::string digest;
+    DWORD volumeSerial=0;
+    DWORD fileIndexHigh=0;
+    DWORD fileIndexLow=0;
 };
+// Distinguish files replaced at the same path even when size/time are preserved.
+static bool syncFileIdentity(const std::wstring& path, BY_HANDLE_FILE_INFORMATION& info) {
+    HANDLE h=CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    if(h==INVALID_HANDLE_VALUE)return false;
+    const bool ok=GetFileInformationByHandle(h,&info)!=0;
+    CloseHandle(h);
+    return ok;
+}
 static std::mutex sha256CacheMutex;
 static std::vector<CachedSha256> sha256Cache;
 static std::atomic<unsigned long long> sha256CacheHits{0},sha256CacheMisses{0};
@@ -9008,10 +9056,15 @@ static std::string sha256(const std::wstring& path) {
         return sha256Uncached(path);
     const ULONGLONG bytes=(static_cast<ULONGLONG>(metadata.nFileSizeHigh)<<32) |
         metadata.nFileSizeLow;
+    BY_HANDLE_FILE_INFORMATION identity{};
+    const bool haveIdentity=syncFileIdentity(path,identity);
     {
         std::lock_guard<std::mutex> guard(sha256CacheMutex);
         for(const auto& item:sha256Cache){
-            if(item.path==path && item.bytes==bytes &&
+            if(haveIdentity && item.path==path && item.bytes==bytes &&
+               item.volumeSerial==identity.dwVolumeSerialNumber &&
+               item.fileIndexHigh==identity.nFileIndexHigh &&
+               item.fileIndexLow==identity.nFileIndexLow &&
                CompareFileTime(&item.modified,&metadata.ftLastWriteTime)==0){
                 ++sha256CacheHits;
                 return item.digest;
@@ -9023,15 +9076,22 @@ static std::string sha256(const std::wstring& path) {
     if(digest=="Unavailable")return digest;
     // Avoid caching a digest if the file changed while it was read.
     WIN32_FILE_ATTRIBUTE_DATA after{};
+    BY_HANDLE_FILE_INFORMATION afterIdentity{};
+    const bool stableIdentity=haveIdentity && syncFileIdentity(path,afterIdentity) &&
+        identity.dwVolumeSerialNumber==afterIdentity.dwVolumeSerialNumber &&
+        identity.nFileIndexHigh==afterIdentity.nFileIndexHigh &&
+        identity.nFileIndexLow==afterIdentity.nFileIndexLow;
     if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&after) ||
        metadata.nFileSizeHigh!=after.nFileSizeHigh ||
        metadata.nFileSizeLow!=after.nFileSizeLow ||
-       CompareFileTime(&metadata.ftLastWriteTime,&after.ftLastWriteTime)!=0)
-        return digest;
+       CompareFileTime(&metadata.ftLastWriteTime,&after.ftLastWriteTime)!=0 ||
+       !stableIdentity)
+        return "Unavailable"; // Changed during scan: never present a stale digest.
     {
         std::lock_guard<std::mutex> guard(sha256CacheMutex);
         if(sha256Cache.size()>=256)sha256Cache.erase(sha256Cache.begin());
-        sha256Cache.push_back({path,bytes,metadata.ftLastWriteTime,digest});
+        sha256Cache.push_back({path,bytes,metadata.ftLastWriteTime,digest,
+            identity.dwVolumeSerialNumber,identity.nFileIndexHigh,identity.nFileIndexLow});
     }
     return digest;
 }
@@ -14823,24 +14883,75 @@ static void inspectProcessFiles(Collector& out,
 static void inspectLoadedModules(Collector& out,
                                  const std::vector<Process>& processes) {
     size_t visited=0;
+    size_t attempted=0;
+    size_t mappingUnavailable=0;
+    size_t mappingConfirmed=0;
+    size_t mappingReview=0;
+    size_t accessDenied=0;
+    size_t moduleListsUnavailable=0;
+    size_t moduleListsTruncated=0;
+    size_t modulesInspected=0;
     std::unordered_set<std::wstring> inspected;
     for(const auto& proc:processes) {
-        if(out.stopped() || visited>=160)break;
+        if(out.stopped() || attempted>=160)break;
+        ++attempted;
         HANDLE handle=OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ,
                                   FALSE,proc.pid);
-        if(!handle)continue;
+        if(!handle){++accessDenied;continue;}
         ++visited;
-        std::array<HMODULE,1024> modules{};
+        // Query the required module count first, then retry with a bounded
+        // allocation. Modules may load/unload between the two calls.
         DWORD needed=0;
-        if(EnumProcessModulesEx(handle,modules.data(),
-             static_cast<DWORD>(modules.size()*sizeof(HMODULE)),
-             &needed,LIST_MODULES_ALL)) {
+        bool enumerated=EnumProcessModulesEx(handle,nullptr,0,&needed,
+                                             LIST_MODULES_ALL)!=FALSE;
+        std::vector<HMODULE> modules;
+        if(enumerated) {
+            const size_t capacity=(std::min)(size_t(4096),
+                (std::max)(size_t(64),size_t(needed/sizeof(HMODULE))+64));
+            modules.resize(capacity);
+            enumerated=EnumProcessModulesEx(handle,modules.data(),
+                static_cast<DWORD>(modules.size()*sizeof(HMODULE)),
+                &needed,LIST_MODULES_ALL)!=FALSE;
+        }
+        if(enumerated) {
+            if(needed>modules.size()*sizeof(HMODULE))++moduleListsTruncated;
             size_t count=(std::min)(modules.size(),
                         static_cast<size_t>(needed/sizeof(HMODULE)));
             for(size_t i=0;i<count && !out.stopped();++i) {
                 wchar_t path[32768]{};
                 if(!GetModuleFileNameExW(handle,modules[i],path,32768))
                     continue;
+                ++modulesInspected;
+                // Read-only consistency check: PSAPI module base should map to
+                // a committed image region. A mismatch requires manual review;
+                // cross-process inspection can race module unloads.
+                if(modulesInspected<=4096) {
+                    MEMORY_BASIC_INFORMATION mbi{};
+                    const SIZE_T queried=VirtualQueryEx(handle,modules[i],
+                        &mbi,sizeof(mbi));
+                    if(queried!=sizeof(mbi)) {
+                        ++mappingUnavailable;
+                    } else if(mbi.State==MEM_COMMIT && mbi.Type==MEM_IMAGE) {
+                        ++mappingConfirmed;
+                    } else {
+                        // Retry once to reduce transient unload/reload noise.
+                        MEMORY_BASIC_INFORMATION confirm{};
+                        const SIZE_T retried=VirtualQueryEx(handle,modules[i],
+                            &confirm,sizeof(confirm));
+                        if(retried!=sizeof(confirm)) {
+                            ++mappingUnavailable;
+                        } else if(confirm.State==MEM_COMMIT &&
+                                  confirm.Type==MEM_IMAGE) {
+                            ++mappingConfirmed;
+                        } else {
+                            ++mappingReview;
+                            out.emit("Loaded Module Mapping Review",path,
+                                "PID "+std::to_string(proc.pid)+
+                                " | Module mapping differs from image layout"
+                                " | Review only; possible unload race");
+                        }
+                    }
+                }
                 const std::wstring modulePath=path;
                 const auto low=lower(modulePath);
                 const auto extension=lower(fs::path(low).extension().wstring());
@@ -14860,9 +14971,24 @@ static void inspectLoadedModules(Collector& out,
                     inspectPortableExecutable(out,modulePath);
                 }
             }
+        }else{
+            ++moduleListsUnavailable;
         }
         CloseHandle(handle);
     }
+    // Explicit coverage prevents an incomplete inventory being mistaken for
+    // a clean system. These counts are informational, not threat evidence.
+    out.emit("Loaded Module Coverage",L"Process module inventory",
+        "Processes attempted="+std::to_string(attempted)+
+        " | Processes opened="+std::to_string(visited)+
+        " | Access failures="+std::to_string(accessDenied)+
+        " | Module lists unavailable="+std::to_string(moduleListsUnavailable)+
+        " | Truncated module lists="+std::to_string(moduleListsTruncated)+
+        " | Modules inspected="+std::to_string(modulesInspected)+
+        " | Mapping confirmed="+std::to_string(mappingConfirmed)+
+        " | Mapping unavailable="+std::to_string(mappingUnavailable)+
+        " | Mapping review="+std::to_string(mappingReview)+
+        " | Review-only; no hidden-module detection claim");
 }
 // Examine known registry extension points without altering their values.
 static void inspectRegistryString(Collector& out,HKEY hive,
@@ -34666,48 +34792,38 @@ static double inspectionPresentationFraction(){
     const double verified=(finished+currentStageWork)/6.0;
     return std::clamp(verified,0.0,0.999);
 }
-// V59: integer percentage display. Each rendered update advances at most
-// one point, so the user sees 0, 1, 2, ... 100 in order, without jumps.
-// The target is still based on real completed work (not a fake timer).
-static float inspectionSmoothFraction(){
-    static double scanIdentity=-1.0;
-    static int visiblePercent=0;
+// V28: the underlying target is based on completed scan work. The displayed
+// integer percentage advances by exactly one point per rendered ImGui frame,
+// so the visible sequence is 0, 1, 2, ... 100, without numeric jumps.
+// This is a PRESENTATION counter: it never claims the scan has completed
+// before the worker confirms success, and it does not slow the scan worker.
+static int inspectionDisplayPercent(){
+    static int displayed=0;
     static int lastFrame=-1;
-    static double lastStepTime=-1.0;
-    const double now=ImGui::GetTime();
-    if(scanIdentity!=inspectionProgressStart || now<lastStepTime){
-        scanIdentity=inspectionProgressStart;
-        visiblePercent=0;
+    static double lastScanStart=-1.0;
+    if(inspectionProgressStart!=lastScanStart){
+        displayed=0;
         lastFrame=-1;
-        lastStepTime=now;
+        lastScanStart=inspectionProgressStart;
     }
-    if(inspectionProgressStart<=0.0)return 0.f;
+    if(inspectionProgressStart<=0.0)return 0;
     const int frame=ImGui::GetFrameCount();
     if(frame!=lastFrame){
         lastFrame=frame;
-        const int verifiedTarget=std::clamp(static_cast<int>(
+        const int target=std::clamp(static_cast<int>(
             std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
-        // Limit to one integer step per visible frame, paced for legibility.
-        // When scan finishes early, remaining numbers are shown in order;
-        // the result is not unlocked until the display reaches 100.
-        if(!scanFailed.load() && !scanCancelled.load() &&
-           visiblePercent<verifiedTarget && now-lastStepTime>=0.055){
-            ++visiblePercent;
-            lastStepTime=now;
-        }
+        if(displayed<target)++displayed;
     }
-    return visiblePercent/100.f;
+    return displayed;
 }
-static int inspectionDisplayPercent(){
-    return std::clamp(static_cast<int>(
-        std::lround(inspectionSmoothFraction()*100.f)),0,100);
+static float inspectionSmoothFraction(){
+    return static_cast<float>(inspectionDisplayPercent())/100.0f;
 }
 
-// Results are only presented after the worker finishes AND the single
-// progress bar has visibly reached 100%. The animation is not extra scanning.
+// Completion depends on the worker's result, never on UI frame rate.
 static bool inspectionResultsReady(){
     return done.load() && !scanning.load() && !scanFailed.load() &&
-           !scanCancelled.load() && inspectionDisplayPercent()>=100;
+           !scanCancelled.load();
 }
 
 static void startScan() {
@@ -35818,7 +35934,8 @@ static std::string moduleNote(const std::wstring& name,const std::wstring& path)
         nm==L"advapi32.dll"||nm==L"kernelbase.dll") &&
         !startsWithPath(low,windowsRoot()))
         appendWarning(reason,"Windows system DLL name outside the Windows directory");
-    return reason.empty()?"No path-based review indicators observed":reason;
+    return reason.empty()?"Path context only; DLL integrity not verified":
+        "Path context only (not proof of modification): "+reason;
 }
 static std::vector<ModuleReview> inspectProcessModules(DWORD pid) {
     std::vector<ModuleReview> out;
@@ -35831,7 +35948,9 @@ static std::vector<ModuleReview> inspectProcessModules(DWORD pid) {
             m.name=entry.szModule;
             m.path=entry.szExePath;
             m.assessment=moduleNote(m.name,m.path);
-            m.suspicious=m.assessment!="No path-based review indicators observed";
+            // A path or an inaccessible module is not evidence of tampering.
+            // Preserve contextual notes, but do not raise a confirmed DLL alert.
+            m.suspicious=false;
             out.push_back(std::move(m));
         }while(Module32NextW(snap,&entry));
     }
@@ -35964,6 +36083,8 @@ static void drawProcessDetails() {
         ImGui::TableHeadersRow();
         for(const auto& m:selectedModules) {
             ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
+            // Highlighting is reserved for corroborated findings; path notes alone
+            // are informational and must not appear as malicious DLL detections.
             if(m.suspicious && highlightSuspicious)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,IM_COL32(97,97,97,180));
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(utf8(m.name).c_str());
@@ -36086,7 +36207,7 @@ static void drawServiceReviews() {
         ImGui::TableSetupColumn("Display name",ImGuiTableColumnFlags_WidthStretch,2.f);
         ImGui::TableSetupColumn("State",ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableSetupColumn("Security assessment",ImGuiTableColumnFlags_WidthStretch,3.5f);
-        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,110);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,150);
         ImGui::TableHeadersRow();
         for(const auto& item:serviceReviews) {
             if(!matchesService(item))continue;
@@ -36101,7 +36222,7 @@ static void drawServiceReviews() {
             ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s",item.assessment.c_str());
             ImGui::TableSetColumnIndex(4);
             ImGui::PushID((int)(&item-&serviceReviews[0]));
-            if(ImGui::Button("Show Details",ImVec2(130,32)))ImGui::OpenPopup("Service details");
+            if(ImGui::Button("Detalhes",ImVec2(-1,32)))ImGui::OpenPopup("Service details");
             if(ImGui::BeginPopup("Service details")) {
                 ImGui::Text("Service: %s",utf8(item.name).c_str());
                 ImGui::TextWrapped("Display name: %s",utf8(item.display).c_str());
@@ -36398,6 +36519,8 @@ struct Report {
     std::wstring path;
     std::string status="Choose an executable, DLL or other file.";
     std::string sha256,format,architecture,compileTime,signature,coverage;
+    std::string baselineSha256,baselineVerdict;
+    std::wstring baselinePath;
     uint64_t bytes=0;
     bool pe=false,packedHint=false;
     std::vector<Section> sections;
@@ -36408,6 +36531,7 @@ static Report report;
 static std::mutex guard;
 static std::atomic<bool> busy{false};
 static char selected[32768]{};
+static char baselineSelected[32768]{};
 static char search[160]{};
 static int tab=0;
 static std::string lower(std::string a){
@@ -36446,8 +36570,20 @@ static double entropy(const std::vector<unsigned char>& b,size_t off,size_t n){
     for(auto f:freq)if(f){double p=(double)f/n;h-=p*std::log2(p);}
     return h;
 }
-static Report analyze(const std::wstring& path){
-    Report r;r.path=path;
+static bool validSha256(const std::string& h){
+    return h.size()==64 && std::all_of(h.begin(),h.end(),[](unsigned char c){
+        return std::isxdigit(c)!=0;
+    });
+}
+static Report analyze(const std::wstring& path,const std::wstring& baselinePath){
+    Report r;r.path=path;r.baselinePath=baselinePath;
+    // A baseline must come from a separately trusted, matching product version.
+    // Hash comparison proves equality/difference, never that either file is safe.
+    if(!baselinePath.empty()){
+        std::error_code sameEc;
+        if(fs::equivalent(fs::path(path),fs::path(baselinePath),sameEc) && !sameEc)
+            r.baselineVerdict="Same file selected; choose an independent trusted reference.";
+    }
     std::error_code ec;
     const auto sz=fs::file_size(path,ec);
     if(ec){r.status="Cannot read file metadata.";return r;}
@@ -36477,6 +36613,15 @@ static Report analyze(const std::wstring& path){
             "Large file: PE data and strings are analyzed from the first "
             "256 MiB; SHA-256 covers the full file.");
     r.sha256=sha256(path);
+    if(!baselinePath.empty() && r.baselineVerdict.empty()){
+        r.baselineSha256=sha256(baselinePath);
+        if(!validSha256(r.sha256)||!validSha256(r.baselineSha256))
+            r.baselineVerdict="Comparison unavailable: one or both files could not be hashed.";
+        else if(r.sha256==r.baselineSha256)
+            r.baselineVerdict="MATCH: byte-identical to the selected reference (not a malware verdict).";
+        else
+            r.baselineVerdict="DIFFERENT: hashes do not match; verify product version and origin.";
+    }
     r.head.assign(b.begin(),b.begin()+(std::min)(b.size(),size_t(4096)));
     r.format="Unknown / data";
     if(b.size()>=2&&b[0]=='M'&&b[1]=='Z')r.format="DOS executable / possible PE";
@@ -36488,23 +36633,92 @@ static Report analyze(const std::wstring& path){
         if(pe<=b.size()&&b.size()-pe>=24&&u32(b,pe)==0x00004550){
             r.pe=true;r.format="Windows Portable Executable (PE)";
             const uint16_t machine=u16(b,pe+4);
+            const uint16_t peCharacteristics=u16(b,pe+22);
+            if(machine==0 || machine==0xffff)
+                r.notes.push_back("PE header: invalid or unspecified machine type; inspect manually.");
+            if((peCharacteristics & 0x0002u)==0)
+                r.notes.push_back("PE header: executable-image flag is absent (informational).");
             r.architecture=machine==0x8664?"x64":machine==0x14c?"x86":
                 machine==0xaa64?"ARM64":"Other / unknown";
-            const size_t count=(std::min)(size_t(u16(b,pe+6)),size_t(96));
+            // V10: reject truncated PE metadata before interpreting optional headers.
+            // A partial file read must never be reported as a verified-clean binary.
+            const size_t declaredSections=size_t(u16(b,pe+6));
+            const size_t count=(std::min)(declaredSections,size_t(96));
+            if(declaredSections>96)
+                r.notes.push_back("PE integrity: section count exceeds inspection limit; analysis is incomplete.");
             const size_t opt=pe+24;
-            const size_t sectionStart=opt+u16(b,pe+20);
-            const bool is64=u16(b,opt)==0x20b;
+            const uint16_t declaredOptionalSize=u16(b,pe+20);
+            const bool optionalMagicReadable = opt<=b.size() && b.size()-opt>=2;
+            const uint16_t optionalMagic = optionalMagicReadable?u16(b,opt):0;
+            const size_t sectionStart=opt+declaredOptionalSize;
+            const bool is64=optionalMagic==0x20b;
             const size_t dirs=opt+(is64?112:96);
+            // Validate offsets before reading any optional-header or section data.
+            const bool optionalHeaderInBounds = opt<=b.size() &&
+                size_t(u16(b,pe+20))<=b.size()-opt;
+            const bool sectionTableInBounds = optionalHeaderInBounds &&
+                sectionStart>=opt && sectionStart<=b.size() &&
+                declaredSections<=(b.size()-sectionStart)/40;
+            if(!optionalHeaderInBounds)
+                r.notes.push_back("PE integrity: optional header extends beyond available data; verification incomplete.");
+            // PE header integrity checks: findings are diagnostic, not automatic malware verdicts.
+            const uint16_t optSize=u16(b,pe+20);
+            const uint16_t magic=optionalMagic;
+            if(!optionalMagicReadable || (magic!=0x10b && magic!=0x20b))
+                r.notes.push_back("PE integrity: unrecognized optional-header magic; manual review required.");
+            if(!sectionTableInBounds)
+                r.notes.push_back("PE integrity: section table is truncated or inconsistent.");
+            if(optionalHeaderInBounds && optSize>=20 && (magic==0x10b||magic==0x20b)) {
+                const uint32_t entryRva=u32(b,opt+16);
+                if(entryRva!=0 && optSize>=60) {
+                    const uint32_t imageSize=u32(b,opt+56);
+                    if(imageSize && entryRva>=imageSize)
+                        r.notes.push_back("PE integrity: entry point is outside declared image size (review required).");
+                }
+            }
+            if(optSize<(is64?112u:96u))
+                r.notes.push_back("PE integrity: optional header is smaller than expected.");
+            if(optionalHeaderInBounds && (magic==0x10b || magic==0x20b) && optSize>=64){
+                const uint32_t sectionAlignment=u32(b,opt+32);
+                const uint32_t fileAlignment=u32(b,opt+36);
+                const uint32_t imageSize=u32(b,opt+56);
+                const uint32_t headerSize=u32(b,opt+60);
+                if(!sectionAlignment || !fileAlignment)
+                    r.notes.push_back("PE header: zero section/file alignment; structural review required.");
+                else if(sectionAlignment<fileAlignment)
+                    r.notes.push_back("PE header: section alignment is smaller than file alignment (review only).");
+                if(headerSize>sz)
+                    r.notes.push_back("PE header: declared headers exceed actual file size.");
+                if(imageSize && headerSize>imageSize)
+                    r.notes.push_back("PE header: declared headers exceed image size.");
+            }
+            if(optionalHeaderInBounds && optSize>=64 &&
+               (u32(b,opt+60)==0 || u32(b,opt+56)==0))
+                r.notes.push_back("PE integrity: image/header size fields are zero or unavailable.");
             if(opt>b.size()||b.size()-opt<2)
                 r.notes.push_back("Optional header is truncated.");
+            // Resolve only file-backed RVAs. Virtual-only bytes cannot be
+            // parsed from disk. Use 64-bit arithmetic to avoid RVA overflow.
             auto rvaToOff=[&](uint32_t rva)->size_t{
-                for(const auto& sec:r.sections)
-                    if(rva>=sec.rva&&uint64_t(rva)-sec.rva<sec.size&&
-                       uint64_t(sec.raw)+(uint64_t(rva)-sec.rva)<b.size())
-                        return size_t(sec.raw)+(rva-sec.rva);
+                if(rva==0)return size_t(-1);
+                for(size_t i=0;i<r.sections.size();++i){
+                    const auto& sec=r.sections[i];
+                    const uint64_t delta=uint64_t(rva)-sec.rva;
+                    if(rva<sec.rva || delta>=sec.size)continue;
+                    const uint64_t raw=uint64_t(sec.raw)+delta;
+                    if(raw<b.size())return size_t(raw);
+                }
+                // PE directories can legally reside inside mapped headers.
+                if(optionalHeaderInBounds && optSize>=64 &&
+                   uint64_t(rva)<u32(b,opt+60) && uint64_t(rva)<b.size())
+                    return size_t(rva);
                 return size_t(-1);
             };
-            for(size_t i=0;i<count;++i){
+            // Treat entropy as a weak indicator. Do not infer packing from
+            // one compressed/resource section in an otherwise ordinary PE.
+            size_t highEntropyExecutableSections=0;
+            size_t highEntropyWritableExecutableSections=0;
+            for(size_t i=0;i<(sectionTableInBounds?count:0);++i){
                 const size_t pos=sectionStart+i*40;
                 if(pos>b.size()||b.size()-pos<40)break;
                 Section sec;
@@ -36513,20 +36727,162 @@ static Report analyze(const std::wstring& path){
                 sec.size=u32(b,pos+16);
                 sec.raw=u32(b,pos+20);
                 sec.flags=u32(b,pos+36);
-                sec.entropy=entropy(b,sec.raw,sec.size);
-                if(sec.size>1024&&sec.entropy>7.45){
-                    r.packedHint=true;
-                    r.notes.push_back("High-entropy section "+sec.name+
-                        " (may be compressed, packed or encrypted; not proof of malware).");
+                const bool sectionFullyRead = sec.size && sec.raw<b.size() &&
+                    uint64_t(sec.raw)+sec.size<=b.size();
+                sec.entropy=sectionFullyRead?entropy(b,sec.raw,sec.size):0.0;
+                if(sec.size && (uint64_t(sec.raw)+sec.size>sz))
+                    r.notes.push_back("PE integrity: section "+sec.name+" extends beyond file boundaries.");
+                if(sec.size && sec.raw==0)
+                    r.notes.push_back("PE integrity: section "+sec.name+" has a zero raw-file offset.");
+                // A virtual address outside SizeOfImage indicates inconsistent PE metadata.
+                // It is diagnostic evidence only; it does not establish malicious intent.
+                if(optionalHeaderInBounds && optSize>=60 && sec.rva!=0) {
+                    const uint32_t declaredImageSize=u32(b,opt+56);
+                    if(declaredImageSize && sec.rva>=declaredImageSize)
+                        r.notes.push_back("PE integrity: section "+sec.name+
+                            " starts outside declared image size (review only).");
+                }
+                // Duplicate section names are permitted by PE, so do not classify them as malware.
+                if(!sec.name.empty()) {
+                    for(const auto& previous:r.sections) {
+                        if(previous.name==sec.name) {
+                            r.notes.push_back("PE metadata: duplicate section name "+sec.name+
+                                " (informational; not proof of tampering).");
+                            break;
+                        }
+                    }
+                }
+                if(sectionFullyRead && sec.size>4096 && sec.entropy>7.65){
+                    const bool executable=(sec.flags&0x20000000u)!=0;
+                    const bool writable=(sec.flags&0x80000000u)!=0;
+                    if(executable){
+                        ++highEntropyExecutableSections;
+                        if(writable)++highEntropyWritableExecutableSections;
+                        r.notes.push_back("High entropy in executable section "+sec.name+
+                            " (review only; not a malware verdict).");
+                    }else{
+                        r.notes.push_back("High entropy in data section "+sec.name+
+                            " (informational; compressed resources are common).");
+                    }
                 }
                 if((sec.flags&0x20000000)&&(sec.flags&0x80000000))
-                    r.notes.push_back("Writable and executable section: "+sec.name);
+                    r.notes.push_back("Writable and executable section: "+sec.name+
+                        " (review only; not proof of malware).");
+                const uint32_t fileAlignment = optionalHeaderInBounds && optSize>=40
+                    ?u32(b,opt+36):0;
+                if(sec.size && fileAlignment && (fileAlignment&(fileAlignment-1))==0 &&
+                   (sec.raw%fileAlignment)!=0)
+                    r.notes.push_back("Section raw offset differs from PE file alignment: "+sec.name+
+                        " (informational; custom toolchains may be legitimate).");
+                if(sec.size && sec.raw>=b.size() && uint64_t(sec.raw)<sz)
+                    r.notes.push_back("Section "+sec.name+
+                        " is outside the bounded inspection window; no verdict inferred.");
+                if(sec.size && sec.raw && uint64_t(sec.raw)+sec.size<=sz) {
+                    for(const auto& prev:r.sections) {
+                        if(!prev.size || !prev.raw)continue;
+                        const uint64_t a=sec.raw, ae=a+sec.size;
+                        const uint64_t p=prev.raw, peEnd=p+prev.size;
+                        if(a<peEnd && p<ae) {
+                            r.notes.push_back("PE integrity: overlapping raw sections " +
+                                prev.name + " / " + sec.name + " (review only).");
+                            break;
+                        }
+                    }
+                }
                 r.sections.push_back(sec);
             }
-            if(dirs<=b.size()&&b.size()-dirs>=16){
+            // Additional read-only PE diagnostics. These findings are contextual
+            // and NEVER promote a file to a malware verdict on their own.
+            if(optionalHeaderInBounds && (magic==0x10b || magic==0x20b) &&
+               optSize >= (is64?112u:96u)) {
+                const uint32_t entryRva=u32(b,opt+16);
+                const uint32_t imageSize=u32(b,opt+56);
+                if(entryRva && imageSize && entryRva<imageSize && sectionTableInBounds) {
+                    bool mapped=false, executable=false;
+                    for(const auto& sec:r.sections) {
+                        // VirtualSize is distinct from SizeOfRawData: use the
+                        // section header's virtual size when available.
+                        const size_t secIndex=&sec-r.sections.data();
+                        const size_t hdr=sectionStart+secIndex*40;
+                        const uint32_t virtualSize=u32(b,hdr+8);
+                        const uint64_t span=(std::max)(uint64_t(virtualSize),uint64_t(sec.size));
+                        if(entryRva>=sec.rva && uint64_t(entryRva)-sec.rva<span) {
+                            mapped=true;
+                            executable=(sec.flags&0x20000000u)!=0;
+                            break;
+                        }
+                    }
+                    if(!mapped)
+                        r.notes.push_back("PE entry point is not mapped to a declared section (review only).");
+                    else if(!executable)
+                        r.notes.push_back("PE entry point lies in a non-executable section (review only).");
+                }
+                // IMAGE_DIRECTORY_ENTRY_SECURITY uses a *file offset*, not RVA.
+                // Check bounds against the complete file, not just the 256 MiB window.
+                const uint32_t dirCount=u32(b,opt+(is64?108:92));
+                const size_t directoryBase=opt+(is64?112:96);
+                if(dirCount>4 && optSize >= (is64?112u:96u)+5u*8u) {
+                    const uint32_t certOff=u32(b,directoryBase+4*8);
+                    const uint32_t certSize=u32(b,directoryBase+4*8+4);
+                    if((certOff==0)!=(certSize==0))
+                        r.notes.push_back("PE certificate directory has an incomplete offset/size pair (review only).");
+                    else if(certOff && (uint64_t(certOff)+certSize>sz))
+                        r.notes.push_back("PE certificate directory extends beyond the file (review only).");
+                    else if(certOff && (certOff%8)!=0)
+                        r.notes.push_back("PE certificate directory offset is not 8-byte aligned (review only).");
+                }
+                // The data-directory table may be shorter than the advertised
+                // directory count. Do not dereference entries outside SizeOfOptionalHeader.
+                const size_t availableDirs=(optSize-(is64?112u:96u))/8;
+                if(dirCount>availableDirs)
+                    r.notes.push_back("PE data-directory count exceeds optional-header space; inspection incomplete.");
+            }
+            // Additional read-only PE checks: verify that the import and
+            // relocation directories point to file-backed data. Missing
+            // directories are normal and are not suspicious by themselves.
+            if(optionalHeaderInBounds && (magic==0x10b || magic==0x20b) &&
+               optSize >= (is64?112u:96u)) {
+                const size_t base=opt+(is64?112u:96u);
+                const uint32_t countDirs=u32(b,opt+(is64?108:92));
+                const size_t available=(optSize-(is64?112u:96u))/8;
+                const size_t inspected=(std::min)(size_t(countDirs),available);
+                for(const size_t idx : {size_t(1),size_t(5),size_t(9)}) {
+                    if(idx>=inspected)continue;
+                    const uint32_t dirRva=u32(b,base+idx*8);
+                    const uint32_t dirSize=u32(b,base+idx*8+4);
+                    if(!dirRva && !dirSize)continue;
+                    const char* label=idx==1?"import":idx==5?"relocation":"TLS";
+                    if(!dirRva || !dirSize) {
+                        r.notes.push_back(std::string("PE ")+label+
+                            " directory has incomplete metadata (review only).");
+                        continue;
+                    }
+                    const size_t off=rvaToOff(dirRva);
+                    if(off==size_t(-1))
+                        r.notes.push_back(std::string("PE ")+label+
+                            " directory is not backed by inspected file data (coverage/structure review).");
+                    else if(dirSize>b.size()-off)
+                        r.notes.push_back(std::string("PE ")+label+
+                            " directory extends beyond inspected bytes (may be partial coverage).");
+                }
+            }
+            // Require correlated structural indicators before displaying the
+            // packing hint. A lone high-entropy section is insufficient.
+            r.packedHint = highEntropyWritableExecutableSections>0 ||
+                highEntropyExecutableSections>=2;
+            if(r.packedHint)
+                r.notes.push_back("Executable-section anomalies: inspect manually; not proof of malware.");
+            if(optionalHeaderInBounds && (magic==0x10b||magic==0x20b) &&
+               optSize>=(is64?128u:112u) &&
+               dirs<=b.size()&&b.size()-dirs>=16){
                 uint32_t importsRva=u32(b,dirs+8);
+                const uint32_t importsSize=u32(b,dirs+12);
                 size_t pos=rvaToOff(importsRva);
-                for(size_t i=0;i<256&&pos<b.size()&&b.size()-pos>=20;i++,pos+=20){
+                const size_t importsStart=pos;
+                for(size_t i=0;i<256&&pos<b.size()&&b.size()-pos>=20 &&
+                    importsStart!=size_t(-1) && importsSize>=20 &&
+                    pos>=importsStart && pos-importsStart<=uint64_t(importsSize)-20;
+                    i++,pos+=20){
                     uint32_t lookup=u32(b,pos),nameRva=u32(b,pos+12),iat=u32(b,pos+16);
                     if(!lookup&&!nameRva&&!iat)break;
                     std::string dll=cstr(b,rvaToOff(nameRva),180);
@@ -36576,6 +36932,14 @@ static Report analyze(const std::wstring& path){
         }
         if(wideRun.size()>=5&&r.strings.size()<18000)
             r.strings.push_back("[UTF-16LE] "+wideRun);
+    }
+    // A signature failure or unusual PE layout alone does not establish tampering.
+    // Proven modification requires a known-good version-specific hash or trusted baseline.
+    if(r.pe){
+        const auto ext=lower(fs::path(path).extension().string());
+        if(ext!=".exe" && ext!=".dll" && ext!=".sys" && ext!=".ocx" && ext!=".scr")
+            r.notes.push_back("PE format differs from file extension; this is informational only.");
+        r.notes.push_back("Integrity verdict requires comparison with a trusted, version-matched baseline; SHA-256 alone does not prove alteration.");
     }
     if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
     r.notes.push_back("Static inspection only. Decompiled source code cannot be recovered reliably from compiled binaries.");
@@ -36642,7 +37006,8 @@ static bool exportReport(const Report& r,bool csv){
             out<<quote(k)<<","<<quote(v)<<"\r\n";
         };
         row("File",path);row("Status",r.status);
-        row("SHA-256",r.sha256);row("Signature",r.signature);
+        row("SHA-256",r.sha256);row("Baseline SHA-256",r.baselineSha256);
+        row("Baseline comparison",r.baselineVerdict);row("Signature",r.signature);
         row("Coverage",r.coverage);row("Format",r.format);
         row("Architecture",r.architecture);
         row("Size (bytes)",std::to_string(r.bytes));
@@ -36656,7 +37021,8 @@ static bool exportReport(const Report& r,bool csv){
             out<<"  "<<jsonQuote(k)<<": "<<jsonQuote(v)<<",\n";
         };
         field("file",path);field("status",r.status);
-        field("sha256",r.sha256);field("signature",r.signature);
+        field("sha256",r.sha256);field("baseline_sha256",r.baselineSha256);
+        field("baseline_comparison",r.baselineVerdict);field("signature",r.signature);
         field("coverage",r.coverage);field("format",r.format);
         field("architecture",r.architecture);
         out<<"  \"size_bytes\": "<<r.bytes<<",\n";
@@ -36682,7 +37048,7 @@ static bool exportReport(const Report& r,bool csv){
 }
 static void draw(){
     ImGui::SetWindowFontScale(1.18f);
-    ImGui::TextUnformatted(XOR_STR("Binary Intelligence Studio").c_str());
+    ImGui::TextUnformatted(XOR_STR("Binary Inspector").c_str());
     ImGui::SetWindowFontScale(1.f);
     ImGui::TextDisabled("Offline PE analysis  |  DLL imports  |  Extracted strings  |  Hex viewer");
     ImGui::Dummy(ImVec2(0,14));
@@ -36691,13 +37057,34 @@ static void draw(){
     ImGui::InputTextWithHint("##binaryPath","Select a Windows executable or DLL...",selected,sizeof(selected));
     ImGui::SameLine();
     if(ImGui::Button("Browse...",ImVec2(112,0)))select();
+    ImGui::Spacing();
+    ImGui::TextDisabled("Optional trusted reference (same product and version):");
+    ImGui::SetNextItemWidth(-130.f);
+    ImGui::InputTextWithHint("##trustedBaseline","Path to original EXE/DLL for SHA-256 comparison...",baselineSelected,sizeof(baselineSelected));
+    ImGui::SameLine();
+    if(ImGui::Button("Reference...",ImVec2(112,0))){
+        wchar_t reference[32768]{};
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize=sizeof(dialog);
+        dialog.hwndOwner=hwnd;
+        dialog.lpstrFile=reference;
+        dialog.nMaxFile=32768;
+        dialog.lpstrFilter=L"Executable files\0*.exe;*.dll;*.sys;*.ocx\0All files\0*.*\0";
+        dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+        if(GetOpenFileNameW(&dialog))
+            strncpy_s(baselineSelected,sizeof(baselineSelected),utf8(reference).c_str(),_TRUNCATE);
+    }
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Clear##baseline"))baselineSelected[0]=0;
+    ImGui::TextDisabled("Reference comparison is local and read-only; matching hashes do not guarantee safety.");
     ImGui::SameLine();
     ImGui::BeginDisabled(busy.load()||!selected[0]);
     if(ImGui::Button("ANALYZE FILE",ImVec2(155,0))){
         std::wstring path=wide(selected);
+        std::wstring baseline=wide(baselineSelected);
         busy=true;
-        std::thread([path](){
-            Report r=analyze(path);
+        std::thread([path,baseline](){
+            Report r=analyze(path,baseline);
             {std::lock_guard<std::mutex> lock(guard);report=std::move(r);}
             busy=false;
         }).detach();
@@ -36715,6 +37102,15 @@ static void draw(){
     ImGui::SameLine(0,22);
     ImGui::Text("SIZE  %llu bytes",(unsigned long long)r.bytes);
     ImGui::TextWrapped("SHA-256  %s",r.sha256.c_str());
+    if(validSha256(r.sha256)){
+        ImGui::SameLine();
+        if(ImGui::SmallButton("Copy SHA-256"))
+            ImGui::SetClipboardText(r.sha256.c_str());
+    }
+    if(!r.baselinePath.empty()){
+        ImGui::TextWrapped("REFERENCE SHA-256  %s",r.baselineSha256.empty()?"Unavailable":r.baselineSha256.c_str());
+        ImGui::TextWrapped("INTEGRITY COMPARISON  %s",r.baselineVerdict.c_str());
+    }
     ImGui::TextWrapped("SIGNATURE  %s",
         r.signature.empty()?"Not checked":r.signature.c_str());
     ImGui::TextWrapped("COVERAGE  %s",
@@ -36730,7 +37126,7 @@ static void draw(){
     }
     ImGui::TextDisabled("Sections: %zu   |   Imported entries: %zu   |   Strings: %zu",
         r.sections.size(),r.imports.size(),r.strings.size());
-    if(r.packedHint)ImGui::TextColored(ImVec4(0.757f,0.757f,0.757f,1),"SUSPECT  /  High entropy detected; inspect sections.");
+    if(r.packedHint)ImGui::TextColored(ImVec4(0.757f,0.757f,0.757f,1),"REVIEW  /  Multiple section indicators; inspect manually.");
     ImGui::Dummy(ImVec2(0,12));
     const char* tabs[]={"OVERVIEW","PE SECTIONS","IMPORTS / DLLs","STRINGS","HEX VIEW"};
     for(int i=0;i<5;i++){
@@ -36751,6 +37147,8 @@ static void draw(){
     ImGui::BeginChild("##binaryView",ImVec2(0,0),ImGuiChildFlags_None);
     if(tab==0){
         ImGui::TextColored(ImVec4(0.764f,0.764f,0.764f,1),"STATIC ANALYSIS NOTES");
+        ImGui::TextDisabled("%zu notes | Findings require context and independent verification.",r.notes.size());
+        if(r.notes.empty())ImGui::TextDisabled("No structural notes recorded.");
         for(const auto& n:r.notes){ImGui::Bullet();ImGui::SameLine();ImGui::TextWrapped("%s",n.c_str());}
         ImGui::Dummy(ImVec2(0,8));
         ImGui::TextDisabled("Analysis is read-only and does not execute the selected file.");
@@ -36773,20 +37171,45 @@ static void draw(){
     }else if(tab==2||tab==3){
         ImGui::SetNextItemWidth(360);
         ImGui::InputTextWithHint("##binaryFilter","Filter DLLs, APIs, strings...",search,sizeof(search));
+        ImGui::SameLine();
+        if(ImGui::SmallButton("Clear##binaryFilter"))search[0]=0;
         const auto& rows=tab==2?r.imports:r.strings;
         const std::string filter=lower(search);
         ImGui::TextDisabled("%zu entries collected",rows.size());
         ImGuiListClipper clipper;
-        // Filtering uses a local index; avoids drawing thousands of rows each frame.
-        std::vector<size_t> indices;
-        for(size_t i=0;i<rows.size();++i)if(filter.empty()||lower(rows[i]).find(filter)!=std::string::npos)
-            indices.push_back(i);
-        clipper.Begin((int)indices.size());
+        // Rebuild only when the selected data source or filter changes.
+        // ImGui rendering must never lowercase the entire file on every frame.
+        static std::vector<size_t> filteredIndices;
+        static std::string cachedFilter;
+        static const void* cachedRows=nullptr;
+        static size_t cachedCount=static_cast<size_t>(-1);
+        static std::string cachedFirst, cachedLast, cachedDigest;
+        const std::string currentFirst=rows.empty()?std::string():rows.front();
+        const std::string currentLast=rows.empty()?std::string():rows.back();
+        const void* rowIdentity=static_cast<const void*>(&rows);
+        if(cachedFilter!=filter || cachedRows!=rowIdentity || cachedCount!=rows.size() ||
+           cachedFirst!=currentFirst || cachedLast!=currentLast || cachedDigest!=r.sha256) {
+            filteredIndices.clear();
+            filteredIndices.reserve(rows.size());
+            for(size_t i=0;i<rows.size();++i)
+                if(filter.empty() || lower(rows[i]).find(filter)!=std::string::npos)
+                    filteredIndices.push_back(i);
+            cachedFilter=filter;
+            cachedRows=rowIdentity;
+            cachedCount=rows.size();
+            cachedFirst=currentFirst; cachedLast=currentLast; cachedDigest=r.sha256;
+        }
+        ImGui::TextDisabled("%zu matching entries",filteredIndices.size());
+        if(filteredIndices.empty())ImGui::TextDisabled("No matching entries.");
+        clipper.Begin((int)filteredIndices.size());
         while(clipper.Step())for(int j=clipper.DisplayStart;j<clipper.DisplayEnd;++j)
-            ImGui::TextUnformatted(rows[indices[j]].c_str());
+            ImGui::TextUnformatted(rows[filteredIndices[j]].c_str());
     }else{
         ImGui::TextDisabled("First %zu bytes of the file (read-only).",r.head.size());
-        for(size_t i=0;i<r.head.size();i+=16){
+        ImGuiListClipper hexClipper;
+        hexClipper.Begin(static_cast<int>((r.head.size()+15)/16));
+        while(hexClipper.Step())for(int row=hexClipper.DisplayStart;row<hexClipper.DisplayEnd;++row){
+            const size_t i=static_cast<size_t>(row)*16;
             char line[128]{};
             int n=std::snprintf(line,sizeof(line),"%08llX  ",(unsigned long long)i);
             for(size_t j=0;j<16;++j)
@@ -36814,6 +37237,25 @@ static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
     const bool pressed=ImGui::Button(label,size);
     ImGui::PopStyleColor(4);
     return pressed;
+}
+// Unified scan action: consistent hit area, state and keyboard focus.
+// The action remains explicit; rendering never launches a scan on its own.
+static bool drawStartScanButton(float requestedWidth=250.f) {
+    const float available=ImGui::GetContentRegionAvail().x;
+    const float width=(std::max)(100.f,(std::min)(requestedWidth,available));
+    const bool busy=scanning.load() || presentationHold.load();
+    const bool blocked=busy;
+    const char* caption=busy ? "VERIFICANDO..." : "INICIAR VERIFICACAO";
+    ImGui::BeginDisabled(blocked);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(13.f,12.f));
+    const bool clicked=accentButton(caption,ImVec2(width,48.f));
+    ImGui::PopStyleVar(2);
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s",blocked ? "Aguarde a verificacao atual." :
+            "Inicia uma nova verificacao local do computador.");
+    return clicked && !blocked;
 }
 // Subtle ambient motes distributed across the full application viewport.
 // Foreground draw calls do not consume input or modify scan data.
@@ -36912,11 +37354,9 @@ static void drawProfessionalProgressTrack(const char* id,const char* label,
     ImGui::PopID();
 }
 static void drawAtlasProgress(bool compact=false){
-    // V75: clean, low-profile progress strip. Progress remains sourced from
-    // inspectionSmoothFraction(), which tracks actual scanner work.
-    const float fraction=std::clamp(inspectionSmoothFraction(),0.f,1.f);
-    const int percent=std::clamp(
-        static_cast<int>(std::lround(fraction*100.f)),0,100);
+    // V28: integer presentation never skips a displayed percentage.
+    const int percent=inspectionDisplayPercent();
+    const float fraction=static_cast<float>(percent)/100.f;
     ImGui::PushID("main_scan_progress");
     const float avail=ImGui::GetContentRegionAvail().x;
     const char* title="SYSTEM INSPECTION";
@@ -36955,7 +37395,15 @@ static void drawAtlasProgress(bool compact=false){
             "Scan interrupted - review diagnostics.");
     else if(scanCancelled.load())
         ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),"Scan cancelled.");
-    else
+    else if(scanning.load()){
+        const unsigned phase=static_cast<unsigned>(ImGui::GetTime()*2.0)%4;
+        const char* activity[]={"Analisando", "Analisando.", "Analisando..", "Analisando..."};
+        ImGui::TextDisabled("%s | %d/6 etapas",activity[phase],
+            std::clamp(completedStages.load(),0,6));
+        if(sequentialTotal.load()>0)
+            ImGui::TextDisabled("Itens: %u / %u",sequentialDone.load(),
+                sequentialTotal.load());
+    }else
         ImGui::TextDisabled("%s",state);
     ImGui::PopID();
 }
@@ -37421,26 +37869,50 @@ static void drawScanSummaryNew() {
 
 static void drawReviewQueueNew() {
     ImGui::TextUnformatted("EVIDENCE REVIEW QUEUE");
-    ImGui::TextDisabled("Filter existing evidence records; this tab does not perform extra scans.");
+    ImGui::TextDisabled("Read-only evidence review. A missing check is never a clean result.");
     static char filter[160]{};
-    ImGui::SetNextItemWidth((std::min)(420.f,ImGui::GetContentRegionAvail().x));
+    ImGui::SetNextItemWidth((std::min)(420.f,ImGui::GetContentRegionAvail().x - 80.f));
     ImGui::InputTextWithHint("##reviewFilter","Search category, name or detail...",filter,sizeof(filter));
-    // Copy only the first matching records, not the entire potentially large scan.
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Clear##reviewClear")) filter[0]='\0';
+    auto lower=[](std::string value) {
+        std::transform(value.begin(),value.end(),value.begin(),
+            [](unsigned char c){return static_cast<char>(std::tolower(c));});
+        return value;
+    };
+    const std::string term=lower(filter);
     std::vector<Record> snapshot;
     const size_t limit=300;
-    const std::string term=filter;
+    size_t totalMatches=0;
     {
         std::lock_guard<std::mutex> lock(dataMutex);
         snapshot.reserve((std::min)(limit,records.size()));
-        for (const auto& r : records) {
-            if (!term.empty() && r.category.find(term)==std::string::npos &&
-                r.name.find(term)==std::string::npos &&
-                r.detail.find(term)==std::string::npos) continue;
-            snapshot.push_back(r);
-            if (snapshot.size() >= limit) break;
+        for(const auto& r:records) {
+            if(!term.empty() && lower(r.category).find(term)==std::string::npos &&
+               lower(r.name).find(term)==std::string::npos &&
+               lower(r.detail).find(term)==std::string::npos) continue;
+            ++totalMatches;
+            if(snapshot.size()<limit) snapshot.push_back(r);
         }
     }
-    size_t shown=0;
+    ImGui::TextDisabled("Showing %zu of %zu matching records",snapshot.size(),totalMatches);
+    if(totalMatches>limit) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),"Preview limited to 300 rows");
+    }
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Copy visible##reviewCopy")) {
+        std::string exportText="Category\tEvidence\tDescription\n";
+        auto sanitize=[](std::string value) {
+            for(char& c:value) if(c=='\t'||c=='\n'||c=='\r') c=' ';
+            return value;
+        };
+        for(const auto& r:snapshot) {
+            exportText+=sanitize(r.category)+"\t"+sanitize(r.name)+"\t"+
+                sanitize(r.detail)+"\n";
+        }
+        ImGui::SetClipboardText(exportText.c_str());
+    }
     if(ImGui::BeginTable("##reviewQueue",3,
         ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1.f))) {
@@ -37450,7 +37922,6 @@ static void drawReviewQueueNew() {
         ImGui::TableSetupColumn("Description",ImGuiTableColumnFlags_WidthStretch,2.5f);
         ImGui::TableHeadersRow();
         for(const auto& r:snapshot) {
-            ++shown;
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
             ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",r.name.c_str());
@@ -37458,9 +37929,7 @@ static void drawReviewQueueNew() {
         }
         ImGui::EndTable();
     }
-    // A bounded preview avoids excessive ImGui draw calls for very large scans.
 }
-
 
 // Read-only visibility review. Does not modify capture protection, hooks,
 // injected modules, process memory, or other applications.
@@ -37765,18 +38234,21 @@ static void renderUI() {
     // Consent is opt-in, explicit and revocable; reports are never sent silently.
     static bool shareScanWithAdmin=false;
     static bool reportSent=false;
-    static std::string reportStatus="Not shared";
+    static std::string reportStatus="Nao enviado";
     static bool lastDone=false;
     const bool scanComplete=done.load();
     if(!scanComplete && lastDone){
         reportSent=false;
-        reportStatus="Not shared";
+        shareScanWithAdmin=false;
+        reportStatus="Nao enviado";
     }
     lastDone=scanComplete;
-    static double lastReportAttempt=-100.0;
-    if(scanComplete && shareScanWithAdmin && !reportSent &&
-       ImGui::GetTime()-lastReportAttempt>=8.0){
-        lastReportAttempt=ImGui::GetTime();
+    // Explicit permission is separate from sending. No automatic upload.
+    // The administrator access gate above remains mandatory.
+    static bool sendReportRequested=false;
+    if(!shareScanWithAdmin)sendReportRequested=false;
+    if(scanComplete && shareScanWithAdmin && sendReportRequested && !reportSent){
+        sendReportRequested=false;
         std::string report="SYNC PC CHECKER - scan evidence\n";
         {
             std::lock_guard<std::mutex> lock(dataMutex);
@@ -37792,28 +38264,44 @@ static void renderUI() {
         }
         if(syncLive::send("/report",report)){
             reportSent=true;
-            reportStatus="Report received by SYNC ADMIN";
+            reportStatus="Relatorio enviado";
         }else{
-            reportStatus="Could not send. Check admin connection.";
+            reportStatus="Envio nao concluido";
         }
     }
-    // Always-visible compact sharing control; remains available after completion.
     ImGui::SetNextWindowBgAlpha(.98f);
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x+16.f,
         ImGui::GetMainViewport()->WorkPos.y+16.f),ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(360.f,0.f),ImGuiCond_Always);
-    ImGui::Begin("SYNC / SCAN REPORT",nullptr,
+    ImGui::Begin("SYNC / RELATORIO",nullptr,
         ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_AlwaysAutoResize);
-    if(ImGui::Checkbox("SHARE SCAN WITH ADMIN", &shareScanWithAdmin)){
-        if(!shareScanWithAdmin)reportStatus="Sharing disabled";
+    if(ImGui::Checkbox("Permitir envio do relatorio ao administrador", &shareScanWithAdmin)){
+        if(!shareScanWithAdmin){
+            reportStatus="Envio desativado";
+            sendReportRequested=false;
+        }
     }
-    ImGui::TextDisabled("Opt in to send scan evidence when scan completes.");
-    ImGui::TextDisabled("%s",scanComplete?"SCAN COMPLETE":"WAITING FOR SCAN");
+    ImGui::TextWrapped("O relatorio inclui caminhos de arquivos e evidencias da verificacao.");
+    ImGui::TextDisabled("%s",scanComplete?"Verificacao concluida":"Aguardando verificacao");
     ImGui::TextWrapped("%s",reportStatus.c_str());
-    if(scanComplete && !reportSent && shareScanWithAdmin){
-        if(ImGui::Button("RETRY REPORT UPLOAD",ImVec2(220.f,30.f)))
-            {lastReportAttempt=-100.0;reportStatus="Retrying...";}
+    if(scanComplete && shareScanWithAdmin && !reportSent){
+        if(ImGui::Button("Enviar relatorio",ImVec2(220.f,30.f)))
+            ImGui::OpenPopup("Confirmar envio##sync");
+    }
+    if(ImGui::BeginPopupModal("Confirmar envio##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        ImGui::TextUnformatted("Enviar relatorio ao administrador?");
+        ImGui::TextWrapped("O relatorio pode conter nomes de arquivos, caminhos e resultados da analise.");
+        ImGui::Spacing();
+        if(ImGui::Button("Confirmar envio",ImVec2(150.f,0.f))){
+            if(shareScanWithAdmin && scanComplete && !reportSent)
+                sendReportRequested=true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Cancelar",ImVec2(110.f,0.f)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
     ImGui::End();
     if(syncIntroOpen){renderSyncOpening();return;}
@@ -37821,17 +38309,17 @@ static void renderUI() {
         ImGui::OpenPopup("Windows Defender detection alert");
     if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
         ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(0.481f,0.481f,0.481f,1.f),"WINDOWS DEFENDER SECURITY EVENT");
+        ImGui::TextColored(ImVec4(0.481f,0.481f,0.481f,1.f),"WINDOWS DEFENDER");
         ImGui::Separator();
-        ImGui::TextWrapped("%d recent Defender detection or failed-remediation events were found.",
+        ImGui::TextWrapped("%d eventos recentes do Windows Defender encontrados.",
             defenderAlerts.load());
-        ImGui::TextWrapped("These are historical event records, not proof of an active infection.");
-        ImGui::TextWrapped("Open Windows Security > Virus & threat protection > Protection history for current status.");
-        if(ImGui::Button("View scan results",ImVec2(180,36))) {
+        ImGui::TextWrapped("Eventos anteriores nao confirmam infeccao ativa.");
+        ImGui::TextWrapped("Confira o historico de protecao no Windows Security.");
+        if(ImGui::Button("Ver resultados",ImVec2(180,36))) {
             page=2;ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if(ImGui::Button("Dismiss",ImVec2(110,36)))ImGui::CloseCurrentPopup();
+        if(ImGui::Button("Fechar",ImVec2(110,36)))ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     ImGuiViewport* vp=ImGui::GetMainViewport();
@@ -37840,14 +38328,14 @@ static void renderUI() {
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus);
-    // ATLAS: entirely different shell, no left rail, full-width operations canvas.
+    // SYNC: full-width operations canvas; no left navigation rail.
     if(page==1||page==5)page=0;
     const ImVec4 titleInk(.94f,.97f,1.f,1);
     const ImVec4 subtleInk(.65f,.66f,.69f,1);
     const ImVec4 accentInk(.84f,.85f,.87f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.057f,.082f,.112f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
-    ImGui::BeginChild("##atlasHeader",ImVec2(0,72),ImGuiChildFlags_None);
+    ImGui::BeginChild("##syncHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
     // logo and a short traveling highlight under the wordmark. Draw-only,
     // non-interactive, and independent of scan findings.
@@ -37874,7 +38362,7 @@ static void renderUI() {
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.08f);
-    ImGui::TextColored(titleInk,"SYNC PC CHECKER  /  OBSIDIAN");
+    ImGui::TextColored(titleInk,"SYNC PC CHECKER  /  V14");
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
@@ -37889,7 +38377,7 @@ static void renderUI() {
         brandDraw->AddLine(ImVec2(x1,y),ImVec2(x2,y),
                            IM_COL32(101,101,101,55),1.f);
         // Soft, slow light travel across the thin rule; text never flashes.
-        const float phase=std::fmod(brandTime*24.f,width+40.f)-20.f;
+        const float phase=std::fmod(brandTime*24.f,(std::max)(width+40.f,1.f))-20.f;
         const float start=(std::max)(x1,x1+phase);
         const float end=(std::min)(x2,x1+phase+31.f);
         if(brandAnimation && end>start){
@@ -37898,7 +38386,7 @@ static void renderUI() {
         }
     }
     ImGui::SameLine(0,30);
-    ImGui::TextColored(ImVec4(.51f,.81f,.94f,1.f),"ADVANCED ANTI-CHEAT FOR FIVEM");
+    ImGui::TextColored(ImVec4(.51f,.81f,.94f,1.f),"WINDOWS SECURITY & INTEGRITY");
     ImGui::SameLine(0,22.f);
     ImGui::TextDisabled("STATUS / %s",stateText());
     float right=ImGui::GetWindowContentRegionMax().x;
@@ -37962,28 +38450,34 @@ static void renderUI() {
     const char* nav[]={"OVERVIEW","VERDICT","SCAN RESULTS","ARTIFACTS",
                        "EVENT TIMELINE","NETWORK","FILE LAB","DRIVERS","KERNEL REVIEW","SETTINGS","REM STREAMPROOF"};
     const int navPages[]={0,11,2,9,3,7,6,8,10,4,12};
+    // Shortcuts follow the *visible* navigation, including simple mode.
+    const int simpleNavIndices[]={0,2,6,3,9};
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
-        for(int shortcut=0;shortcut<9;shortcut++){
+        const int shortcutCount=simplifiedInterface?5:9;
+        for(int shortcut=0;shortcut<shortcutCount;shortcut++){
             if(ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1+shortcut),false)){
-                page=navPages[shortcut]; navTransitionStart=uiNow; lastNavPage=page; syncPageAnimationAt=uiNow;
+                const int navIndex=simplifiedInterface?simpleNavIndices[shortcut]:shortcut;
+                page=navPages[navIndex]; navTransitionStart=uiNow;
+                lastNavPage=page; syncPageAnimationAt=uiNow;
             }
         }
     }
     // V8: investigation cockpit. Persistent navigation rail, separate evidence workspace.
-    const float railWidth = ImGui::GetContentRegionAvail().x < 790.f ? 180.f : 234.f;
+    const float availableRailWidth=ImGui::GetContentRegionAvail().x;
+    const float railWidth = (std::min)(availableRailWidth * .40f, availableRailWidth < 680.f ? 148.f : availableRailWidth < 980.f ? 184.f : 226.f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.052f,.075f,.103f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
-        ImGuiChildFlags_Borders,ImGuiWindowFlags_None)){
-        ImGui::TextColored(ImVec4(.50f,.84f,.96f,1.f),"SYNC / WORKSPACE");
-        ImGui::TextDisabled("SYSTEM ANALYSIS CONSOLE");
+        ImGuiChildFlags_Borders,ImGuiWindowFlags_AlwaysVerticalScrollbar)){
+        ImGui::TextColored(ImVec4(.50f,.84f,.96f,1.f),"SYNC / SECURITY");
+        ImGui::TextDisabled("INTEGRITY WORKSPACE");
+        ImGui::TextDisabled(simplifiedInterface?"F1: help  |  Ctrl+1..5: tabs":"F1: help  |  Ctrl+1..9: tabs");
         ImGui::Dummy(ImVec2(0,12));
         ImGui::Separator();
         ImGui::TextDisabled("WORKSPACE");
         ImGui::Dummy(ImVec2(0,5));
-        const int simpleNavIndices[]={0,1,2,3,10,9};
-        const int visibleNavCount=simplifiedInterface?6:11;
+        const int visibleNavCount=simplifiedInterface?5:11;
         static float navMarkerY=-1.f;
         for(int visible=0;visible<visibleNavCount;visible++){
             const int i=simplifiedInterface?simpleNavIndices[visible]:visible;
@@ -38000,7 +38494,7 @@ static void renderUI() {
                 ImVec4(.33f,.33f,.33f,1.f):ImVec4(.18f,.18f,.18f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Text,active?
                 ImVec4(1.f,1.f,1.f,1.f):ImVec4(.76f,.76f,.76f,1.f));
-            const bool clicked=ImGui::Button(localized(nav[i]),ImVec2(-1.f,40.f));
+            const bool clicked=ImGui::Button(localized(nav[i]),ImVec2(-1.f,44.f));
             const ImVec2 itemMin=ImGui::GetItemRectMin();
             const ImVec2 itemMax=ImGui::GetItemRectMax();
             if(active){
@@ -38011,7 +38505,7 @@ static void renderUI() {
                     (1.f-std::exp(-10.f*ImGui::GetIO().DeltaTime));
                 ImDrawList* railDraw=ImGui::GetWindowDrawList();
                 railDraw->AddRectFilled(ImVec2(itemMin.x-3.f,navMarkerY+5.f),
-                    ImVec2(itemMin.x,navMarkerY+35.f),
+                    ImVec2(itemMin.x,navMarkerY+39.f),
                     IM_COL32(245,245,245,245),2.f);
                 railDraw->AddRect(itemMin,itemMax,
                     IM_COL32(190,190,190,150),10.f);
@@ -38107,9 +38601,9 @@ static void renderUI() {
                           IM_COL32(158,158,158,190),1.f);
         ImGui::Dummy(ImVec2(0,12.f));
     }
-    // Only Dashboard shows progress; remove the bar once it reaches 100%.
+    // Dashboard keeps the final 100% visible after completion.
     // Investigation pages show the lock from launch until scan completion and 100%.
-    if(page==0 && (scanning || done) && inspectionDisplayPercent()<100){
+    if(page==0 && (scanning || done)){
         drawAtlasProgress(false);
         ImGui::Spacing();
     }
@@ -38340,14 +38834,14 @@ static void renderUI() {
                 correlatedSources=matchedCategories.size();
             }
             // A single string is never enough for a high-confidence result.
-            const bool detectedIndicators =
-                fivemStrong >= 2 && correlatedSources >= 2 &&
-                (suspiciousProcesses > 0 || bypassIndicators > 0);
+            // String/name matches and counts from different categories are
+            // contextual evidence, not independent proof of cheating.
+            // Avoid a definitive accusation without validated file integrity.
+            const bool detectedIndicators = false;
             const bool suspectIndicators =
                 suspiciousProcesses > 0 || bypassIndicators > 0 ||
                 fivemStrong > 0 || fivemContext > 0;
-            const char* verdictLabel = detectedIndicators ? "CHEATER (DETECTED)" :
-                suspectIndicators ? "SUSPECT" : "CLEAN";
+            const char* verdictLabel = suspectIndicators ? "SUSPEITO" : "LIMPO";
             const ImVec4 verdictColor = detectedIndicators ?
                 ImVec4(.98f,.24f,.28f,1.f) : suspectIndicators ?
                 ImVec4(1.f,.79f,.23f,1.f) : ImVec4(.27f,.89f,.53f,1.f);
@@ -40980,14 +41474,14 @@ zula.exe)FIVEMSTR";
                 cancelRequested=true;
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
-                "VERIFIED  -  SCAN COMPLETED");
+                "VERIFICACAO CONCLUIDA");
             ImGui::SameLine();
             if(ImGui::Button("View results",ImVec2(150,42)))page=9;
         }else if(done && !scanFailed && !scanCancelled){
             ImGui::TextDisabled("Finalizing progress display... %d%%",inspectionDisplayPercent());
         }else{
-            if(accentButton("START FULL SCAN",ImVec2(230,48)))startScan();
-            ImGui::SameLine();
+            if(drawStartScanButton(250.f))startScan();
+            if(ImGui::GetContentRegionAvail().x>=165.f)ImGui::SameLine(0,10.f);
             if(ImGui::Button("View results",ImVec2(150,48)))page=9;
         }
         // Live scan telemetry, attached to the main scan action.
@@ -41132,14 +41626,13 @@ zula.exe)FIVEMSTR";
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
-                "VERIFIED  -  SCAN COMPLETED");
+                "VERIFICACAO CONCLUIDA");
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(150.f,ImGui::GetContentRegionAvail().x),42)))page=2;
         }else if(done && !scanFailed && !scanCancelled){
             ImGui::TextColored(accent,"FINALIZING PROGRESS DISPLAY - %d%%",inspectionDisplayPercent());
         }else{
-            if(accentButton(localized("START FULL INSPECTION"),
-                ImVec2((std::min)(220.f,ImGui::GetContentRegionAvail().x),42)))startScan();
+            if(drawStartScanButton(250.f))startScan();
             if(ImGui::GetContentRegionAvail().x>145.f)ImGui::SameLine(0,8);
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(130.f,ImGui::GetContentRegionAvail().x),42)))page=2;
@@ -41277,30 +41770,24 @@ zula.exe)FIVEMSTR";
         ImGui::SameLine();
         ImGui::TextDisabled("%zu processes | %zu records",
                             processCount.load(),recordCount.load());
-        ImGui::TextDisabled("Categorias: processos | evidencias | servicos | arquivos | sistema | USB | inicializacao | auditorias | revisao");
+        ImGui::TextDisabled("6 areas principais | mecanismos de coleta preservados | resultados com evidencias");
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(15.f,9.f));
         static int syncCategory = 0;
+            // Six focused workspaces; legacy collection engines remain intact.
+            constexpr int syncVisibleCount = 6;
+            constexpr int syncVisibleIds[syncVisibleCount] = {0,1,4,7,8,10};
             const char* syncLabels[] = {
-                "Overview & Processes", "Evidence Inspector", "Evidence Sources",
-                "Windows Services", "File Integrity", "System Inventory",
-                "USB Devices", "Startup Entries", "Extended Audits",
-                "Detection Library", "Review Queue", "Process Signatures",
-                "Script Signatures", "File Signatures", "Registry Signatures",
-                "USB Signatures", "Service Signatures", "History Signatures",
-                "Account Signatures", "General Signatures"
+                "Dashboard & Processes", "Evidence", "EXE / DLL Integrity",
+                "Persistence", "Advanced Detection", "Results & Review"
             };
             const char* syncDescriptions[] = {
-                "Running processes and contextual alerts", "Detailed collected evidence",
-                "Evidence sources and coverage", "Windows service inventory",
-                "File hashes and signature verification", "Operating system information",
-                "Connected device history", "Logon persistence entries",
-                "Module and configuration audits", "Searchable signature inventory",
-                "Findings requiring manual review", "Process-related patterns",
-                "Script-related patterns", "File-related patterns",
-                "Registry-related patterns", "Device-related patterns",
-                "Service-related patterns", "Execution history patterns",
-                "Account-related patterns", "Other patterns"
+                "Processes and contextual findings", "Collected evidence and provenance",
+                "SHA-256, signatures and PE analysis", "Startup and autorun inspection",
+                "Read-only executable, module and system audits", "Findings requiring verification"
             };
+            static int syncVisibleCategory = 0;
+            if(syncVisibleCategory<0 || syncVisibleCategory>=syncVisibleCount)syncVisibleCategory=0;
+            syncCategory=syncVisibleIds[syncVisibleCategory];
             // SYNC workspace v5: responsive navigation and consistent page chrome.
             const float syncAvailableWidth = ImGui::GetContentRegionAvail().x;
             const bool syncCompact = syncAvailableWidth < 1000.f;
@@ -41315,10 +41802,10 @@ zula.exe)FIVEMSTR";
             if(syncCompact) {
                 ImGui::TextColored(syncBlue,"SYNC / WORKSPACE");
                 ImGui::SetNextItemWidth(-1.f);
-                if(ImGui::BeginCombo("##syncSectionSelect",syncLabels[syncCategory])) {
-                    for(int i=0;i<20;++i) {
-                        if(ImGui::Selectable(syncLabels[i],syncCategory==i))syncCategory=i;
-                        if(syncCategory==i)ImGui::SetItemDefaultFocus();
+                if(ImGui::BeginCombo("##syncSectionSelect",syncLabels[syncVisibleCategory])) {
+                    for(int i=0;i<syncVisibleCount;++i) {
+                        if(ImGui::Selectable(syncLabels[i],syncVisibleCategory==i))syncVisibleCategory=i;
+                        if(syncVisibleCategory==i)ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
                 }
@@ -41331,46 +41818,67 @@ zula.exe)FIVEMSTR";
                 ImGui::Separator();
                 ImGui::SetNextItemWidth(-1.f);
                 ImGui::InputTextWithHint("##syncNavSearch","Search sections...",syncNavSearch,sizeof(syncNavSearch));
+                // V15: avoid rebuilding the search query for every navigation item.
+                std::string syncNavQuery(syncNavSearch);
+                std::transform(syncNavQuery.begin(),syncNavQuery.end(),syncNavQuery.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                if(!syncNavQuery.empty()) {
+                    ImGui::SameLine();
+                    if(ImGui::SmallButton("Clear##syncNavClear")) {
+                        syncNavSearch[0]='\0';
+                        syncNavQuery.clear();
+                    }
+                }
                 ImGui::Spacing();
                 ImGui::BeginChild("##syncNavScroll",ImVec2(0,-40.f),false);
-                for(int i=0;i<20;++i) {
+                int syncMatchedSections=0;
+                for(int i=0;i<syncVisibleCount;++i) {
                     std::string title=syncLabels[i];
-                    std::string query=syncNavSearch;
-                    std::transform(title.begin(),title.end(),title.begin(),[](unsigned char c){return (char)std::tolower(c);});
-                    std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
-                    if(!query.empty() && title.find(query)==std::string::npos)continue;
-                    if(query.empty()&&(i==0||i==11)){
+                    std::transform(title.begin(),title.end(),title.begin(),
+                        [](unsigned char c){return (char)std::tolower(c);});
+                    std::string description=syncDescriptions[i];
+                    std::transform(description.begin(),description.end(),description.begin(),
+                        [](unsigned char c){return (char)std::tolower(c);});
+                    if(!syncNavQuery.empty() && title.find(syncNavQuery)==std::string::npos &&
+                       description.find(syncNavQuery)==std::string::npos)continue;
+                    ++syncMatchedSections;
+                    if(syncNavQuery.empty()&&(i==0||i==2)){
                         ImGui::Spacing();
-                        ImGui::TextColored(syncMuted,"%s",i==0?"SYSTEM / EVIDENCE":"SIGNATURE CATEGORIES");
+                        ImGui::TextColored(syncMuted,"%s",i==0?"INVESTIGATION":"DETECTION & RESULTS");
                         ImGui::Separator();
                     }
                     ImGui::PushID(i);
-                    if(syncCategory==i) {
+                    if(syncVisibleCategory==i) {
                         ImGui::PushStyleColor(ImGuiCol_Header,ImVec4(.11f,.29f,.40f,1.f));
                         ImGui::PushStyleColor(ImGuiCol_HeaderHovered,ImVec4(.13f,.34f,.47f,1.f));
                     }
-                    if(ImGui::Selectable(syncLabels[i],syncCategory==i,0,ImVec2(-1,34.f)))syncCategory=i;
-                    if(syncCategory==i)ImGui::PopStyleColor(2);
+                    if(ImGui::Selectable(syncLabels[i],syncVisibleCategory==i,0,ImVec2(-1,34.f)))syncVisibleCategory=i;
+                    if(syncVisibleCategory==i)ImGui::PopStyleColor(2);
                     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",syncDescriptions[i]);
                     ImGui::PopID();
                 }
+                if(syncMatchedSections==0) {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Nenhuma secao encontrada.");
+                }
                 ImGui::EndChild();
                 ImGui::Separator();
-                ImGui::TextDisabled("Read-only  |  Review findings");
+                ImGui::TextDisabled("Somente leitura  |  Revisar evidencias");
                 ImGui::EndChild();
                 ImGui::SameLine(0,12.f);
             }
+            syncCategory=syncVisibleIds[syncVisibleCategory];
             ImGui::BeginGroup();
             ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),true);
             ImGui::TextColored(syncBlue,"SYNC / ANALYSIS CENTER");
             ImGui::SameLine();
-            ImGui::TextDisabled("SECTION %02d / 20",syncCategory+1);
+            ImGui::TextDisabled("SECTION %02d / %02d",syncVisibleCategory+1,syncVisibleCount);
             ImGui::Separator();
             ImGui::Spacing();
             ImGui::SetWindowFontScale(1.18f);
-            ImGui::TextUnformatted(syncLabels[syncCategory]);
+            ImGui::TextUnformatted(syncLabels[syncVisibleCategory]);
             ImGui::SetWindowFontScale(1.f);
-            ImGui::TextColored(syncMuted,"%s",syncDescriptions[syncCategory]);
+            ImGui::TextColored(syncMuted,"%s",syncDescriptions[syncVisibleCategory]);
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -41423,7 +41931,11 @@ zula.exe)FIVEMSTR";
                     ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,110);
                     ImGui::TableHeadersRow();
                     std::lock_guard<std::mutex> lock(dataMutex);
-                    for(const auto& f:files) {
+                    ImGuiListClipper fileClipper;
+                    fileClipper.Begin(static_cast<int>(files.size()),44.f);
+                    while(fileClipper.Step()) for(int fileIndex=fileClipper.DisplayStart;
+                        fileIndex<fileClipper.DisplayEnd;++fileIndex) {
+                        const auto& f=files[static_cast<size_t>(fileIndex)];
                         ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
                         ImGui::TableSetColumnIndex(0);ImGui::TextWrapped("%s",utf8(f.path).c_str());
                         ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
@@ -41502,6 +42014,10 @@ zula.exe)FIVEMSTR";
                         ImGui::EndTabItem();
                     }
                     ImGui::EndTabBar();
+                }
+                if(ImGui::CollapsingHeader("Signature Library (reference indicators)")) {
+                    ImGui::TextDisabled("String matches alone do not establish malware or modification.");
+                    sync_detect_browser::render(-1);
                 }
                 /* sidebar section end */
             }
@@ -42172,7 +42688,26 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
         if(msg.message==WM_QUIT)break;
         ImGui_ImplDX11_NewFrame();ImGui_ImplWin32_NewFrame();ImGui::NewFrame();
         updateStartupWindowExpand();
+        // V13: discoverable keyboard help; no changes to scan verdicts or evidence.
+        if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F1, false))
+            ImGui::OpenPopup("SYNC - Keyboard Help");
         renderUI();
+        ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("SYNC - Keyboard Help", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("SYNC SCANNER - KEYBOARD SHORTCUTS");
+            ImGui::Separator();
+            ImGui::TextWrapped("Ctrl + 1..5: visible workspaces in Simple view; Ctrl + 1..9 in Advanced view.");
+            ImGui::TextWrapped("Use Simple view to focus on five workspaces. Advanced view exposes additional read-only tools.");
+            ImGui::TextWrapped("F1: show this help window");
+            ImGui::TextWrapped("Esc: close this help window");
+            ImGui::Spacing();
+            ImGui::TextDisabled("Status labels reflect the evidence available; a missing check must not be marked clean.");
+            if (ImGui::Button("Close", ImVec2(120.f, 32.f)) ||
+                ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
         // Reveal the existing scanner smoothly, without changing its scan logic.
         if(!syncIntroOpen && syncIntroRevealAt>=0.0) {
             const float fade=1.f-syncIntroEase(
@@ -42191,6 +42726,9 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
         ImGui::Render();
+        // V15: retained legacy monochrome rendering pass for compatibility.
+        // TODO: replace the per-vertex transform with semantic ImGui style colors
+        // to avoid an O(vertex count) CPU pass on every frame.
         // V35 monochrome rendering pass: applies to all custom-drawn widgets,
         // legacy colored badges, effects, and ImGui controls consistently.
         // Preserve alpha and apply contrast-aware luminance, without modifying
