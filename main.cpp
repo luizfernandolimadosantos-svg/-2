@@ -36517,7 +36517,11 @@ namespace binaryInspector {
 struct Section {std::string name; uint32_t rva=0,raw=0,size=0,flags=0; double entropy=0;};
 struct Report {
     std::wstring path;
-    std::string status="Choose an executable, DLL or other file.";
+    std::string status="Selecione um arquivo.";
+    std::string verdict="Analisando";
+    unsigned structuralIssues=0;
+    unsigned reviewIndicators=0;
+    bool inspectionIncomplete=false;
     std::string sha256,format,architecture,compileTime,signature,coverage;
     std::string baselineSha256,baselineVerdict;
     std::wstring baselinePath;
@@ -36586,7 +36590,7 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
     }
     std::error_code ec;
     const auto sz=fs::file_size(path,ec);
-    if(ec){r.status="Cannot read file metadata.";return r;}
+    if(ec){r.status="Leitura indisponivel.";r.inspectionIncomplete=true;return r;}
     r.bytes=sz;
     r.signature=signatureStatus(path);
     // Bounded analysis for large installers. Read enough of the file to
@@ -36597,14 +36601,14 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
     const size_t bytesToRead=static_cast<size_t>(
         (std::min)(static_cast<uint64_t>(sz),maxAnalysisBytes));
     std::ifstream f(fs::path(path),std::ios::binary);
-    if(!f){r.status="Cannot open file (access denied or missing).";return r;}
+    if(!f){r.status="Arquivo indisponivel.";r.inspectionIncomplete=true;return r;}
     std::vector<unsigned char> b(bytesToRead);
     f.read(reinterpret_cast<char*>(b.data()),
            static_cast<std::streamsize>(bytesToRead));
     b.resize(static_cast<size_t>(f.gcount()));
     if(b.empty() && sz>0){
-        r.status="Unable to read binary data.";
-        return r;
+        r.status="Leitura indisponivel.";
+        r.inspectionIncomplete=true;return r;
     }
     r.coverage=static_cast<uint64_t>(sz)>maxAnalysisBytes?
         "Partial (first 256 MiB; full-file SHA-256)":"Full file";
@@ -36645,7 +36649,7 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
             const size_t declaredSections=size_t(u16(b,pe+6));
             const size_t count=(std::min)(declaredSections,size_t(96));
             if(declaredSections>96)
-                r.notes.push_back("PE integrity: section count exceeds inspection limit; analysis is incomplete.");
+                {r.inspectionIncomplete=true;r.notes.push_back("PE integrity: section count exceeds inspection limit; analysis is incomplete.");}
             const size_t opt=pe+24;
             const uint16_t declaredOptionalSize=u16(b,pe+20);
             const bool optionalMagicReadable = opt<=b.size() && b.size()-opt>=2;
@@ -36660,14 +36664,14 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                 sectionStart>=opt && sectionStart<=b.size() &&
                 declaredSections<=(b.size()-sectionStart)/40;
             if(!optionalHeaderInBounds)
-                r.notes.push_back("PE integrity: optional header extends beyond available data; verification incomplete.");
+                {++r.structuralIssues;r.inspectionIncomplete=true;r.notes.push_back("PE integrity: optional header extends beyond available data; verification incomplete.");}
             // PE header integrity checks: findings are diagnostic, not automatic malware verdicts.
             const uint16_t optSize=u16(b,pe+20);
             const uint16_t magic=optionalMagic;
             if(!optionalMagicReadable || (magic!=0x10b && magic!=0x20b))
                 r.notes.push_back("PE integrity: unrecognized optional-header magic; manual review required.");
             if(!sectionTableInBounds)
-                r.notes.push_back("PE integrity: section table is truncated or inconsistent.");
+                {++r.structuralIssues;r.inspectionIncomplete=true;r.notes.push_back("PE integrity: section table is truncated or inconsistent.");}
             if(optionalHeaderInBounds && optSize>=20 && (magic==0x10b||magic==0x20b)) {
                 const uint32_t entryRva=u32(b,opt+16);
                 if(entryRva!=0 && optSize>=60) {
@@ -36731,9 +36735,9 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                     uint64_t(sec.raw)+sec.size<=b.size();
                 sec.entropy=sectionFullyRead?entropy(b,sec.raw,sec.size):0.0;
                 if(sec.size && (uint64_t(sec.raw)+sec.size>sz))
-                    r.notes.push_back("PE integrity: section "+sec.name+" extends beyond file boundaries.");
+                    {++r.structuralIssues;r.notes.push_back("PE integrity: section "+sec.name+" extends beyond file boundaries.");}
                 if(sec.size && sec.raw==0)
-                    r.notes.push_back("PE integrity: section "+sec.name+" has a zero raw-file offset.");
+                    {++r.structuralIssues;r.notes.push_back("PE integrity: section "+sec.name+" has a zero raw-file offset.");}
                 // A virtual address outside SizeOfImage indicates inconsistent PE metadata.
                 // It is diagnostic evidence only; it does not establish malicious intent.
                 if(optionalHeaderInBounds && optSize>=60 && sec.rva!=0) {
@@ -36758,6 +36762,7 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                     if(executable){
                         ++highEntropyExecutableSections;
                         if(writable)++highEntropyWritableExecutableSections;
+                        ++r.reviewIndicators;
                         r.notes.push_back("High entropy in executable section "+sec.name+
                             " (review only; not a malware verdict).");
                     }else{
@@ -36765,9 +36770,11 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                             " (informational; compressed resources are common).");
                     }
                 }
-                if((sec.flags&0x20000000)&&(sec.flags&0x80000000))
+                if((sec.flags&0x20000000)&&(sec.flags&0x80000000)) {
+                    ++r.reviewIndicators;
                     r.notes.push_back("Writable and executable section: "+sec.name+
                         " (review only; not proof of malware).");
+                }
                 const uint32_t fileAlignment = optionalHeaderInBounds && optSize>=40
                     ?u32(b,opt+36):0;
                 if(sec.size && fileAlignment && (fileAlignment&(fileAlignment-1))==0 &&
@@ -36943,7 +36950,15 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
     }
     if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
     r.notes.push_back("Static inspection only. Decompiled source code cannot be recovered reliably from compiled binaries.");
-    r.status="Local analysis completed.";
+    // Conservative result: metadata anomalies are not confirmed cheating.
+    // No automatic "Detectado" is issued without a verified high-confidence rule.
+    if(r.coverage.find("Partial")!=std::string::npos)r.inspectionIncomplete=true;
+    if(!validSha256(r.sha256))r.inspectionIncomplete=true;
+    if(r.structuralIssues>0 || r.reviewIndicators>=2 || r.inspectionIncomplete)
+        r.verdict="Suspeito";
+    else
+        r.verdict="Limpo"; // Limited to checks completed, not a safety guarantee.
+    r.status="Verificacao concluida.";
     return r;
 }
 static void select(){
@@ -37005,7 +37020,7 @@ static bool exportReport(const Report& r,bool csv){
             };
             out<<quote(k)<<","<<quote(v)<<"\r\n";
         };
-        row("File",path);row("Status",r.status);
+        row("File",path);row("Status",r.verdict);row("Scan state",r.status);
         row("SHA-256",r.sha256);row("Baseline SHA-256",r.baselineSha256);
         row("Baseline comparison",r.baselineVerdict);row("Signature",r.signature);
         row("Coverage",r.coverage);row("Format",r.format);
@@ -37020,7 +37035,7 @@ static bool exportReport(const Report& r,bool csv){
         auto field=[&](const char* k,const std::string& v){
             out<<"  "<<jsonQuote(k)<<": "<<jsonQuote(v)<<",\n";
         };
-        field("file",path);field("status",r.status);
+        field("file",path);field("status",r.verdict);field("scan_state",r.status);
         field("sha256",r.sha256);field("baseline_sha256",r.baselineSha256);
         field("baseline_comparison",r.baselineVerdict);field("signature",r.signature);
         field("coverage",r.coverage);field("format",r.format);
@@ -37093,7 +37108,8 @@ static void draw(){
     if(busy.load())ImGui::TextColored(orange(),"Reading binary structure...");
     Report r;
     {std::lock_guard<std::mutex> lock(guard);r=report;}
-    ImGui::TextDisabled("%s",r.status.c_str());
+    ImGui::Text("%s",busy.load()?"Analisando":r.verdict.c_str());
+    ImGui::SameLine();ImGui::TextDisabled("%s",r.status.c_str());
     ImGui::Dummy(ImVec2(0,10));
     if(r.path.empty())return;
     ImGui::Text("FORMAT  %s",r.format.c_str());
@@ -37146,9 +37162,9 @@ static void draw(){
     ImGui::Separator();
     ImGui::BeginChild("##binaryView",ImVec2(0,0),ImGuiChildFlags_None);
     if(tab==0){
-        ImGui::TextColored(ImVec4(0.764f,0.764f,0.764f,1),"STATIC ANALYSIS NOTES");
-        ImGui::TextDisabled("%zu notes | Findings require context and independent verification.",r.notes.size());
-        if(r.notes.empty())ImGui::TextDisabled("No structural notes recorded.");
+        ImGui::TextColored(ImVec4(0.764f,0.764f,0.764f,1),"DETALHES");
+        ImGui::TextDisabled("%zu verificacoes registradas",r.notes.size());
+        if(r.notes.empty())ImGui::TextDisabled("Nenhuma observacao estrutural.");
         for(const auto& n:r.notes){ImGui::Bullet();ImGui::SameLine();ImGui::TextWrapped("%s",n.c_str());}
         ImGui::Dummy(ImVec2(0,8));
         ImGui::TextDisabled("Analysis is read-only and does not execute the selected file.");
