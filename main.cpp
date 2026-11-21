@@ -7675,7 +7675,7 @@ namespace sync_detect_browser {
 static const char* labels[] = {
 "PROCESSOS / INJECAO",
 "EXECUCAO / SCRIPTS",
-"ARQUIVOS / PREFETCH",
+"FILES / PREFETCH",
 "REGISTRO / BAM",
 "USB / DISCOS",
 "SERVICOS / WINDOWS",
@@ -7881,11 +7881,11 @@ static void scan() {
 }
 static void render(int category) {
  ImGui::Separator();
- ImGui::TextUnformatted("VERIFICACAO LOCAL DE STRINGS");
+ ImGui::TextUnformatted("LOCAL STRING CHECK");
  ImGui::TextDisabled("Leitura sob demanda, sem execucao, exclusao ou envio de arquivos.");
  if(ImGui::Button("Selecionar arquivo"))choose();
  ImGui::SameLine();
- if(ImGui::Button("Analisar arquivo")&&!selectedFile.empty())scan();
+ if(ImGui::Button("Analyze file")&&!selectedFile.empty())scan();
  ImGui::TextWrapped("Arquivo: %s",selectedFile.empty()?"(nenhum)":selectedFile.c_str());
  ImGui::TextWrapped("%s",status.c_str());
  ImGui::TextDisabled("Correspondencia exata de strings ASCII/UTF-16; limite 8 MiB.");
@@ -8487,6 +8487,7 @@ static bool ambientMotesEnabled=true;
 static bool reducedMotion=false;
 static int rainDensity=1; // 0 light, 1 balanced, 2 dense
 static const char* rainDensityNames[]={"Light","Balanced","Dense"};
+static const char* rainDensityNamesPt[]={"Leve","Equilibrado","Intenso"};
 static int cornerStyle=1, scrollbarWidth=1;
 static const char* cornerStyleNames[]={"Square","Soft","Rounded"};
 static const char* scrollbarWidthNames[]={"Thin","Standard","Wide"};
@@ -8705,72 +8706,9 @@ static ImVec4 accentColor() {
         default:return ImVec4(1.f,1.f,1.f,1.f);
     }
 }
-static int displayLanguage=0; // 0 English, 1 Português (Brasil)
-static const char* localized(const char* english){
-    if(displayLanguage!=1 || !english)return english;
-    static const std::unordered_map<std::string,std::string> labels={
-        {"DASHBOARD","PAINEL"},
-        {"THREAT ANALYSIS","ANÁLISE DE AMEAÇAS"},
-        {"EVENT RECORDS","REGISTROS DE EVENTOS"},
-        {"BINARY LAB","LABORATÓRIO BINÁRIO"},
-        {"NETWORK","REDE"},
-        {"DRIVER AUDIT","AUDITORIA DE DRIVERS"},
-        {"ARTIFACT EXPLORER","EXPLORADOR DE ARTEFATOS"},
-        {"KERNEL MEMORY DUMP","DUMP DE MEMÓRIA"},
-        {"PREFERENCES","PREFERÊNCIAS"},
-        {"Workspace Preferences","Preferências do ambiente"},
-        {"Adjust appearance and investigation options","Ajuste a aparência e as opções de investigação"},
-        {"PERSONALIZATION  /  LOCAL SETTINGS","PERSONALIZAÇÃO  /  CONFIGURAÇÕES LOCAIS"},
-        {"Customize the scanner appearance and investigation workflow.","Personalize a aparência e o fluxo de investigação do scanner."},
-        {"LANGUAGE","IDIOMA"},
-        {"APPEARANCE","APARÊNCIA"},
-        {"INTERFACE DETAILS","DETALHES DA INTERFACE"},
-        {"PROCESS REVIEW","REVISÃO DE PROCESSOS"},
-        {"Scan Percentage Color","Cor da porcentagem do scan"},
-        {"Theme","Tema"},
-        {"Interface Scale","Escala da interface"},
-        {"Table Density","Densidade das tabelas"},
-        {"Window size (maximum 1920 x 1080)","Tamanho da janela (máximo 1920 x 1080)"},
-        {"Size is limited to the available desktop work area.","O tamanho é limitado à área disponível da tela."},
-        {"Custom percentage color","Cor personalizada da porcentagem"},
-        {"Animate scanner branding","Animar identidade visual do scanner"},
-        {"Monochrome rain across the window","Chuva monocromática na janela"},
-        {"Rain density","Densidade da chuva"},
-        {"Reduce motion (disable transition and unlock animations)","Reduzir movimento (desativar transições e animações)"},
-        {"Highlight navigation on hover","Destacar navegação ao passar o mouse"},
-        {"Button corners","Cantos dos botões"},
-        {"Scrollbar width","Largura da barra de rolagem"},
-        {"Highlight suspicious processes in red","Destacar processos suspeitos em vermelho"},
-        {"Show security assessment details","Mostrar detalhes da avaliação de segurança"},
-        {"Save Settings","Salvar configurações"},
-        {"Restore Defaults","Restaurar padrões"},
-        {"Settings saved successfully.","Configurações salvas com sucesso."},
-        {"Verify Scanner Executable","Verificar executável do scanner"},
-        {"FULL INSPECTION  /  VERIFIED PROGRESS","INSPEÇÃO COMPLETA  /  PROGRESSO"},
-        {"SYSTEM INTEGRITY","INTEGRIDADE DO SISTEMA"},
-        {"EXECUTION ARTIFACTS","ARTEFATOS DE EXECUÇÃO"},
-        {"PROCESS ANALYSIS","ANÁLISE DE PROCESSOS"},
-        {"EVIDENCE CORRELATION","CORRELAÇÃO DE EVIDÊNCIAS"},
-        {"INSPECTION COMPLETE","INSPEÇÃO CONCLUÍDA"},
-        {"READY","PRONTO"},
-        {"INSPECTION FAILED","INSPEÇÃO FALHOU"},
-        {"INSPECTION CANCELLED","INSPEÇÃO CANCELADA"},
-        {"PREPARING RESULTS","PREPARANDO RESULTADOS"},
-        {"FINALIZING INSPECTION","FINALIZANDO INSPEÇÃO"},
-        {"FULL INSPECTION IN PROGRESS","INSPEÇÃO COMPLETA EM ANDAMENTO"},
-        {"START FULL INSPECTION","INICIAR INSPEÇÃO COMPLETA"},
-        {"GO TO DASHBOARD","IR PARA O PAINEL"},
-        {"RUN A FULL INSPECTION","EXECUTAR INSPEÇÃO COMPLETA"},
-        {"Results unlock after inspection completes at 100%.","Os resultados são liberados quando a inspeção chega a 100%."},
-        {"Run a full inspection to unlock this section.","Execute uma inspeção completa para liberar esta seção."},
-        {"FINALIZING INSPECTION","FINALIZANDO INSPEÇÃO"},
-        {"No scan results yet.","Ainda não há resultados de scan."},
-        {"Changes only the 0-100%% number; the interface stays monochrome.","Altera apenas o número de 0 a 100%%; a interface permanece monocromática."},
-        {"Animations are visual only; scanning is unaffected.","As animações são apenas visuais; a análise não é afetada."}
-    };
-    const auto it=labels.find(english);
-    return it!=labels.end()?it->second.c_str():english;
-}
+// English-only interface. Existing settings files cannot override this.
+static int displayLanguage=0;
+static const char* localized(const char* english){ return english ? english : ""; }
 static fs::path settingsPath() {
     wchar_t appdata[32768]{};
     DWORD n=GetEnvironmentVariableW(L"APPDATA",appdata,32768);
@@ -8802,7 +8740,7 @@ static void loadSettings() {
             auto pos=line.find('=');
             if(pos==std::string::npos)continue;
             auto key=line.substr(0,pos),v=line.substr(pos+1);
-            if(key=="language")displayLanguage=std::clamp(std::stoi(v),0,1);
+            if(key=="language")displayLanguage=0; // Ignore legacy language preference
             else if(key=="accent")accentIndex=std::clamp(std::stoi(v),0,5);
             else if(key=="theme")themeIndex=std::clamp(std::stoi(v),0,2);
             else if(key=="density")densityIndex=std::clamp(std::stoi(v),0,2);
@@ -36222,7 +36160,7 @@ static void drawServiceReviews() {
             ImGui::TableSetColumnIndex(3);ImGui::TextWrapped("%s",item.assessment.c_str());
             ImGui::TableSetColumnIndex(4);
             ImGui::PushID((int)(&item-&serviceReviews[0]));
-            if(ImGui::Button("Detalhes",ImVec2(-1,32)))ImGui::OpenPopup("Service details");
+            if(ImGui::Button("Details",ImVec2(-1,32)))ImGui::OpenPopup("Service details");
             if(ImGui::BeginPopup("Service details")) {
                 ImGui::Text("Service: %s",utf8(item.name).c_str());
                 ImGui::TextWrapped("Display name: %s",utf8(item.display).c_str());
@@ -36518,7 +36456,7 @@ struct Section {std::string name; uint32_t rva=0,raw=0,size=0,flags=0; double en
 struct Report {
     std::wstring path;
     std::string status="Selecione um arquivo.";
-    std::string verdict="Analisando";
+    std::string verdict="Scanning";
     unsigned structuralIssues=0;
     unsigned reviewIndicators=0;
     bool inspectionIncomplete=false;
@@ -36886,17 +36824,45 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                 const uint32_t importsSize=u32(b,dirs+12);
                 size_t pos=rvaToOff(importsRva);
                 const size_t importsStart=pos;
-                for(size_t i=0;i<256&&pos<b.size()&&b.size()-pos>=20 &&
-                    importsStart!=size_t(-1) && importsSize>=20 &&
-                    pos>=importsStart && pos-importsStart<=uint64_t(importsSize)-20;
+                // Validate import descriptors before interpreting their names and thunks.
+                // Invalid metadata is a structural finding, not a cheat signature.
+                bool importTerminated=false;
+                size_t inspectedDescriptors=0;
+                const size_t maxDescriptors=(std::min)(size_t(256),size_t(importsSize/20));
+                for(size_t i=0;i<maxDescriptors&&pos<b.size()&&b.size()-pos>=20 &&
+                    importsStart!=size_t(-1) && pos>=importsStart &&
+                    pos-importsStart<=uint64_t(importsSize)-20;
                     i++,pos+=20){
-                    uint32_t lookup=u32(b,pos),nameRva=u32(b,pos+12),iat=u32(b,pos+16);
-                    if(!lookup&&!nameRva&&!iat)break;
-                    std::string dll=cstr(b,rvaToOff(nameRva),180);
-                    if(dll.empty())continue;
+                    ++inspectedDescriptors;
+                    const uint32_t originalFirstThunk=u32(b,pos);
+                    const uint32_t timestamp=u32(b,pos+4);
+                    const uint32_t forwarderChain=u32(b,pos+8);
+                    const uint32_t nameRva=u32(b,pos+12);
+                    const uint32_t iat=u32(b,pos+16);
+                    if(!originalFirstThunk&&!timestamp&&!forwarderChain&&!nameRva&&!iat){
+                        importTerminated=true;break;
+                    }
+                    if(!nameRva || !iat){
+                        ++r.structuralIssues;
+                        r.notes.push_back("PE import descriptor has missing required fields.");
+                        continue;
+                    }
+                    const size_t dllOffset=rvaToOff(nameRva);
+                    const std::string dll=cstr(b,dllOffset,180);
+                    if(dll.empty()){
+                        ++r.structuralIssues;
+                        r.notes.push_back("PE import descriptor references an unreadable library name.");
+                        continue;
+                    }
                     r.imports.push_back(dll);
-                    uint32_t thunkRva=lookup?lookup:iat;
-                    size_t thunk=rvaToOff(thunkRva);
+                    const uint32_t thunkRva=originalFirstThunk?originalFirstThunk:iat;
+                    const size_t thunkStart=rvaToOff(thunkRva);
+                    if(thunkStart==size_t(-1)){
+                        ++r.structuralIssues;
+                        r.notes.push_back("PE import descriptor references an unmapped thunk table.");
+                        continue;
+                    }
+                    size_t thunk=thunkStart;
                     for(size_t j=0;j<1000&&thunk<b.size()&&b.size()-thunk>=(is64?8:4);++j){
                         uint64_t entry=is64?u64(b,thunk):u32(b,thunk);
                         if(!entry)break;
@@ -36907,6 +36873,18 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
                         if(nameOff==size_t(-1)||nameOff>b.size()||b.size()-nameOff<2)continue;
                         std::string func=cstr(b,nameOff+2,150);
                         if(!func.empty()&&r.imports.size()<6000)r.imports.push_back("    "+func);
+                    }
+                }
+                if(!importTerminated && inspectedDescriptors>0){
+                    // The inspected window may end before the terminator; distinguish
+                    // limited coverage from a verified malformed import table.
+                    if(importsStart!=size_t(-1) &&
+                       uint64_t(importsStart)+uint64_t(importsSize)<=b.size()){
+                        ++r.structuralIssues;
+                        r.notes.push_back("PE import directory has no terminating descriptor within declared bounds.");
+                    }else{
+                        r.inspectionIncomplete=true;
+                        r.notes.push_back("PE import directory inspection ended before termination.");
                     }
                 }
             }
@@ -36951,14 +36929,14 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
     if(!r.pe)r.notes.push_back("PE-specific sections and imports are not available for this format.");
     r.notes.push_back("Static inspection only. Decompiled source code cannot be recovered reliably from compiled binaries.");
     // Conservative result: metadata anomalies are not confirmed cheating.
-    // No automatic "Detectado" is issued without a verified high-confidence rule.
+    // No automatic "Detected" is issued without a verified high-confidence rule.
     if(r.coverage.find("Partial")!=std::string::npos)r.inspectionIncomplete=true;
     if(!validSha256(r.sha256))r.inspectionIncomplete=true;
     if(r.structuralIssues>0 || r.reviewIndicators>=2 || r.inspectionIncomplete)
-        r.verdict="Suspeito";
+        r.verdict="Suspect";
     else
-        r.verdict="Limpo"; // Limited to checks completed, not a safety guarantee.
-    r.status="Verificacao concluida.";
+        r.verdict="Clean"; // Limited to checks completed, not a safety guarantee.
+    r.status="Scan completed.";
     return r;
 }
 static void select(){
@@ -37108,7 +37086,7 @@ static void draw(){
     if(busy.load())ImGui::TextColored(orange(),"Reading binary structure...");
     Report r;
     {std::lock_guard<std::mutex> lock(guard);r=report;}
-    ImGui::Text("%s",busy.load()?"Analisando":r.verdict.c_str());
+    ImGui::Text("%s",busy.load()?"Scanning":r.verdict.c_str());
     ImGui::SameLine();ImGui::TextDisabled("%s",r.status.c_str());
     ImGui::Dummy(ImVec2(0,10));
     if(r.path.empty())return;
@@ -37261,16 +37239,47 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const float width=(std::max)(100.f,(std::min)(requestedWidth,available));
     const bool busy=scanning.load() || presentationHold.load();
     const bool blocked=busy;
-    const char* caption=busy ? "VERIFICANDO..." : "INICIAR VERIFICACAO";
+    const char* caption=busy ? "SCANNING..." : "START SCAN";
     ImGui::BeginDisabled(blocked);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(13.f,12.f));
-    const bool clicked=accentButton(caption,ImVec2(width,48.f));
+    const bool clicked=accentButton(caption,ImVec2(width,52.f));
     ImGui::PopStyleVar(2);
     ImGui::EndDisabled();
+    // Decoration only: never changes scan progress or starts a scan.
+    // All movement respects the user's Reduce Motion preference.
+    const ImVec2 min=ImGui::GetItemRectMin();
+    const ImVec2 max=ImGui::GetItemRectMax();
+    ImDrawList* dl=ImGui::GetWindowDrawList();
+    const bool animate=brandAnimation && !reducedMotion;
+    const float time=static_cast<float>(ImGui::GetTime());
+    const float phase=animate ? .5f+.5f*std::sin(time*2.2f) : .35f;
+    const ImU32 border=IM_COL32(190,190,190,static_cast<int>(50.f+phase*65.f));
+    dl->AddRect(ImVec2(min.x+.5f,min.y+.5f),ImVec2(max.x-.5f,max.y-.5f),
+        border,8.f,0,1.f);
+    if(animate && !busy && width>130.f){
+        // Narrow highlight glides across the bottom edge when ready.
+        const float span=(max.x-min.x)-28.f;
+        const float travel=std::fmod(time*70.f,span+34.f)-17.f;
+        const float x=(std::max)(min.x+14.f,(std::min)(max.x-14.f,min.x+14.f+travel));
+        dl->AddLine(ImVec2(x-13.f,max.y-2.f),ImVec2(x+13.f,max.y-2.f),
+            IM_COL32(235,235,235,100),1.5f);
+    }
+    if(busy){
+        // An unobtrusive activity spinner; not a simulated percentage.
+        const ImVec2 center(max.x-18.f,(min.y+max.y)*.5f);
+        const float radius=6.f;
+        const float start=animate?time*3.8f:0.f;
+        dl->PathClear();
+        for(int i=0;i<=18;++i){
+            const float angle=start+static_cast<float>(i)*4.4f/18.f;
+            dl->PathLineTo(ImVec2(center.x+std::cos(angle)*radius,
+                center.y+std::sin(angle)*radius));
+        }
+        dl->PathStroke(IM_COL32(240,240,240,185),false,1.7f);
+    }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s",blocked ? "Aguarde a verificacao atual." :
-            "Inicia uma nova verificacao local do computador.");
+        ImGui::SetTooltip("%s",blocked ? "Scan in progress." : "Start system scan.");
     return clicked && !blocked;
 }
 // Subtle ambient motes distributed across the full application viewport.
@@ -37413,7 +37422,7 @@ static void drawAtlasProgress(bool compact=false){
         ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),"Scan cancelled.");
     else if(scanning.load()){
         const unsigned phase=static_cast<unsigned>(ImGui::GetTime()*2.0)%4;
-        const char* activity[]={"Analisando", "Analisando.", "Analisando..", "Analisando..."};
+        const char* activity[]={"Scanning", "Scanning.", "Scanning..", "Scanning..."};
         ImGui::TextDisabled("%s | %d/6 etapas",activity[phase],
             std::clamp(completedStages.load(),0,6));
         if(sequentialTotal.load()>0)
@@ -38280,42 +38289,42 @@ static void renderUI() {
         }
         if(syncLive::send("/report",report)){
             reportSent=true;
-            reportStatus="Relatorio enviado";
+            reportStatus="Report sent";
         }else{
-            reportStatus="Envio nao concluido";
+            reportStatus="Report not sent";
         }
     }
     ImGui::SetNextWindowBgAlpha(.98f);
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x+16.f,
         ImGui::GetMainViewport()->WorkPos.y+16.f),ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(360.f,0.f),ImGuiCond_Always);
-    ImGui::Begin("SYNC / RELATORIO",nullptr,
+    ImGui::Begin("SYNC / REPORT",nullptr,
         ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_AlwaysAutoResize);
-    if(ImGui::Checkbox("Permitir envio do relatorio ao administrador", &shareScanWithAdmin)){
+    if(ImGui::Checkbox("Allow report sharing with administrator", &shareScanWithAdmin)){
         if(!shareScanWithAdmin){
-            reportStatus="Envio desativado";
+            reportStatus="Sharing disabled";
             sendReportRequested=false;
         }
     }
-    ImGui::TextWrapped("O relatorio inclui caminhos de arquivos e evidencias da verificacao.");
-    ImGui::TextDisabled("%s",scanComplete?"Verificacao concluida":"Aguardando verificacao");
+    ImGui::TextWrapped("The report includes file paths and scan findings.");
+    ImGui::TextDisabled("%s",scanComplete?"Scan completed":"Waiting for scan");
     ImGui::TextWrapped("%s",reportStatus.c_str());
     if(scanComplete && shareScanWithAdmin && !reportSent){
-        if(ImGui::Button("Enviar relatorio",ImVec2(220.f,30.f)))
-            ImGui::OpenPopup("Confirmar envio##sync");
+        if(ImGui::Button("Send report",ImVec2(220.f,30.f)))
+            ImGui::OpenPopup("Confirm sharing##sync");
     }
-    if(ImGui::BeginPopupModal("Confirmar envio##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-        ImGui::TextUnformatted("Enviar relatorio ao administrador?");
-        ImGui::TextWrapped("O relatorio pode conter nomes de arquivos, caminhos e resultados da analise.");
+    if(ImGui::BeginPopupModal("Confirm sharing##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        ImGui::TextUnformatted("Send report to the administrator?");
+        ImGui::TextWrapped("The report may include filenames, paths, and scan results.");
         ImGui::Spacing();
-        if(ImGui::Button("Confirmar envio",ImVec2(150.f,0.f))){
+        if(ImGui::Button("Confirm sharing",ImVec2(150.f,0.f))){
             if(shareScanWithAdmin && scanComplete && !reportSent)
                 sendReportRequested=true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if(ImGui::Button("Cancelar",ImVec2(110.f,0.f)))
+        if(ImGui::Button("Cancel",ImVec2(110.f,0.f)))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
@@ -38327,15 +38336,15 @@ static void renderUI() {
         ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextColored(ImVec4(0.481f,0.481f,0.481f,1.f),"WINDOWS DEFENDER");
         ImGui::Separator();
-        ImGui::TextWrapped("%d eventos recentes do Windows Defender encontrados.",
+        ImGui::TextWrapped("%d recent Windows Defender events found.",
             defenderAlerts.load());
-        ImGui::TextWrapped("Eventos anteriores nao confirmam infeccao ativa.");
-        ImGui::TextWrapped("Confira o historico de protecao no Windows Security.");
-        if(ImGui::Button("Ver resultados",ImVec2(180,36))) {
+        ImGui::TextWrapped("Past events do not confirm an active infection.");
+        ImGui::TextWrapped("Check Protection history in Windows Security.");
+        if(ImGui::Button("View results",ImVec2(180,36))) {
             page=2;ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if(ImGui::Button("Fechar",ImVec2(110,36)))ImGui::CloseCurrentPopup();
+        if(ImGui::Button("Close",ImVec2(110,36)))ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     ImGuiViewport* vp=ImGui::GetMainViewport();
@@ -38487,11 +38496,11 @@ static void renderUI() {
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_AlwaysVerticalScrollbar)){
         ImGui::TextColored(ImVec4(.50f,.84f,.96f,1.f),"SYNC / SECURITY");
-        ImGui::TextDisabled("INTEGRITY WORKSPACE");
+        ImGui::TextDisabled(localized("INTEGRITY WORKSPACE"));
         ImGui::TextDisabled(simplifiedInterface?"F1: help  |  Ctrl+1..5: tabs":"F1: help  |  Ctrl+1..9: tabs");
         ImGui::Dummy(ImVec2(0,12));
         ImGui::Separator();
-        ImGui::TextDisabled("WORKSPACE");
+        ImGui::TextDisabled(localized("WORKSPACE"));
         ImGui::Dummy(ImVec2(0,5));
         const int visibleNavCount=simplifiedInterface?5:11;
         static float navMarkerY=-1.f;
@@ -38500,7 +38509,7 @@ static void renderUI() {
             if(i==4 || i==7){
                 ImGui::Dummy(ImVec2(0,8));
                 ImGui::Separator();
-                ImGui::TextDisabled(i==4?"FORENSICS":"SYSTEM");
+                ImGui::TextDisabled(localized(i==4?"FORENSICS":"SYSTEM"));
             }
             const bool active=page==navPages[i];
             ImGui::PushID(i+9800);
@@ -38857,7 +38866,7 @@ static void renderUI() {
             const bool suspectIndicators =
                 suspiciousProcesses > 0 || bypassIndicators > 0 ||
                 fivemStrong > 0 || fivemContext > 0;
-            const char* verdictLabel = suspectIndicators ? "SUSPEITO" : "LIMPO";
+            const char* verdictLabel = suspectIndicators ? "SUSPECT" : "CLEAN";
             const ImVec4 verdictColor = detectedIndicators ?
                 ImVec4(.98f,.24f,.28f,1.f) : suspectIndicators ?
                 ImVec4(1.f,.79f,.23f,1.f) : ImVec4(.27f,.89f,.53f,1.f);
@@ -41477,7 +41486,7 @@ zula.exe)FIVEMSTR";
         ImGui::SetWindowFontScale(1.12f);
         ImGui::TextUnformatted("PC Inspection");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(muted,"One scan. Clear results. Advanced tools remain available.");
+        ImGui::TextColored(muted,"System scan and file inspection.");
         ImGui::Dummy(ImVec2(0,16));
         if(scanning){
             ImGui::TextUnformatted(presentationHold.load()?
@@ -41490,7 +41499,7 @@ zula.exe)FIVEMSTR";
                 cancelRequested=true;
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
-                "VERIFICACAO CONCLUIDA");
+                "SCAN COMPLETE");
             ImGui::SameLine();
             if(ImGui::Button("View results",ImVec2(150,42)))page=9;
         }else if(done && !scanFailed && !scanCancelled){
@@ -41642,7 +41651,7 @@ zula.exe)FIVEMSTR";
             if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
-                "VERIFICACAO CONCLUIDA");
+                "SCAN COMPLETE");
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(150.f,ImGui::GetContentRegionAvail().x),42)))page=2;
         }else if(done && !scanFailed && !scanCancelled){
@@ -41933,7 +41942,7 @@ zula.exe)FIVEMSTR";
                 /* sidebar section end */
             }
             if(syncCategory==4) {
-                ImGui::TextColored(accent,"INTEGRIDADE DE ARQUIVOS");
+                ImGui::TextColored(accent,"FILE INTEGRITY");
                 ImGui::TextDisabled("Verifique hash SHA-256 e assinatura digital dos arquivos selecionados.");
                 ImGui::Separator();
                 ImGui::InputTextWithHint("##file","Select a file to verify...",fileInput,sizeof(fileInput));
@@ -42020,12 +42029,12 @@ zula.exe)FIVEMSTR";
                 ImGui::Separator();
                 if(ImGui::BeginTabBar("##extendedAuditCategories", ImGuiTabBarFlags_FittingPolicyScroll)) {
                     if(ImGui::BeginTabItem("PE / DLL / EXE")) {
-                        ImGui::TextWrapped("Analise de strings de modulos carregados. Correspondencias nao comprovam irregularidades.");
+                        ImGui::TextWrapped("Loaded-module string inspection. Matches alone do not establish malicious activity.");
                         sync_module_audit::render();
                         ImGui::EndTabItem();
                     }
                     if(ImGui::BeginTabItem("Registro / FiveM / Drivers")) {
-                        ImGui::TextWrapped("Verificacoes KB-ECHO de leitura: configuracoes do registro, plugins e nomes de drivers.");
+                        ImGui::TextWrapped("Read-only KB-ECHO checks: registry settings, plugins, and driver names.");
                         kb_echo_native::render();
                         ImGui::EndTabItem();
                     }
@@ -42493,25 +42502,19 @@ zula.exe)FIVEMSTR";
     } else if(page==6) {
         binaryInspector::draw();
     } else if(page==4) {
-        sectionTitle(localized("Workspace Preferences"),"Adjust appearance and investigation options");
+        sectionTitle(localized("Workspace Preferences"),localized("Adjust appearance and investigation options"));
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
         ImGui::TextDisabled(localized("PERSONALIZATION  /  LOCAL SETTINGS"));
         ImGui::TextWrapped(localized("Customize the scanner appearance and investigation workflow."));
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::TextColored(orange(),"LANGUAGE");
+        ImGui::TextColored(orange(),localized("LANGUAGE"));
         ImGui::Separator();
-        ImGui::TextUnformatted(displayLanguage==1?"Idioma de exibição":"Display language");
-        ImGui::SetNextItemWidth(320);
-        const char* languages[]={"English","Português (Brasil)"};
-        if(ImGui::Combo("##display_language",&displayLanguage,languages,IM_ARRAYSIZE(languages)))
-            saveSettings();
-        ImGui::TextDisabled("%s",displayLanguage==1?
-            "O idioma altera os rótulos traduzidos; os dados técnicos permanecem no formato original.":
-            "Translated interface labels change immediately; technical evidence stays in its original format.");
+        ImGui::TextUnformatted("Interface language: English");
+        ImGui::TextDisabled("The interface and scan messages use English.");
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
-        ImGui::TextColored(orange(),"APPEARANCE");
+        ImGui::TextColored(orange(),localized("APPEARANCE"));
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::Text(localized("Scan Percentage Color"));
@@ -42543,17 +42546,17 @@ zula.exe)FIVEMSTR";
         if(ImGui::Combo("##density",&densityIndex,densityNames,IM_ARRAYSIZE(densityNames)))
             applyTheme();
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
-        ImGui::TextColored(orange(),"INTERFACE DETAILS");
+        ImGui::TextColored(orange(),localized("INTERFACE DETAILS"));
         ImGui::Checkbox(localized("Animate scanner branding"),&brandAnimation);
         ImGui::Checkbox(localized("Monochrome rain across the window"),&ambientMotesEnabled);
         ImGui::BeginDisabled(!ambientMotesEnabled);
         ImGui::SetNextItemWidth(200);
-        ImGui::Combo("Rain density",&rainDensity,rainDensityNames,
-                     IM_ARRAYSIZE(rainDensityNames));
+        ImGui::Combo(localized("Rain density"),&rainDensity,
+                     rainDensityNames,3);
         ImGui::EndDisabled();
         ImGui::Checkbox(localized("Reduce motion (disable transition and unlock animations)"),
                         &reducedMotion);
-        ImGui::TextDisabled("Rain stays static with Reduce motion; scan results remain protected.");
+        ImGui::TextDisabled(localized("Rain stays static with Reduce motion; scan results remain protected."));
         ImGui::Checkbox(localized("Highlight navigation on hover"),&showNavHover);
         ImGui::TextDisabled(localized("Animations are visual only; scanning is unaffected."));
         ImGui::Spacing();
@@ -42567,13 +42570,13 @@ zula.exe)FIVEMSTR";
         if(ImGui::Combo("##scrollbar",&scrollbarWidth,scrollbarWidthNames,
                         IM_ARRAYSIZE(scrollbarWidthNames)))applyTheme();
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
-        ImGui::TextColored(orange(),"PROCESS REVIEW");
+        ImGui::TextColored(orange(),localized("PROCESS REVIEW"));
         ImGui::Checkbox(localized("Highlight suspicious processes in red"),&highlightSuspicious);
         ImGui::Checkbox(localized("Show security assessment details"),&showSecurityWarnings);
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         drawCustomDetectionPreferences();
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
-        ImGui::TextColored(orange(),"PREFERENCES");
+        ImGui::TextColored(orange(),localized("PREFERENCES"));
         if(accentButton(localized("Save Settings"),ImVec2(170,42)))saveSettings();
         ImGui::SameLine();
         if(ImGui::Button(localized("Restore Defaults"),ImVec2(170,42))) {
@@ -42587,12 +42590,12 @@ zula.exe)FIVEMSTR";
             applyTheme();
             saveSettings();
         }
-        if(settingsNotice)ImGui::TextColored(ImVec4(0.722f,0.722f,0.722f,1),"Settings saved successfully.");
+        if(settingsNotice)ImGui::TextColored(ImVec4(0.722f,0.722f,0.722f,1),"%s",localized("Settings saved successfully."));
         ImGui::Spacing();
-        ImGui::TextDisabled("Preferences are stored locally in APPDATA\\SyncPCChecker\\settings.ini");
+        ImGui::TextDisabled("%s",localized("Preferences are stored locally in APPDATA\\SyncPCChecker\\settings.ini"));
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextDisabled("%s",XOR_STR("APPLICATION INTEGRITY").c_str());
+        ImGui::TextDisabled("%s",localized("APPLICATION INTEGRITY"));
         if(ImGui::Button(localized("Verify Scanner Executable"),ImVec2(240,38))) {
             try {
                 auto result=inspectFile(executablePath());
