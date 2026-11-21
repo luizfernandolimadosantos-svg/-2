@@ -11078,6 +11078,16 @@ static std::vector<Record> inspectRunOnceExV77(){
 
 static std::vector<Record> inspectArtifactLocations(){
     std::vector<Record> out;
+    // V37: bounded read-only filesystem inventory. This function used to
+    // enumerate up to 60k entries per root AND 250k per mounted volume.
+    // It runs as one sequential check, so the UI could remain at 71%.
+    const auto inventoryDeadline=std::chrono::steady_clock::now()+
+        std::chrono::seconds(12);
+    auto budgetExpired=[&](){
+        return std::chrono::steady_clock::now()>=inventoryDeadline;
+    };
+    bool timeLimitReached=false;
+
     struct Root {fs::path path;std::string label;int depth;};
     std::vector<Root> roots;
     auto addRoot=[&](const fs::path& p,const char* label,int depth){
@@ -11132,7 +11142,10 @@ static std::vector<Record> inspectArtifactLocations(){
     size_t cappedRoots=0;
     std::unordered_set<std::wstring> seenMatches;
     for(const auto& root:roots){
-        if(cancelRequested)break;
+        if(cancelRequested || budgetExpired()){
+            timeLimitReached=budgetExpired();
+            break;
+        }
         std::error_code ec;
         fs::recursive_directory_iterator it(root.path,
             fs::directory_options::skip_permission_denied,ec),end;
@@ -11143,7 +11156,8 @@ static std::vector<Record> inspectArtifactLocations(){
             continue;
         }
         size_t visited=0;
-        while(it!=end && !cancelRequested && visited<60000){
+        while(it!=end && !cancelRequested && visited<2500 &&
+              totalVisited<20000 && !budgetExpired()){
             if(it.depth()>=root.depth)it.disable_recursion_pending();
             std::error_code fileEc;
             if(it->is_symlink(fileEc))it.disable_recursion_pending();
@@ -11196,17 +11210,18 @@ static std::vector<Record> inspectArtifactLocations(){
                 ec.clear();
             }
         }
-        if(visited>=60000){
+        if(visited>=2500 || totalVisited>=20000 || budgetExpired()){
             ++cappedRoots;
             out.push_back({"Artifact Scan Coverage",root.label,
-                "PARTIAL SCAN | Directory visit limit reached (60,000 entries). "
+                "PARTIAL SCAN | Inventory limit or time budget reached. "
                 "Some files in this location may not have been checked."});
         }
     }
     // V53: dedicated exact-filename discovery across mounted fixed/removable
     // volumes. This is independent of the inventory cap and does not rely on
     // a filename appearing in the first 2,200 inventory rows.
-    DWORD drives=GetLogicalDrives();
+    if(budgetExpired())timeLimitReached=true;
+    DWORD drives=timeLimitReached?0:GetLogicalDrives();
     size_t volumeEntries=0,volumeErrors=0,volumeCaps=0,exactHits=0;
     size_t volumeCount=0;
     size_t peChecked=0,peIssues=0,peUnreadable=0,fiveMNearby=0;
@@ -11218,7 +11233,7 @@ static std::vector<Record> inspectArtifactLocations(){
     constexpr size_t maxPeChecks=120000;
     constexpr size_t maxPeIssueRows=1500;
     std::unordered_set<std::wstring> exactPaths;
-    for(int letter=0;letter<26 && !cancelRequested;++letter){
+    for(int letter=0;letter<26 && !cancelRequested && !budgetExpired();++letter){
         if(!(drives&(1u<<letter)))continue;
         const std::wstring root=std::wstring(1,wchar_t(L'A'+letter))+L":\\";
         const UINT kind=GetDriveTypeW(root.c_str());
@@ -11234,8 +11249,9 @@ static std::vector<Record> inspectArtifactLocations(){
             continue;
         }
         size_t visited=0;
-        constexpr size_t volumeVisitLimit=250000;
-        while(it!=end && !cancelRequested && visited<volumeVisitLimit){
+        constexpr size_t volumeVisitLimit=10000;
+        while(it!=end && !cancelRequested && visited<volumeVisitLimit &&
+              !budgetExpired()){
             std::error_code fileEc;
             // Read-only filesystem link inventory near FiveM/cheat indicators.
             const fs::path entryPath=it->path();
@@ -11366,7 +11382,7 @@ static std::vector<Record> inspectArtifactLocations(){
                 ec.clear();
             }
         }
-        if(visited>=volumeVisitLimit){
+        if(visited>=volumeVisitLimit || budgetExpired()){
             ++volumeCaps;
             out.push_back({"Artifact Scan Coverage",utf8(root),
                 "PARTIAL SCAN | Exact-name discovery reached its 250,000-entry "
@@ -11408,6 +11424,11 @@ static std::vector<Record> inspectArtifactLocations(){
         " | Roots at visit limit="+std::to_string(cappedRoots)+
         " | Enumeration errors="+std::to_string(failedDirectories)+
         " | This is not a whole-disk scan and absence of matches is not proof of safety."});
+    if(budgetExpired() || timeLimitReached){
+        out.push_back({"Artifact Scan Coverage","Filesystem inventory",
+            "INCOMPLETE | Time budget reached (12 seconds). "
+            "Some directories and volumes were not checked."});
+    }
     return out;
 }
 
@@ -34745,6 +34766,11 @@ static int inspectionDisplayPercent(){
         lastScanStart=inspectionProgressStart;
     }
     if(inspectionProgressStart<=0.0)return 0;
+    // Guard against stale UI progress when a scan is restarted/reset.
+    static int lastCompletedStage=0;
+    const int stageNow=completedStages.load();
+    if(stageNow<lastCompletedStage){displayed=0;lastFrame=-1;}
+    lastCompletedStage=stageNow;
     const int frame=ImGui::GetFrameCount();
     if(frame!=lastFrame){
         lastFrame=frame;
@@ -37423,11 +37449,39 @@ static void drawAtlasProgress(bool compact=false){
     else if(scanning.load()){
         const unsigned phase=static_cast<unsigned>(ImGui::GetTime()*2.0)%4;
         const char* activity[]={"Scanning", "Scanning.", "Scanning..", "Scanning..."};
-        ImGui::TextDisabled("%s | %d/6 etapas",activity[phase],
-            std::clamp(completedStages.load(),0,6));
+        ImGui::TextDisabled("%s | Stage %d of 6",activity[phase],
+            std::clamp(completedStages.load()+1,1,6));
         if(sequentialTotal.load()>0)
-            ImGui::TextDisabled("Itens: %u / %u",sequentialDone.load(),
+            ImGui::TextDisabled("Checks: %u / %u",sequentialDone.load(),
                 sequentialTotal.load());
+        // Show actual worker activity rather than silently holding a percentage.
+        // A long-running check is not automatically a hung process.
+        const std::string activeCheck=getSequentialItem();
+        if(!activeCheck.empty()){
+            ImGui::TextDisabled("Current check: %s",activeCheck.c_str());
+        }
+        const double elapsed=(std::max)(0.0,
+            ImGui::GetTime()-inspectionProgressStart);
+        ImGui::TextDisabled("Elapsed: %.0f s",elapsed);
+        // Diagnose a lack of completed work without pretending to know
+        // whether the OS operation is blocked or simply expensive.
+        static double lastAdvanceAt=0.0;
+        static double observedScanStart=-1.0;
+        static int observedStage=-1;
+        static unsigned observedItems=0;
+        const int stageNow=completedStages.load();
+        const unsigned itemsNow=sequentialDone.load();
+        if(observedScanStart!=inspectionProgressStart ||
+           observedStage!=stageNow || observedItems!=itemsNow){
+            observedScanStart=inspectionProgressStart;
+            observedStage=stageNow;
+            observedItems=itemsNow;
+            lastAdvanceAt=ImGui::GetTime();
+        }
+        if(ImGui::GetTime()-lastAdvanceAt>30.0){
+            ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),
+                "No completed checks for 30+ seconds. The current check may be slow.");
+        }
     }else
         ImGui::TextDisabled("%s",state);
     ImGui::PopID();
