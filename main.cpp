@@ -34752,34 +34752,18 @@ static double inspectionPresentationFraction(){
     return std::clamp(verified,0.0,0.999);
 }
 // V28: the underlying target is based on completed scan work. The displayed
-// integer percentage advances at most one point per rendered ImGui frame,
+// integer percentage advances by exactly one point per rendered ImGui frame,
 // so the visible sequence is 0, 1, 2, ... 100, without numeric jumps.
 // This is a PRESENTATION counter: it never claims the scan has completed
 // before the worker confirms success, and it does not slow the scan worker.
 static int inspectionDisplayPercent(){
-    static int displayed=0;
-    static int lastFrame=-1;
-    static double lastScanStart=-1.0;
-    if(inspectionProgressStart!=lastScanStart){
-        displayed=0;
-        lastFrame=-1;
-        lastScanStart=inspectionProgressStart;
-    }
+    // Display measured completed work immediately. No frame-dependent queue
+    // that can continue for seconds after the worker has already finished.
     if(inspectionProgressStart<=0.0)return 0;
-    // Guard against stale UI progress when a scan is restarted/reset.
-    static int lastCompletedStage=0;
-    const int stageNow=completedStages.load();
-    if(stageNow<lastCompletedStage){displayed=0;lastFrame=-1;}
-    lastCompletedStage=stageNow;
-    const int frame=ImGui::GetFrameCount();
-    if(frame!=lastFrame){
-        lastFrame=frame;
-        const int target=std::clamp(static_cast<int>(
-            std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
-        if(displayed<target)++displayed;
-    }
-    return displayed;
+    return std::clamp(static_cast<int>(
+        std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
 }
+
 static float inspectionSmoothFraction(){
     return static_cast<float>(inspectionDisplayPercent())/100.0f;
 }
@@ -36315,6 +36299,7 @@ static void processTable(float height) {
 
 // Selection-based evidence details: no access to external network or modification of the system.
 static bool evidenceDetailsOpen=false;
+static bool evidenceDetailsPopupPending=false;
 static std::string evidenceTitle,evidenceCategory,evidenceDescription,evidenceAssessment;
 static std::wstring evidenceFile;
 static std::string evidenceHash,evidenceSignature;
@@ -36324,6 +36309,7 @@ static void openEvidenceDetails(const std::string& category,const std::string& t
     evidenceCategory=category; evidenceTitle=title; evidenceDescription=description;
     evidenceAssessment=assessment; evidenceFile=file;
     evidenceHash.clear(); evidenceSignature.clear(); evidenceDetailsOpen=true;
+    evidenceDetailsPopupPending=true;
 }
 
 static std::string csvEscapeEvidence(const std::string& value){
@@ -36412,20 +36398,18 @@ static std::string evidenceFileAvailability(const std::wstring& path) {
     return "Unable to verify file status (Windows error "+std::to_string(error)+").";
 }
 static void drawEvidenceDetails() {
+    // A modal stays above the fullscreen scanner instead of opening behind it.
+    if(evidenceDetailsPopupPending){
+        ImGui::OpenPopup("Evidence Details - Read Only");
+        evidenceDetailsPopupPending=false;
+    }
     if(!evidenceDetailsOpen)return;
-    ImGui::OpenPopup("Evidence Details - Read Only");
     ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_Appearing);
-    if(!ImGui::BeginPopupModal("Evidence Details - Read Only",nullptr,
-            ImGuiWindowFlags_NoSavedSettings))return;
+    if(!ImGui::BeginPopupModal("Evidence Details - Read Only",&evidenceDetailsOpen,
+        ImGuiWindowFlags_NoSavedSettings))return;
     ImGui::TextColored(orange(),"%s",evidenceCategory.c_str());
     ImGui::Separator();
     ImGui::TextWrapped("Item: %s",evidenceTitle.c_str());
-    ImGui::Spacing();
-    ImGui::SeparatorText("Evidence interpretation");
-    ImGui::TextWrapped("This record is an investigative lead. A name or path match "
-        "alone cannot establish that a program was executed or that a cheat was used.");
-    if (evidenceDescription.empty())
-        ImGui::TextDisabled("No supporting description was recorded for this item.");
     ImGui::Spacing();
     ImGui::TextWrapped("%s",evidenceDescription.c_str());
     if(ImGui::SmallButton("Copy Evidence")){
@@ -36445,7 +36429,6 @@ static void drawEvidenceDetails() {
         const std::string fileAvailability=evidenceFileAvailability(evidenceFile);
         ImGui::TextWrapped("File status: %s",fileAvailability.c_str());
         ImGui::TextDisabled("Status checked now; this does not establish when or why a file disappeared.");
-        ImGui::TextDisabled("A missing file may have been moved or renamed; absence is not proof of deletion.");
         if(ImGui::Button("Verify SHA-256 and Authenticode")) {
             evidenceHash=sha256(evidenceFile);
             evidenceSignature=signatureStatus(evidenceFile);
@@ -36456,8 +36439,7 @@ static void drawEvidenceDetails() {
     ImGui::Spacing();
     ImGui::TextDisabled("%s",XOR_STR("Evidence is observational; an indicator alone does not confirm a threat.").c_str());
     ImGui::Separator();
-    if(ImGui::Button("Close details",ImVec2(145.f,34.f)) ||
-       ImGui::IsKeyPressed(ImGuiKey_Escape,false)) {
+    if(ImGui::Button("Close details",ImVec2(150.f,34.f))){
         evidenceDetailsOpen=false;
         ImGui::CloseCurrentPopup();
     }
@@ -37491,6 +37473,10 @@ static void drawAtlasProgress(bool compact=false){
             observedItems=itemsNow;
             lastAdvanceAt=ImGui::GetTime();
         }
+        if(completedStages.load()==1 && sequentialTotal.load()==0){
+            ImGui::TextDisabled("Stage 2 is running; its work total is not available yet.");
+            ImGui::TextDisabled("16%% is a stage boundary, not proof of a frozen scan.");
+        }
         if(ImGui::GetTime()-lastAdvanceAt>30.0){
             ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),
                 "No completed checks for 30+ seconds. The current check may be slow.");
@@ -37763,146 +37749,97 @@ static void drawSyncCornerAccents(ImDrawList* draw,
     draw->AddLine(ImVec2(x1,y1),ImVec2(x1,y1-len),c,1.f);
 }
 static void renderSyncOpening() {
-    // V46: redesigned opening — animated computer, code and magnifier,
-    // animated typography and a genuine, clickable Open Scanner action.
+    // Hellsing-inspired crimson sigil opening. Pure UI: no simulated scan progress.
     ImGuiViewport* vp=ImGui::GetMainViewport();
-    const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
-    ImGui::SetNextWindowPos(p);
-    ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
+    const ImVec2 origin=vp->WorkPos, size=vp->WorkSize;
+    ImGui::SetNextWindowPos(origin);
+    ImGui::SetNextWindowSize(size);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.009f,.020f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0.f);
-    ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
-        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|
-        ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin("##HellsingOpening",nullptr,
+        ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|
+        ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
+        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     ImDrawList* d=ImGui::GetWindowDrawList();
     const double now=ImGui::GetTime();
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
-    const float cardW=(std::max)(200.f,(std::min)(sz.x-28.f,590.f));
-    const float cardH=(std::max)(230.f,(std::min)(sz.y-28.f,405.f));
-    const ImVec2 lo(cx-cardW*.5f,cy-cardH*.50f);
-    const ImVec2 hi(cx+cardW*.5f,cy+cardH*.50f);
-    const bool transitioning=syncIntroTransition>=0.0;
-    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
-    auto ease=[&](float start,float duration){
-        return syncIntroEase((elapsed-start)/duration);
-    };
-    auto ink=[](int g,float opacity){
-        const float a=(std::max)(0.f,(std::min)(1.f,opacity));
-        return IM_COL32(g,g,g,(int)(255.f*a));
-    };
-    const bool animate=brandAnimation && !reducedMotion;
-    const float clock=animate?(float)now:0.f;
-    const float entrance=transitioning?ease(.05f,.70f):0.f;
-    const float exit=transitioning?ease(4.65f,.60f):0.f;
-    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
-    drawSyncNoirAtmosphere(d,p,sz,animate);
-    drawSyncCornerAccents(d,p,sz,animate);
-    // No outer card fill or outline: opening content sits directly
-    // on the fullscreen background, with no enclosing rectangle.
-    // Fine editorial rails; subtle enough not to compete with text.
-
-    // V71: editorial stacked identity, clear of the monitor illustration.
-    // SYNC is the hero word; PC CHECKER is a restrained tracking label.
-    ImFont* wordFont=ImGui::GetFont();
-    const float wordSize=ImGui::GetFontSize()*2.15f;
-    const float labelSize=ImGui::GetFontSize()*.93f;
-    const char* syncWord="SYNC";
-    const char* restWord="P C   C H E C K E R";
-    const ImVec2 syncSize=wordFont->CalcTextSizeA(wordSize,FLT_MAX,0.f,syncWord);
-    const ImVec2 restSize=wordFont->CalcTextSizeA(labelSize,FLT_MAX,0.f,restWord);
-    // Keep both lines above the monitor, even on a compact viewport.
-    const float wordY=(std::max)(p.y+12.f,cy-238.f);
-    const float wordX=cx-syncSize.x*.5f;
-    const float labelY=wordY+wordSize+5.f;
-    const float pulse=animate?(.5f+.5f*std::sin(clock*1.65f)):.6f;
-    // Tiny soft glow, avoiding blurred / doubled letters.
-    if(animate){
-        d->AddText(wordFont,wordSize,ImVec2(wordX-1.f,wordY),
-            ink(190,.10f+.07f*pulse),syncWord);
-        d->AddText(wordFont,wordSize,ImVec2(wordX+1.f,wordY),
-            ink(190,.10f+.07f*pulse),syncWord);
+    const bool animate=brandAnimation&&!reducedMotion;
+    const float t=animate?(float)now:0.f;
+    const float cx=origin.x+size.x*.5f, cy=origin.y+size.y*.43f;
+    const float scale=(std::max)(.45f,(std::min)(1.25f,(std::min)(size.x/850.f,size.y/590.f)));
+    const ImVec2 center(cx,cy);
+    const ImU32 crimson=IM_COL32(230,27,79,245);
+    const ImU32 muted=IM_COL32(117,19,49,155);
+    const ImU32 white=IM_COL32(236,216,225,245);
+    d->AddRectFilled(origin,ImVec2(origin.x+size.x,origin.y+size.y),
+        IM_COL32(9,4,10,255));
+    // Sparse atmospheric rain; deterministic, no allocations or RNG per frame.
+    if(animate) for(int i=0;i<55;++i){
+        const float x=origin.x+std::fmod((float)(i*173+29),size.x);
+        const float y=origin.y+std::fmod((float)(i*113)+t*(12.f+(i%7)*4.f),size.y);
+        d->AddLine(ImVec2(x,y),ImVec2(x,y+7.f+(i%5)*5.f),
+            IM_COL32(136,19,49,35+(i%4)*11),1.f);
     }
-    d->AddText(wordFont,wordSize,ImVec2(wordX,wordY),
-        ink(255,.92f+.08f*pulse),syncWord);
-    d->AddText(wordFont,labelSize,ImVec2(cx-restSize.x*.5f,labelY),
-        ink(180,.74f+.14f*pulse),restWord);
-    // Animated fine rule under SYNC: clean and typographic, no extra text.
-    const float lineAlpha=animate?(.18f+.16f*pulse):.22f;
-    const float lineY=labelY+labelSize+13.f;
-    const float lineW=animate?(syncSize.x*(.52f+.12f*std::sin(clock*.8f))):
-        syncSize.x*.58f;
-    d->AddLine(ImVec2(cx-lineW*.5f,lineY),
-        ImVec2(cx+lineW*.5f,lineY),
-        ink(245,lineAlpha),1.f);
-    // Clean wordmark: no subtitle or decorative interface caption.
-    const float illustrationScale=(std::min)(1.f,
-        (std::min)(cardW/590.f,cardH/405.f));
-    drawSyncComputerMagnifier(d,cx,cy,illustrationScale,animate,clock);
-    const char* heading=transitioning?"OPENING CHECKER":"CHECKER";
+    // Rotating concentric occult-inspired rings and pentagram.
+    const float outer=104.f*scale, inner=78.f*scale;
+    for(int ring=0;ring<3;++ring){
+        const float radius=outer-ring*11.f*scale;
+        d->AddCircle(center,radius,ring==0?crimson:muted,96,
+            ring==0?2.1f:1.1f);
+    }
+    for(int i=0;i<36;++i){
+        const float a=(float)i*6.2831853f/36.f+(animate?t*.11f:0.f);
+        const float r0=(i%3==0?outer-13.f*scale:outer-8.f*scale);
+        const float r1=outer-3.f*scale;
+        d->AddLine(ImVec2(cx+std::cos(a)*r0,cy+std::sin(a)*r0),
+            ImVec2(cx+std::cos(a)*r1,cy+std::sin(a)*r1),muted,1.f);
+    }
+    const float rotation=animate?t*.075f:0.f;
+    ImVec2 vertices[5];
+    for(int i=0;i<5;++i){
+        const float a=-1.5707963f+rotation+i*6.2831853f/5.f;
+        vertices[i]=ImVec2(cx+std::cos(a)*inner,cy+std::sin(a)*inner);
+    }
+    for(int i=0;i<5;++i)
+        d->AddLine(vertices[i],vertices[(i+2)%5],crimson,1.9f);
+    d->AddCircleFilled(center,3.5f*scale,crimson,16);
+    const float pulse=animate?.5f+.5f*std::sin(t*2.1f):.6f;
+    d->AddCircle(center,outer+7.f*scale,
+        IM_COL32(226,21,68,(int)(45+45*pulse)),96,2.f);
+    const char* heading="BYPASS HUNTER";
     const ImVec2 headingSize=ImGui::CalcTextSize(heading);
-    const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
-    d->AddText(ImVec2(cx-headingSize.x*.5f,cy+25.f-8.f*entrance),
-        ink(249,headingOpacity),heading);
+    d->AddText(ImVec2(cx-headingSize.x*.5f,cy-outer-79.f*scale),
+        white,heading);
+    const char* sub="SECURITY MODULES";
+    const ImVec2 subSize=ImGui::CalcTextSize(sub);
+    d->AddText(ImVec2(cx-subSize.x*.5f,cy+outer+18.f*scale),
+        IM_COL32(174,129,145,220),sub);
+    const bool transitioning=syncIntroTransition>=0.0;
     if(!transitioning){
-        const float buttonW=(std::min)(255.f,cardW-44.f);
-        ImGui::SetCursorScreenPos(ImVec2(cx-buttonW*.5f,cy+78.f));
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.88f,.88f,.88f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
-        const bool openClicked=ImGui::Button("OPEN SCANNER   >>",ImVec2(buttonW,47.f));
-        if(ImGui::IsItemHovered() && animate){
-            const ImVec2 a=ImGui::GetItemRectMin();
-            const ImVec2 b=ImGui::GetItemRectMax();
-            const float shimmer=.4f+.6f*(.5f+.5f*std::sin(clock*4.f));
-            d->AddRect(ImVec2(a.x-3.f,a.y-3.f),
-                ImVec2(b.x+3.f,b.y+3.f),
-                ink(230,.12f+.17f*shimmer),9.f,0,1.2f);
-        }
-        if(openClicked){
+        const float bw=(std::min)(290.f*scale,size.x-42.f);
+        ImGui::SetCursorScreenPos(ImVec2(cx-bw*.5f,cy+outer+77.f*scale));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.47f,.045f,.15f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.76f,.09f,.24f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.35f,.025f,.11f,1.f));
+        if(ImGui::Button("OPEN SCANNER",ImVec2(bw,43.f*scale))){
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
-        ImGui::PopStyleColor(4);
-        if(animate){
-            const float sweep=.5f+.5f*std::sin(clock*1.8f);
-            d->AddLine(ImVec2(cx-buttonW*.5f+8.f,cy+128.f),
-                ImVec2(cx-buttonW*.5f+8.f+buttonW*sweep*.75f,cy+128.f),
-                ink(220,.25f),1.f);
-        }
+        ImGui::PopStyleColor(3);
     }else{
-        // Opening sequence is a visual handoff, not a fake scan.
-        static constexpr const char* captions[]={
-            "SYNC PC CHECKER","ADVANCED ANTI-CHEAT","FOR FIVEM","BYPASS HUNTER"
-        };
-        const float stageTime=(std::max)(0.f,elapsed-.20f);
-        const int stage=(std::min)(3,(int)(stageTime/1.03f));
-        const float phase=(std::max)(0.f,(std::min)(1.f,
-            (stageTime-stage*1.03f)/1.03f));
-        const float opacity=ease(.18f,.40f)*(1.f-exit);
-        const float captionIn=syncIntroEase(phase/.22f);
-        const float captionOut=1.f-syncIntroEase((phase-.78f)/.22f);
-        const ImVec2 labelSize=ImGui::CalcTextSize(captions[stage]);
-        d->AddText(ImVec2(cx-labelSize.x*.5f,cy+99.f+(1.f-captionIn)*13.f),
-            ink(240,opacity*captionIn*captionOut),captions[stage]);
-        const float trackW=(std::min)(310.f,cardW-70.f);
-        const float trackX=cx-trackW*.5f;
-        d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW,cy+128.f),ink(80,.65f*opacity),2.f);
-        const float progress=(std::min)(1.f,(std::max)(0.f,elapsed/4.65f));
-        d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW*progress,cy+128.f),
-            ink(248,.98f*opacity),2.f);
-        // A thin white scanning beam moves across the transition track.
-        if(animate && progress>.01f){
-            const float head=trackX+trackW*progress;
-            d->AddCircleFilled(ImVec2(head,cy+141.5f),4.f,
-                ink(255,opacity),16);
-        }
-        if(elapsed>=5.25f){
+        const float elapsed=(float)(now-syncIntroTransition);
+        const float progress=(std::max)(0.f,(std::min)(1.f,elapsed/1.65f));
+        const float bw=(std::min)(320.f*scale,size.x-42.f);
+        const float y=cy+outer+64.f*scale;
+        d->AddRectFilled(ImVec2(cx-bw*.5f,y),
+            ImVec2(cx+bw*.5f,y+5.f),IM_COL32(64,20,36,255),2.f);
+        d->AddRectFilled(ImVec2(cx-bw*.5f,y),
+            ImVec2(cx-bw*.5f+bw*progress,y+5.f),crimson,2.f);
+        // This is interface transition time, not the anti-cheat scan percentage.
+        if(elapsed>=1.75f){
             syncIntroOpen=false;
             syncIntroRevealAt=now;
+            syncIntroTransition=-1.0;
         }
     }
     ImGui::End();
@@ -37942,29 +37879,7 @@ static void drawScanSummaryNew() {
     const float fraction=planned?
         static_cast<float>((std::min)(finished,planned))/static_cast<float>(planned):0.f;
     ImGui::ProgressBar(fraction,ImVec2(-1.f,16.f));
-    ImGui::TextDisabled("Check coverage is a separate metric from total scan progress.");
-    // V28 diagnostic: never misrepresent the check-coverage percentage as the
-    // percentage of the full scanner. Show the worker's observable counters.
-    if (scanning.load()) {
-        const int finishedStages=std::clamp(completedStages.load(),0,6);
-        const unsigned itemTotal=sequentialTotal.load();
-        const unsigned itemDone=sequentialDone.load();
-        ImGui::Text("Worker stages: %d / 6",finishedStages);
-        if(itemTotal>0)
-            ImGui::Text("Current measurable stage: %u / %u items",
-                (std::min)(itemDone,itemTotal),itemTotal);
-        else
-            ImGui::TextDisabled("Current stage has no measurable item total; progress may pause.");
-        ImGui::TextDisabled("A paused percentage is not necessarily a frozen worker.");
-    }
-    if (scanFailed.load()) {
-        ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),
-            "Worker failed at stage %d",scanFailureStage.load());
-    }
-    if(scanning.load() && planned > 0 && finished < planned) {
-        ImGui::TextDisabled("Scan active: %llu checks remain; slow sources may delay completion.",
-            planned-finished);
-    }
+    ImGui::TextDisabled("Coverage reflects completed checks, not a malware detection score.");
     if(unavailable>0){
         ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),
             "PARTIAL COVERAGE: %llu checks unavailable",unavailable);
@@ -38338,138 +38253,6 @@ namespace syncLive {
     }
 }
 
-// V29 - transparent scan diagnostics, independent of scan verdicts.
-// This panel deliberately does not alter the engine, evidence or authorization.
-struct SyncV29Diagnostics {
-    bool visible=false;
-    bool historyVisible=true;
-    bool compact=false;
-    bool showCounters=true;
-    bool showHelp=true;
-    bool showPerformance=true;
-    bool autoScroll=true;
-    int historyFilter=0;
-    double lastSample=-1.0;
-    double lastActivity=0.0;
-    unsigned long long lastChecks=0;
-    unsigned lastItems=0;
-    int lastStages=0;
-    std::vector<std::string> events;
-    void push(const std::string& message) {
-        if(events.size()>=96) events.erase(events.begin());
-        events.push_back(message);
-    }
-    void sample() {
-        const double now=ImGui::GetTime();
-        if(lastSample>=0.0 && now-lastSample<0.5) return;
-        lastSample=now;
-        const auto checks=processChecksCompleted.load();
-        const auto items=sequentialDone.load();
-        const int stages=completedStages.load();
-        if(checks!=lastChecks || items!=lastItems || stages!=lastStages) {
-            lastActivity=now;
-            if(stages!=lastStages)
-                push("Worker stage changed: "+std::to_string(lastStages)+" -> "+std::to_string(stages));
-            lastChecks=checks;
-            lastItems=items;
-            lastStages=stages;
-        }
-    }
-    void draw() {
-        sample();
-        if(!visible) return;
-        ImGui::SetNextWindowSize(ImVec2(620.f,490.f),ImGuiCond_FirstUseEver);
-        if(!ImGui::Begin("SYNC / Scan Diagnostics##v29",&visible)) {
-            ImGui::End();
-            return;
-        }
-        const bool running=scanning.load();
-        const bool finished=done.load();
-        const bool failed=scanFailed.load();
-        ImGui::TextUnformatted("WORKER STATUS");
-        ImGui::Separator();
-        ImGui::Text("State: %s",failed?"FAILED":running?"RUNNING":finished?"FINISHED":"IDLE");
-        ImGui::SameLine();
-        ImGui::TextDisabled("(live counters, not a simulated percentage)");
-        if(ImGui::Checkbox("Counters",&showCounters)){}
-        ImGui::SameLine();
-        ImGui::Checkbox("Event history",&historyVisible);
-        ImGui::SameLine();
-        ImGui::Checkbox("Help",&showHelp);
-        ImGui::SameLine();
-        ImGui::Checkbox("Performance",&showPerformance);
-        if(showPerformance) {
-            const ImGuiIO& io=ImGui::GetIO();
-            const float fps=io.Framerate;
-            ImGui::Text("UI: %.1f FPS | Frame: %.2f ms",fps,fps>0.f?1000.f/fps:0.f);
-            if(fps>0.f && fps<20.f)
-                ImGui::TextWrapped("Low UI frame rate detected. Consider disabling decorative effects in settings.");
-            ImGui::Text("Diagnostic samples: every 500 ms | Event capacity: 96");
-        }
-        if(showCounters) {
-            const auto planned=processChecksPlanned.load();
-            const auto completed=processChecksCompleted.load();
-            const auto unavailable=processChecksUnavailable.load();
-            const auto total=sequentialTotal.load();
-            const auto current=sequentialDone.load();
-            const int stages=completedStages.load();
-            ImGui::Text("Stages: %d / 6",(std::max)(0,(std::min)(stages,6)));
-            ImGui::Text("Item checks: %u / %u",(std::min)(current,total),total);
-            ImGui::Text("Process checks: %llu / %llu",completed,planned);
-            ImGui::Text("Unavailable checks: %llu",unavailable);
-            ImGui::Text("Evidence records: %zu",recordCount.load());
-            ImGui::Text("Processes: %zu",processCount.load());
-            ImGui::Text("PE files inspected: %zu",peFilesInspected.load());
-            if(total>0) {
-                const float fraction=static_cast<float>((std::min)(current,total))/static_cast<float>(total);
-                ImGui::ProgressBar(fraction,ImVec2(-1,16),"Current measurable stage");
-            } else {
-                ImGui::TextDisabled("This stage does not expose a measurable item count.");
-            }
-            if(planned>0) {
-                const float fraction=static_cast<float>((std::min)(completed,planned))/static_cast<float>(planned);
-                ImGui::ProgressBar(fraction,ImVec2(-1,16),"Process-check coverage");
-            }
-            if(running) {
-                const double idle=ImGui::GetTime()-lastActivity;
-                if(lastActivity>0.0 && idle>10.0)
-                    ImGui::TextWrapped("No observable counter changed for %.1f seconds. The worker may be processing a long task; this is not proof of a deadlock.",idle);
-                else
-                    ImGui::TextDisabled("Worker counters are being monitored.");
-            }
-        }
-        if(historyVisible) {
-            ImGui::SeparatorText("RECENT WORKER EVENTS");
-            if(ImGui::BeginChild("##v29history",ImVec2(0,120),ImGuiChildFlags_Borders)) {
-                for(auto it=events.rbegin();it!=events.rend();++it)
-                    ImGui::TextWrapped("%s",it->c_str());
-            }
-            ImGui::EndChild();
-            if(ImGui::Button("Clear diagnostic history"))events.clear();
-            ImGui::SameLine();
-            if(ImGui::Button("Copy diagnostic history")) {
-                std::string report="SYNC diagnostic event history\n";
-                report+="Note: observations are not proof of cheating or a worker deadlock.\n";
-                for(const auto& event:events) {report+=event;report+='\n';}
-                ImGui::SetClipboardText(report.c_str());
-            }
-            ImGui::TextDisabled("Diagnostic history is local to this session; copying is manual.");
-        }
-        if(showHelp) {
-            ImGui::SeparatorText("INTERPRETATION");
-            ImGui::BulletText("Unavailable checks do not imply a clean system.");
-            ImGui::BulletText("Progress is measured from actual counters, not a timer.");
-            ImGui::BulletText("Historical artifacts cannot prove that a deleted file still exists.");
-            ImGui::BulletText("A file name alone is not a reliable cheat verdict.");
-            ImGui::TextWrapped("Stage progress, process-check coverage and overall scan completion are different measurements. Do not infer a clean scan from missing or unavailable checks.");
-            ImGui::TextWrapped("Deleted-file evidence is best effort: retained operating-system artifacts may be absent, overwritten or disabled. No scanner can guarantee recovery regardless of age.");
-            ImGui::TextWrapped("This diagnostic view reads existing counters only. It does not add detections or modify scan findings.");
-        }
-        ImGui::End();
-    }
-};
-static SyncV29Diagnostics syncV29Diagnostics;
-
 static void renderUI() {
     static double liveLastCheck=-10.0;
     if(ImGui::GetTime()-liveLastCheck>=2.0){
@@ -38531,7 +38314,6 @@ static void renderUI() {
     ImGui::TextWrapped("The report includes file paths and scan findings.");
     ImGui::TextDisabled("%s",scanComplete?"Scan completed":"Waiting for scan");
     ImGui::TextWrapped("%s",reportStatus.c_str());
-    ImGui::TextDisabled("F9: Scan diagnostics (after opening scanner)");
     if(scanComplete && shareScanWithAdmin && !reportSent){
         if(ImGui::Button("Send report",ImVec2(220.f,30.f)))
             ImGui::OpenPopup("Confirm sharing##sync");
@@ -38552,11 +38334,6 @@ static void renderUI() {
     }
     ImGui::End();
     if(syncIntroOpen){renderSyncOpening();return;}
-    // V29: persistent access to live diagnostics without replacing navigation.
-    if(!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F9,false))
-        syncV29Diagnostics.visible=!syncV29Diagnostics.visible;
-    syncV29Diagnostics.draw();
-
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
     if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
