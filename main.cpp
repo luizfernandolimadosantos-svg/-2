@@ -8440,6 +8440,54 @@ static bool loadSyncLogo() {
     return ok;
 }
 
+
+// Optional Alucard artwork, loaded locally beside the executable.
+// No network access; absence of the asset leaves the UI functional.
+static ID3D11ShaderResourceView* alucardBannerTexture=nullptr;
+static void loadAlucardBanner() {
+    if(!device || alucardBannerTexture)return;
+    wchar_t exe[MAX_PATH]{};
+    if(!GetModuleFileNameW(nullptr,exe,MAX_PATH))return;
+    std::wstring path(exe);
+    const size_t slash=path.find_last_of(L"\\/");
+    if(slash==std::wstring::npos)return;
+    path.resize(slash+1);
+    path+=L"alucard_banner.png";
+    IWICImagingFactory* factory=nullptr;
+    IWICBitmapDecoder* decoder=nullptr;
+    IWICBitmapFrameDecode* frame=nullptr;
+    IWICFormatConverter* converter=nullptr;
+    do {
+        if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&factory))))break;
+        if(FAILED(factory->CreateDecoderFromFilename(path.c_str(),nullptr,GENERIC_READ,
+            WICDecodeMetadataCacheOnDemand,&decoder)))break;
+        if(FAILED(decoder->GetFrame(0,&frame)))break;
+        if(FAILED(factory->CreateFormatConverter(&converter)))break;
+        if(FAILED(converter->Initialize(frame,GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,nullptr,0.f,WICBitmapPaletteTypeCustom)))break;
+        UINT w=0,h=0;
+        if(FAILED(converter->GetSize(&w,&h)) || !w || !h || w>4096 || h>4096)break;
+        std::vector<BYTE> pixels(static_cast<size_t>(w)*h*4);
+        if(FAILED(converter->CopyPixels(nullptr,w*4,static_cast<UINT>(pixels.size()),pixels.data())))break;
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width=w;desc.Height=h;desc.MipLevels=1;desc.ArraySize=1;
+        desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
+        desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data{};
+        data.pSysMem=pixels.data();data.SysMemPitch=w*4;
+        ID3D11Texture2D* tex=nullptr;
+        if(SUCCEEDED(device->CreateTexture2D(&desc,&data,&tex))){
+            device->CreateShaderResourceView(tex,nullptr,&alucardBannerTexture);
+            tex->Release();
+        }
+    }while(false);
+    if(converter)converter->Release();
+    if(frame)frame->Release();
+    if(decoder)decoder->Release();
+    if(factory)factory->Release();
+}
+
 static std::vector<Process> processes;
 static std::vector<FileResult> files;
 struct TimelineEvent {
@@ -34215,11 +34263,79 @@ static std::vector<Record> collect() {
 }
 }
 
+
+// Additional read-only process image metadata checks.
+// These are evidence observations, NOT proof of cheating.
+static std::vector<Record> collectProcessImageMetadata(
+    const std::vector<Process>& list) {
+    std::vector<Record> found;
+    found.reserve(list.size());
+    for(const auto& proc:list) {
+        if(cancelRequested.load())break;
+        const std::wstring& path=proc.path;
+        if(path.empty())continue;
+        const DWORD a=GetFileAttributesW(path.c_str());
+        if(a==INVALID_FILE_ATTRIBUTES)continue;
+        const std::string name=utf8(proc.name);
+        const std::string detail="PID "+std::to_string(proc.pid)+
+            " | Image: "+utf8(path)+
+            " | INFORMATIONAL metadata, not proof of cheating";
+        auto add=[&](const char* label){
+            found.push_back({"Informational / Process Image Metadata",name+" / "+label,detail});
+        };
+        struct AttributeRule {DWORD flag;const char* label;};
+        const AttributeRule attributes[]={
+            {FILE_ATTRIBUTE_HIDDEN,"Hidden image file"},
+            {FILE_ATTRIBUTE_SYSTEM,"System attribute on image"},
+            {FILE_ATTRIBUTE_READONLY,"Read-only image file"},
+            {FILE_ATTRIBUTE_ARCHIVE,"Archive attribute on image"},
+            {FILE_ATTRIBUTE_COMPRESSED,"Compressed image file"},
+            {FILE_ATTRIBUTE_ENCRYPTED,"EFS-encrypted image file"},
+            {FILE_ATTRIBUTE_REPARSE_POINT,"Reparse-point image path"},
+            {FILE_ATTRIBUTE_SPARSE_FILE,"Sparse image file"},
+            {FILE_ATTRIBUTE_OFFLINE,"Offline image file"},
+            {FILE_ATTRIBUTE_TEMPORARY,"Temporary image file"},
+            {FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,"Non-indexed image file"},
+            {FILE_ATTRIBUTE_INTEGRITY_STREAM,"Integrity-stream attribute"},
+            {FILE_ATTRIBUTE_NO_SCRUB_DATA,"No-scrub-data attribute"}
+        };
+        for(const auto& r:attributes)
+            if(a&r.flag)add(r.label);
+        std::wstring lower=path;
+        std::transform(lower.begin(),lower.end(),lower.begin(),
+            [](wchar_t c){return (wchar_t)towlower(c);});
+        struct PathRule {const wchar_t* token;const char* label;};
+        const PathRule paths[]={
+            {L"\\appdata\\local\\temp\\","Image in user temporary directory"},
+            {L"\\windows\\temp\\","Image in Windows temporary directory"},
+            {L"\\downloads\\","Image launched from Downloads"},
+            {L"\\$recycle.bin\\","Image in recycle-bin path"},
+            {L"\\appdata\\roaming\\","Image in roaming profile"},
+            {L"\\programdata\\","Image in ProgramData"},
+            {L"\\users\\public\\","Image in public user directory"},
+            {L"\\desktop\\","Image launched from Desktop"},
+            {L"\\onedrive\\","Image in OneDrive-synced path"}
+        };
+        for(const auto& r:paths)
+            if(lower.find(r.token)!=std::wstring::npos)add(r.label);
+        if(lower.rfind(L"\\\\",0)==0)add("Image launched from UNC network path");
+        if(a&FILE_ATTRIBUTE_DIRECTORY)add("Image path resolves to directory");
+        if((a&FILE_ATTRIBUTE_HIDDEN)&&(a&FILE_ATTRIBUTE_SYSTEM))
+            add("Combined hidden and system attributes");
+        if((a&FILE_ATTRIBUTE_ENCRYPTED)&&(a&FILE_ATTRIBUTE_COMPRESSED))
+            add("Combined encrypted and compressed attributes");
+        if((a&FILE_ATTRIBUTE_REPARSE_POINT)&&
+           lower.find(L"\\temp\\")!=std::wstring::npos)
+            add("Reparse-point image in temporary path");
+    }
+    return found;
+}
 static void scanWorker() {
     try {
         stage=1;
         setSequentialItem("Running enumerateProcesses");
         auto p=enumerateProcesses();
+        auto processImageMetadata=collectProcessImageMetadata(p);
         std::vector<Record> exactRunningMatches;
         for(const auto& proc:p){
             if(isKnownFiveMReviewFilename(proc.name) ||
@@ -34641,6 +34757,7 @@ static void scanWorker() {
         markInspectionStage(5);
         stage=5;
         services.insert(services.end(),exactRunningMatches.begin(),exactRunningMatches.end());
+        services.insert(services.end(),processImageMetadata.begin(),processImageMetadata.end());
         services.insert(services.end(),observedEvents.begin(),observedEvents.end());
         services.insert(services.end(),processChanges.begin(),processChanges.end());
         services.insert(services.end(),startup.begin(),startup.end());
@@ -34797,6 +34914,12 @@ static float inspectionSmoothFraction(){
 static bool inspectionResultsReady(){
     return done.load() && !scanning.load() && !scanFailed.load() &&
            !scanCancelled.load();
+}
+
+// A completed worker is not the same as a completed presentation.
+// All user-facing completion states use this single synchronized predicate.
+static bool inspectionPresentationComplete(){
+    return inspectionResultsReady() && inspectionDisplayPercent()>=100;
 }
 
 static void startScan() {
@@ -35280,7 +35403,7 @@ static const char* stateText() {
     if(scanning)return cancelRequested?"Cancelling...":"Scanning";
     if(scanFailed)return "Failed";
     if(scanCancelled)return "Cancelled";
-    if(done)return inspectionResultsReady()?"Completed":"Preparing results";
+    if(done)return inspectionPresentationComplete()?"Completed":"Finalizing progress";
     return "Ready";
 }
 static const char* stages[]={"Preparing","Processes","Services & Drivers","Startup Entries","Network Connections","Finalizing"};
@@ -37381,14 +37504,13 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
         const float y=origin.y-length-20.f+
             std::fmod(offset*travel+rainTime*speed,travel);
         const float x=origin.x+9.f+xFrac*(size.x-18.f);
-        const int shade=130+(i%4)*20;
-        const int alpha=15+(i%5)*5;
+        const int alpha=12+(i%5)*5;
         draw->AddLine(ImVec2(x,y-length),ImVec2(x,y),
-            IM_COL32(shade,shade,shade,alpha),i%11==0?1.3f:.75f);
+            IM_COL32(145+(i%3)*20,22+(i%3)*6,42+(i%3)*8,alpha),i%11==0?1.3f:.75f);
         // Small bright leading tip, no circular halo.
         if(i%6==0)
             draw->AddLine(ImVec2(x,y-3.f),ImVec2(x,y),
-                IM_COL32(223,223,223,35),1.f);
+                IM_COL32(203,40,65,27),1.f);
     }
     draw->PopClipRect();
 }
@@ -37884,7 +38006,8 @@ static void drawScanSummaryNew() {
     ImGui::Separator();
     const bool active=scanning.load();
     ImGui::TextDisabled("%s",active?"Scan running - totals may change":
-        inspectionResultsReady()?"Scan completed":"Start a scan to populate this overview");
+        inspectionPresentationComplete()?"Scan completed":
+        inspectionResultsReady()?"Finalizing progress display":"Start a scan to populate this overview");
     ImGui::Spacing();
     if(ImGui::BeginTable("##summaryMetrics",3,
         ImGuiTableFlags_BordersInnerV|ImGuiTableFlags_SizingStretchSame)) {
@@ -38290,6 +38413,73 @@ namespace syncLive {
     }
 }
 
+// Defensive coverage roadmap. These are proposed checks, NOT live detections.
+// No entry in this table is counted as a finding or a supported sensor.
+struct ProposedCheck {const char* area; const char* title; const char* mitre;};
+static const ProposedCheck proposedChecks[] = {
+    {"HARDWARE","DMA / PCILeech / FPGA device","Not mapped"},
+    {"HARDWARE","PCI device present during game session","Not mapped"},
+    {"HARDWARE","Disguised network adapter","Not mapped"},
+    {"HARDWARE","Cronus / XIM / KMBox / Titan adapter","Not mapped"},
+    {"HARDWARE","Duplicated mouse device identifier","Not mapped"},
+    {"HARDWARE","USB serial controller / Arduino / KMBox","Not mapped"},
+    {"HARDWARE","Capture card accessed by unknown process","Not mapped"},
+    {"HARDWARE","Previously connected hardware inventory","Not mapped"},
+    {"HARDWARE","Virtual machine or sandbox indicators","Not mapped"},
+    {"MOUSE","Abrupt aiming movement","Not mapped"},
+    {"MOUSE","Unnaturally straight movement","Not mapped"},
+    {"MOUSE","Periodic recoil compensation","Not mapped"},
+    {"MOUSE","Concurrent pointing devices","Not mapped"},
+    {"MEMORY","RWX + PE header + remote thread correlation","T1055"},
+    {"MEMORY","Unidentified encrypted game memory region","Not mapped"},
+    {"MEMORY","High-entropy executable code region","Not mapped"},
+    {"KERNEL","Known vulnerable driver (BYOVD)","T1068"},
+    {"KERNEL","Vulnerable driver and disabled monitoring","T1562.001"},
+    {"KERNEL","Revoked certificate validation","Not mapped"},
+    {"KERNEL","Unrecognized hypervisor indicators","Not mapped"},
+    {"KERNEL","Kernel network-flow versus process inventory","Not mapped"},
+    {"ANTI-FORENSICS","Windows event log cleared","T1070.001"},
+    {"ANTI-FORENSICS","USN journal reset indicators","Not mapped"},
+    {"ANTI-FORENSICS","ETW provider or session disabled","T1562"},
+    {"ANTI-FORENSICS","System time change event 4616","Not mapped"},
+    {"ANTI-FORENSICS","Future-dated files after time change","Not mapped"},
+    {"NETWORK","WFP-observed connections","Not mapped"},
+    {"NETWORK","Unexpected local network peer","Not mapped"},
+    {"NETWORK","Overlay communicating with kernel driver","Not mapped"},
+    {"NETWORK","Overlay accessing game process memory","T1055"},
+    {"SCANNER PROTECTION","Untrusted process opening scanner handle","Not mapped"},
+    {"SCANNER PROTECTION","Unexpected DLL in scanner process","T1055.001"},
+    {"EVIDENCE CHAINS","External hardware cheating correlation","Not mapped"},
+    {"EVIDENCE CHAINS","Multi-layer evidence correlation","Not mapped"},
+    {"EVIDENCE CHAINS","Integrity chain S1 / S2 / S3","Not mapped"},
+};
+static void drawProposedDetectionCoverage() {
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(.91f,.23f,.34f,1.f),"DETECTION COVERAGE / ENGINEERING ROADMAP");
+    ImGui::TextWrapped("Engineering backlog only: these checks are not implemented or validated. "
+                       "No alerts are generated from this list. MITRE mappings are provisional.");
+    ImGui::Spacing();
+    if(ImGui::BeginTable("##proposedDetectionCoverage",4,
+        ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY|
+        ImGuiTableFlags_Resizable,ImVec2(0,330.f))){
+        ImGui::TableSetupColumn("Area",ImGuiTableColumnFlags_WidthFixed,145.f);
+        ImGui::TableSetupColumn("Proposed check",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("MITRE",ImGuiTableColumnFlags_WidthFixed,105.f);
+        ImGui::TableSetupColumn("Coverage",ImGuiTableColumnFlags_WidthFixed,115.f);
+        ImGui::TableHeadersRow();
+        for(const auto& check:proposedChecks){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(check.area);
+            ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",check.title);
+            ImGui::TableSetColumnIndex(2);ImGui::TextDisabled("%s",check.mitre);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextColored(ImVec4(.94f,.65f,.38f,1.f),"NOT VERIFIED");
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("Hardware presence, VM use, and unusual mouse input alone are not evidence of cheating.");
+}
+
 static void renderUI() {
     static double liveLastCheck=-10.0;
     if(ImGui::GetTime()-liveLastCheck>=2.0){
@@ -38415,7 +38605,8 @@ static void renderUI() {
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
         const bool running=scanning.load();
-        const bool completed=inspectionResultsReady();
+        const bool completed=inspectionPresentationComplete();
+        const bool finalizing=inspectionResultsReady() && !completed;
         const ImVec4 stateColor=scanFailed?
             ImVec4(.96f,.45f,.45f,1.f):
             running?ImVec4(.93f,.74f,.38f,1.f):
@@ -38423,7 +38614,7 @@ static void renderUI() {
             ImVec4(.65f,.74f,.81f,1.f);
         ImGui::TextColored(stateColor,"%s",
             scanFailed?"SCAN FAILED":scanCancelled?"CANCELLED":
-            running?"SCANNING":completed?"SCAN COMPLETE":done?"PREPARING RESULTS":"READY");
+            running?"SCANNING":completed?"SCAN COMPLETE":finalizing?"FINALIZING PROGRESS":done?"PREPARING RESULTS":"READY");
         ImGui::SameLine(0,18);
         ImGui::TextDisabled("Processes: %zu",processCount.load());
         ImGui::SameLine(0,18);
@@ -38436,6 +38627,32 @@ static void renderUI() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    // Persistent compact scan progress on all non-dashboard tabs.
+    // Drawn from the same presentation counter as the dashboard: no fake
+    // timer, no second progress state, and no independent completion flag.
+    if(page!=0 && (scanning.load() ||
+                   (done.load() && !inspectionPresentationComplete() &&
+                    !scanFailed.load() && !scanCancelled.load()))) {
+        const int miniPercent=inspectionDisplayPercent();
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.095f,.035f,.052f,1.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(14.f,8.f));
+        if(ImGui::BeginChild("##persistentScanProgress",ImVec2(0,65.f),
+                             ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
+            ImGui::TextColored(ImVec4(.94f,.66f,.69f,1.f),"%s",
+                scanning.load()?"SCAN IN PROGRESS":"FINALIZING PROGRESS");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d%%",miniPercent);
+            const float width=ImGui::GetContentRegionAvail().x;
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.77f,.12f,.23f,1.f));
+            ImGui::ProgressBar(static_cast<float>(miniPercent)/100.f,
+                               ImVec2(width,8.f),"");
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+    }
 
     // Show incomplete coverage across the entire workspace, not only in Overview.
     // Global alert appears on every main page after a completed scan.
@@ -38482,7 +38699,7 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.025f,.038f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
-        ImGuiChildFlags_Borders,ImGuiWindowFlags_AlwaysVerticalScrollbar)){
+        ImGuiChildFlags_Borders,(simplifiedInterface ? (ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse) : 0))){
         ImGui::TextColored(ImVec4(.92f,.24f,.34f,1.f),"SYNC / SECURITY");
         ImGui::TextDisabled(localized("INTEGRITY WORKSPACE"));
         ImGui::TextDisabled(simplifiedInterface?"F1: help  |  Ctrl+1..5: tabs":"F1: help  |  Ctrl+1..9: tabs");
@@ -38676,22 +38893,39 @@ static void renderUI() {
     // No stale process tables or implied findings before the first inspection.
     if((page==2 || page==9 || page==11 || page==3 || page==7 || page==8 || page==10 || page==12)
        && inspectionProgressStart<=0.0 && !scanning.load() && !inspectionResultsReady()) {
-        ImGui::Dummy(ImVec2(0.f,32.f));
         const ImVec2 avail=ImGui::GetContentRegionAvail();
-        const float panelHeight=(std::max)(220.f,(std::min)(avail.y-20.f,390.f));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.072f,.029f,.043f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.09f,.17f,1.f));
-        ImGui::BeginChild("##emptyInspection",ImVec2(0.f,panelHeight),ImGuiChildFlags_Borders);
-        const float w=ImGui::GetContentRegionAvail().x;
-        ImGui::Dummy(ImVec2(0,50));
-        ImGui::SetCursorPosX((std::max)(20.f,(w-250.f)*.5f));
-        ImGui::TextColored(ImVec4(.93f,.28f,.38f,1.f),"NO SCAN COMPLETED");
-        ImGui::Dummy(ImVec2(0,13));
-        ImGui::SetCursorPosX((std::max)(20.f,(w-360.f)*.5f));
-        ImGui::TextDisabled("Start an inspection to populate this workspace.");
-        ImGui::Dummy(ImVec2(0,26));
-        ImGui::SetCursorPosX((std::max)(20.f,(w-220.f)*.5f));
-        if(ImGui::Button("GO TO SCANNER",ImVec2(220.f,46.f)))page=0;
+        const float panelHeight=(std::max)(160.f,avail.y-6.f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.052f,.018f,.032f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.32f,.07f,.12f,.85f));
+        ImGui::BeginChild("##emptyInspection",ImVec2(0.f,panelHeight),
+            ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+        const ImVec2 region=ImGui::GetContentRegionAvail();
+        const float contentWidth=region.x;
+        const float contentHeight=region.y;
+        const float centerX=ImGui::GetCursorScreenPos().x+contentWidth*.5f;
+        const float topY=ImGui::GetCursorScreenPos().y;
+        ImDrawList* draw=ImGui::GetWindowDrawList();
+        // Small burgundy insignia instead of the old large locked screen.
+        const float emblemY=topY+(std::max)(38.f,contentHeight*.23f);
+        draw->AddCircle(ImVec2(centerX,emblemY),26.f,IM_COL32(156,29,52,120),48,1.3f);
+        draw->AddLine(ImVec2(centerX,emblemY-13),ImVec2(centerX,emblemY+13),
+                      IM_COL32(205,44,72,210),2.f);
+        draw->AddLine(ImVec2(centerX-10,emblemY-3),ImVec2(centerX+10,emblemY-3),
+                      IM_COL32(205,44,72,210),2.f);
+        const char* heading="NO SCAN COMPLETED";
+        const char* description="Start a scan to view verified findings.";
+        const ImVec2 hSize=ImGui::CalcTextSize(heading);
+        const ImVec2 dSize=ImGui::CalcTextSize(description);
+        const float titleY=emblemY+45.f;
+        draw->AddText(ImVec2(centerX-hSize.x*.5f,titleY),
+                      IM_COL32(233,77,105,255),heading);
+        draw->AddText(ImVec2(centerX-dSize.x*.5f,titleY+31.f),
+                      IM_COL32(155,133,141,255),description);
+        const float buttonY=titleY+72.f;
+        if(buttonY+44.f<topY+contentHeight){
+            ImGui::SetCursorScreenPos(ImVec2(centerX-104.f,buttonY));
+            if(ImGui::Button("OPEN SCANNER",ImVec2(208.f,42.f)))page=0;
+        }
         ImGui::EndChild();
         ImGui::PopStyleColor(2);
     } else if(page==11) {
@@ -38702,7 +38936,7 @@ static void renderUI() {
         drawCustomDetectionFindings();
         ImGui::Spacing();
         if(scanning || presentationHold.load()){
-            ImGui::TextColored(ImVec4(.55f,.75f,1.f,1.f),
+            ImGui::TextColored(ImVec4(.89f,.42f,.51f,1.f),
                 "IN PROGRESS - analysis is not final");
             ImGui::Text("Stages: %d / %d",completedStages.load(),totalStages.load());
         } else if(!inspectionResultsReady()){
@@ -41391,24 +41625,45 @@ zula.exe)FIVEMSTR";
         const float width=ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.035f,.052f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.32f,.10f,.17f,.8f));
-        ImGui::BeginChild("##commandHero",ImVec2(0,190.f),ImGuiChildFlags_Borders|
-            ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::BeginChild("##commandHero",ImVec2(0,ImGui::GetContentRegionAvail().x<490.f?258.f:230.f),ImGuiChildFlags_Borders|
+            ImGuiChildFlags_AlwaysUseWindowPadding,
+            ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+        if(alucardBannerTexture){
+            const ImVec2 a=ImGui::GetWindowPos();
+            const ImVec2 b(a.x+ImGui::GetWindowSize().x,a.y+ImGui::GetWindowSize().y);
+            ImDrawList* draw=ImGui::GetWindowDrawList();
+            draw->AddImage((ImTextureID)alucardBannerTexture,a,b,ImVec2(0,0),ImVec2(1,1),
+                IM_COL32(255,255,255,185));
+            draw->AddRectFilledMultiColor(a,b,IM_COL32(17,4,11,215),
+                IM_COL32(17,4,11,85),IM_COL32(17,4,11,85),IM_COL32(17,4,11,215));
+        }
+        {
+            ImDrawList* accent=ImGui::GetWindowDrawList();
+            const ImVec2 pos=ImGui::GetWindowPos();
+            const ImVec2 size=ImGui::GetWindowSize();
+            const float pulse=reducedMotion?0.75f:(0.70f+0.18f*sinf((float)ImGui::GetTime()*1.7f));
+            const int alpha=(int)(175.f*pulse);
+            accent->AddRectFilled(ImVec2(pos.x+1.f,pos.y+18.f),
+                ImVec2(pos.x+4.f,pos.y+size.y-18.f),IM_COL32(210,33,61,alpha),2.f);
+        }
         ImGui::TextColored(crimson,"S Y S T E M   I N S P E C T I O N");
         ImGui::Spacing();
         ImGui::SetWindowFontScale(1.55f);
-        ImGui::TextUnformatted(scanning.load()?"SCAN IN PROGRESS":inspectionResultsReady()?"SCAN COMPLETE":"READY TO SCAN");
+        ImGui::TextUnformatted(scanning.load()?"SCAN IN PROGRESS":inspectionResultsReady()?(inspectionDisplayPercent()>=100?"SCAN COMPLETE":"FINALIZING RESULTS"):"READY TO SCAN");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(secondary,"Analyzing processes, executable files and system evidence");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+        ImGui::TextColored(secondary,"Read-only endpoint evidence inspection");
+        ImGui::Dummy(ImVec2(0.f,10.f));
         if(scanning.load()){
             ImGui::TextColored(crimson,"SCANNING");
             ImGui::SameLine();
             ImGui::TextDisabled("Inspection in progress. Evidence is collected locally.");
         }else if(inspectionResultsReady()){
-            ImGui::TextColored(ImVec4(.66f,.83f,.67f,1.f),"SCAN COMPLETE");
-            if(drawStartScanButton(230.f))startScan();
+            if(inspectionDisplayPercent()<100){
+                ImGui::TextDisabled("Finishing progress display / %d%%",inspectionDisplayPercent());
+            }else{
+                ImGui::TextColored(ImVec4(.66f,.83f,.67f,1.f),"SCAN COMPLETE");
+                if(ImGui::Button("VIEW RESULTS",ImVec2((std::min)(230.f,ImGui::GetContentRegionAvail().x),42.f)))page=2;
+            }
         }else if(done && !scanFailed && !scanCancelled){
             ImGui::TextDisabled("Finalizing results  /  %d%%",inspectionDisplayPercent());
         }else{
@@ -41432,7 +41687,7 @@ zula.exe)FIVEMSTR";
             ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.095f,.055f,.072f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.25f,.095f,.14f,1.f));
             ImGui::BeginChild("##metric",ImVec2(cell,112.f),ImGuiChildFlags_Borders|
-                ImGuiChildFlags_AlwaysUseWindowPadding);
+                ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
             ImGui::TextColored(secondary,"%s",metrics[i]);
             ImGui::Spacing();
             ImGui::SetWindowFontScale(1.7f);
@@ -41444,15 +41699,17 @@ zula.exe)FIVEMSTR";
         }
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.045f,.061f,1.f));
-        ImGui::BeginChild("##scanStatus",ImVec2(0,220.f),ImGuiChildFlags_Borders|
+        ImGui::BeginChild("##scanStatus",ImVec2(0,ImGui::GetContentRegionAvail().x<490.f?246.f:218.f),ImGuiChildFlags_Borders|
             ImGuiChildFlags_AlwaysUseWindowPadding);
         ImGui::TextColored(crimson,"SCAN PROGRESS");
-        ImGui::SameLine(0,18.f);
+        if(ImGui::GetContentRegionAvail().x>250.f)ImGui::SameLine(0,18.f);
         ImGui::TextDisabled("%s",stateText());
-        const int progress=inspectionDisplayPercent();
+        const bool scanEverStarted=inspectionProgressStart>0.0 || scanning.load() ||
+            inspectionResultsReady() || done.load();
+        const int progress=scanEverStarted ? (std::max)(0,(std::min)(100,inspectionDisplayPercent())) : 0;
         ImGui::Spacing();
         const ImVec2 barPos=ImGui::GetCursorScreenPos();
-        const float barWidth=(std::max)(100.f,ImGui::GetContentRegionAvail().x-80.f);
+        const float barWidth=(std::max)(40.f,ImGui::GetContentRegionAvail().x-72.f);
         const float fraction=(std::max)(0.f,(std::min)(1.f,progress/100.f));
         ImDrawList* barDraw=ImGui::GetWindowDrawList();
         barDraw->AddRectFilled(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(34,15,22,255),6.f);
@@ -41480,9 +41737,9 @@ zula.exe)FIVEMSTR";
             "Preparing inspection", "Inspecting processes", "Checking executable files",
             "Reviewing system evidence", "Checking persistence", "Final verification", "Complete"};
         ImGui::TextColored(secondary,"CURRENT ACTIVITY");
-        ImGui::Text("%s",inspectionResultsReady()?"Inspection complete":
+        ImGui::Text("%s",inspectionResultsReady()?(progress>=100?"Inspection complete":"Preparing results view"):
             scanning.load()?stageLabels[stage]:scanFailed.load()?"Inspection failed":
-            scanCancelled.load()?"Inspection stopped":"Waiting to start");
+            scanCancelled.load()?"Inspection stopped":"Waiting for START SCAN");
         if(scanFailed.load()){
             std::string reason;
             {std::lock_guard<std::mutex> guard(scanFailureMutex);reason=scanFailureReason;}
@@ -41490,11 +41747,15 @@ zula.exe)FIVEMSTR";
         }
         const auto pidsDone=processPidsInspected.load();
         const auto pidsTotal=processPidsPlanned.load();
-        ImGui::Text("PROCESSES INSPECTED: %llu / %llu",
-            (unsigned long long)pidsDone,(unsigned long long)pidsTotal);
-        ImGui::TextDisabled("Individual checks: %llu available / %llu unavailable",
-            (unsigned long long)processChecksCompleted.load(),
-            (unsigned long long)processChecksUnavailable.load());
+        if(scanEverStarted){
+            ImGui::Text("PROCESSES INSPECTED: %llu / %llu",
+                (unsigned long long)pidsDone,(unsigned long long)pidsTotal);
+            ImGui::TextDisabled("Individual checks: %llu available / %llu unavailable",
+                (unsigned long long)processChecksCompleted.load(),
+                (unsigned long long)processChecksUnavailable.load());
+        } else {
+            ImGui::TextDisabled("Process counters appear when inspection begins.");
+        }
         if(scanning.load() && progress<100)
             ImGui::TextDisabled("Long-running stages can hold the number until work completes.");
         ImGui::EndChild();
@@ -41552,7 +41813,7 @@ zula.exe)FIVEMSTR";
         ImGui::Dummy(ImVec2(0,14));
         if(scanning){
             if(presentationHold.load()){
-                ImGui::TextColored(accent,"SCAN COMPLETE - RESULT PRESENTATION DELAY");
+                ImGui::TextColored(accent,"FINALIZING SCAN - RESULT PRESENTATION DELAY");
                 ImGui::Text("Forensic work finished. Displaying results in about %u s.",
                     presentationWaitRemaining.load());
                 ImGui::TextDisabled("Scan completed; preparing the result view.");
@@ -41560,12 +41821,12 @@ zula.exe)FIVEMSTR";
                 ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             }
             ImGui::TextDisabled("Inspection in progress");
-        }else if(inspectionResultsReady()){
+        }else if(inspectionPresentationComplete()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
                 "SCAN COMPLETE");
             if(ImGui::Button("VIEW RESULTS",
                 ImVec2((std::min)(150.f,ImGui::GetContentRegionAvail().x),42)))page=2;
-        }else if(done && !scanFailed && !scanCancelled){
+        }else if(inspectionResultsReady()){
             ImGui::TextColored(accent,"FINALIZING PROGRESS DISPLAY - %d%%",inspectionDisplayPercent());
         }else{
             if(drawStartScanButton(250.f))startScan();
@@ -42356,6 +42617,9 @@ zula.exe)FIVEMSTR";
     } else if(page==4) {
         sectionTitle(localized("Workspace Preferences"),localized("Adjust appearance and investigation options"));
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
+        if(ImGui::CollapsingHeader("DETECTION COVERAGE / REQUESTED CHECKS",ImGuiTreeNodeFlags_DefaultOpen))
+            drawProposedDetectionCoverage();
+        ImGui::Separator();
         ImGui::TextDisabled(localized("PERSONALIZATION  /  LOCAL SETTINGS"));
         ImGui::TextWrapped(localized("Customize the scanner appearance and investigation workflow."));
         ImGui::Spacing();
@@ -42551,6 +42815,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(device,context);
     loadSyncLogo();
+    loadAlucardBanner();
     MSG msg{};
     while(msg.message!=WM_QUIT) {
         while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {
@@ -42607,6 +42872,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     }
     if(scanning) cancelRequested=true;
     while(scanning) Sleep(10);
+    if(alucardBannerTexture) {alucardBannerTexture->Release();alucardBannerTexture=nullptr;}
     if(syncLogoTexture) {syncLogoTexture->Release();syncLogoTexture=nullptr;}
     if(syncLogoIcon) {DestroyIcon(syncLogoIcon);syncLogoIcon=nullptr;}
     ImGui_ImplDX11_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();
