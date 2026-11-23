@@ -17814,7 +17814,7 @@ static void inspectWER(Collector& out) {
     for(const auto& root:roots) {
         if(out.stopped() || inspected>=160)break;
         std::error_code ec;
-        if(!fs::is_directory(root,ec))continue;
+        if(!fs::is_directory(root,ec)){completeSnapshot=false;continue;}
         for(fs::directory_iterator it(root,
             fs::directory_options::skip_permission_denied,ec),end;
             !ec && it!=end && inspected<160 && !out.stopped();
@@ -34330,12 +34330,279 @@ static std::vector<Record> collectProcessImageMetadata(
     }
     return found;
 }
+// Read-only integrity review of browser executable files. No browser profiles,
+// history, cookies, passwords, tabs or browsing activity are accessed.
+static std::vector<Record> inspectBrowserExecutableIntegrity(
+    const std::vector<Process>& processes) {
+    std::vector<Record> out;
+    std::unordered_set<std::wstring> inspected;
+    struct Candidate { std::wstring path; std::string product; };
+    std::vector<Candidate> candidates;
+    auto add = [&](const std::wstring& path, const char* product) {
+        if(path.empty())return;
+        std::wstring key=path;
+        std::transform(key.begin(),key.end(),key.begin(),
+            [](wchar_t c){return (wchar_t)towlower(c);});
+        if(inspected.insert(key).second)candidates.push_back({path,product});
+    };
+    for(const auto& proc:processes) {
+        std::wstring name=proc.name;
+        std::transform(name.begin(),name.end(),name.begin(),
+            [](wchar_t c){return (wchar_t)towlower(c);});
+        if(name==L"chrome.exe")add(proc.path,"Chrome");
+        else if(name==L"msedge.exe")add(proc.path,"Edge");
+        else if(name==L"firefox.exe")add(proc.path,"Firefox");
+    }
+    struct Root {const wchar_t* env;};
+    for(const Root root: {Root{L"PROGRAMFILES"},Root{L"PROGRAMFILES(X86)"},Root{L"LOCALAPPDATA"}}) {
+        wchar_t buf[32768]{};
+        const DWORD n=GetEnvironmentVariableW(root.env,buf,32768);
+        if(n==0 || n>=32768)continue;
+        const fs::path base(buf);
+        add((base/L"Google/Chrome/Application/chrome.exe").wstring(),"Chrome");
+        add((base/L"Microsoft/Edge/Application/msedge.exe").wstring(),"Edge");
+        add((base/L"Mozilla Firefox/firefox.exe").wstring(),"Firefox");
+    }
+    size_t checked=0;
+    for(const auto& candidate:candidates) {
+        if(cancelRequested.load() || checked>=24)break;
+        std::error_code ec;
+        const fs::path path(candidate.path);
+        if(!fs::is_regular_file(path,ec) || ec)continue;
+        ++checked;
+        const std::string signature=signatureStatus(candidate.path);
+        const std::string location=utf8(candidate.path);
+        const auto size=fs::file_size(path,ec);
+        const std::string context=" | Path: "+location+
+            " | Signature: "+signature+
+            (ec?"":" | Size: "+std::to_string(size)+" bytes")+
+            " | Read-only inspection; modification cannot be established without a trusted baseline.";
+        if(signature=="Invalid digest") {
+            out.push_back({"Browser File Integrity",candidate.product+" executable",
+                "SUSPECT | Executable signature digest failed validation"+context});
+        } else if(signature=="Unsigned" ||
+                  signature=="Untrusted certificate" ||
+                  signature=="Expired certificate") {
+            out.push_back({"Browser File Integrity",candidate.product+" executable",
+                "SUSPECT | Browser executable requires signature review"+context});
+        } else if(signature.find("Valid")!=0) {
+            out.push_back({"Browser File Integrity",candidate.product+" executable",
+                "INFO | Browser signature verification unavailable or inconclusive"+context});
+        }
+        // A browser binary in an unusual folder merits review, not a cheat verdict.
+        std::wstring lower=candidate.path;
+        std::transform(lower.begin(),lower.end(),lower.begin(),
+            [](wchar_t c){return (wchar_t)towlower(c);});
+        if(lower.find(L"\\temp\\")!=std::wstring::npos ||
+           lower.find(L"\\downloads\\")!=std::wstring::npos ||
+           lower.find(L"\\$recycle.bin\\")!=std::wstring::npos) {
+            out.push_back({"Browser File Integrity",candidate.product+" unusual location",
+                "SUSPECT | Browser-named executable located in a temporary or download folder"+context});
+        }
+    }
+    out.push_back({"Scan Coverage","Browser executable integrity",
+        "INFO | Checked "+std::to_string(checked)+
+        " Chrome/Edge/Firefox executable files (maximum 24). "
+        "No browser profile data was accessed. Signature checks are offline "
+        "and do not verify certificate revocation. No trusted file baseline "
+        "was supplied, so historical modification cannot be confirmed."});
+    return out;
+}
+
+// Recursive local executable/script change baseline in selected user folders.
+// No browser profiles, personal documents, or whole-disk traversal.
+static std::vector<Record> inspectTrackedFileChanges() {
+    namespace fs=std::filesystem;
+    struct State {uintmax_t size=0; long long modified=0; uint64_t digest=0; bool hashed=false;};
+    std::vector<Record> findings;
+    std::map<std::wstring,State> current,previous;
+    auto lower=[](std::wstring x){for(auto& c:x)c=(wchar_t)towlower(c);return x;};
+    auto eligible=[&](const fs::path& f) {
+        auto e=lower(f.extension().wstring());
+        return e==L".exe"||e==L".dll"||e==L".bat"||e==L".cmd"||
+               e==L".ps1"||e==L".sys"||e==L".scr"||e==L".com";
+    };
+    wchar_t local[MAX_PATH]={},home[MAX_PATH]={};
+    GetEnvironmentVariableW(L"LOCALAPPDATA",local,MAX_PATH);
+    GetEnvironmentVariableW(L"USERPROFILE",home,MAX_PATH);
+    std::vector<fs::path> roots;
+    if(home[0]){
+        roots.push_back(fs::path(home)/L"Downloads");
+        roots.push_back(fs::path(home)/L"Desktop");
+    }
+    if(local[0]) roots.push_back(fs::path(local)/L"Temp");
+    // Store the baseline in the user profile rather than beside the executable.
+    // This works even when the installation folder is read-only.
+    fs::path manifest = local[0]
+        ? fs::path(local)/L"sync_file_baseline.tsv"
+        : fs::temp_directory_path()/L"sync_file_baseline.tsv";
+    auto digestFile=[](const fs::path& f,uint64_t& hash)->bool {
+        std::ifstream in(f,std::ios::binary);
+        if(!in)return false;
+        hash=14695981039346656037ULL;
+        char buf[32768];
+        while(in && !cancelRequested.load()){
+            in.read(buf,sizeof(buf));
+            const auto count=in.gcount();
+            for(std::streamsize i=0;i<count;++i){
+                hash^=(unsigned char)buf[i];
+                hash*=1099511628211ULL;
+            }
+        }
+        return in.eof() && !cancelRequested.load();
+    };
+    // Recursive scan; no arbitrary file-count or size cap. Excludes directory symlinks.
+    bool completeSnapshot=true;
+    for(const auto& root:roots){
+        std::error_code ec;
+        if(!fs::exists(root,ec))continue;
+        if(!fs::is_directory(root,ec)){completeSnapshot=false;continue;}
+        for(fs::recursive_directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;
+            !ec&&it!=end&& !cancelRequested.load();it.increment(ec)){
+            if(!it->is_regular_file(ec)||!eligible(it->path()))continue;
+            auto path=it->path();
+            auto size=it->file_size(ec);if(ec)continue;
+            auto stamp=it->last_write_time(ec);if(ec)continue;
+            State st;st.size=size;
+            st.modified=std::chrono::duration_cast<std::chrono::seconds>(
+                stamp.time_since_epoch()).count();
+            st.hashed=digestFile(path,st.digest);
+            if(!st.hashed){completeSnapshot=false;continue;}
+            current[lower(path.wstring())]=st;
+        }
+        if(ec||cancelRequested.load())completeSnapshot=false;
+    }
+    {
+        std::wifstream in(manifest);
+        // Paths are quoted to preserve spaces and tabs in names.
+        std::wstring path;State st;int hashed;
+        while(in>>std::quoted(path)>>st.size>>st.modified>>st.digest>>hashed){
+            st.hashed=(hashed!=0);previous[path]=st;
+        }
+    }
+    if(!previous.empty()&&completeSnapshot&&!cancelRequested.load()){
+        std::set<std::wstring> deleted,created;
+        for(const auto& [path,st]:previous)
+            if(!current.count(path))deleted.insert(path);
+        for(const auto& [path,st]:current)
+            if(!previous.count(path))created.insert(path);
+        // Indexed matching avoids O(deleted * created) comparisons on large scans.
+        // Only a unique matching fingerprint is considered a possible rename.
+        using Fingerprint=std::pair<uintmax_t,uint64_t>;
+        std::map<Fingerprint,std::vector<std::wstring>> createdByFingerprint;
+        for(const auto& now:created){
+            const auto& b=current.at(now);
+            if(b.hashed)createdByFingerprint[{b.size,b.digest}].push_back(now);
+        }
+        std::set<std::wstring> paired,renamedOld;
+        for(const auto& old:deleted){
+            const auto& a=previous.at(old);
+            if(!a.hashed)continue;
+            auto it=createdByFingerprint.find({a.size,a.digest});
+            if(it==createdByFingerprint.end()||it->second.size()!=1)continue;
+            const auto& match=it->second.front();
+            if(!paired.insert(match).second)continue;
+            renamedOld.insert(old);
+            findings.push_back({"File Change Review",utf8(old),
+                "SUSPECT - REVIEW ONLY | Possible rename/move to "+utf8(match)+
+                " | Matching size and fingerprint; not proof of cheating."});
+        }
+        for(const auto& old:deleted){
+            if(!renamedOld.count(old))
+                findings.push_back({"File Change Review",utf8(old),
+                    "SUSPECT - REVIEW ONLY | Previously tracked file no longer present. "
+                    "Could be deletion, move, or unavailable storage; not proof of cheating."});
+        }
+        for(const auto& now:created){
+                const auto& b=current.at(now);
+                if(b.hashed&&a.size==b.size&&a.digest==b.digest){
+                    match=now;++count;
+                }
+            }
+            if(count==1&&!paired.count(match)){
+                findings.push_back({"File Change Review",utf8(old),
+                    "SUSPECT - REVIEW ONLY | Possible rename/move to "+utf8(match)+
+                    " | Identical size and content fingerprint; not proof of cheating."});
+                paired.insert(match);
+            }
+        }
+        for(const auto& old:deleted){
+            bool renamed=false;
+            for(const auto& r:findings)
+                if(r.name==utf8(old)){renamed=true;break;}
+            if(!renamed)findings.push_back({"File Change Review",utf8(old),
+                "SUSPECT - REVIEW ONLY | Previously tracked file no longer present. "
+                "Could be deletion, move, or unavailable storage; not proof of cheating."});
+        }
+        for(const auto& now:created){
+            if(paired.count(now))continue;
+            findings.push_back({"File Change Review",utf8(now),
+                "SUSPECT - REVIEW ONLY | Newly observed executable/script file. "
+                "Not proof of cheating."});
+        }
+        for(const auto& [path,b]:current){
+            auto it=previous.find(path);if(it==previous.end())continue;
+            const auto& a=it->second;
+            if(a.size!=b.size){
+                const char* kind=b.size==0?"Zero-byte file":
+                    b.size<a.size?"Truncated file":"Extended file";
+                findings.push_back({"File Change Review",utf8(path),
+                    std::string("SUSPECT - REVIEW ONLY | ")+kind+
+                    " | Previous bytes: "+std::to_string(a.size)+
+                    " | Current bytes: "+std::to_string(b.size)+
+                    " | File changes alone do not establish cheating."});
+            }else if(a.hashed&&b.hashed&&a.digest!=b.digest){
+                findings.push_back({"File Change Review",utf8(path),
+                    "SUSPECT - REVIEW ONLY | Content modified without size change. "
+                    "Fingerprint differs; not proof of cheating."});
+            }else if(a.modified!=b.modified){
+                findings.push_back({"File Change Review",utf8(path),
+                    "SUSPECT - REVIEW ONLY | Modification timestamp changed. "
+                    "Content may be identical; not proof of cheating."});
+            }
+        }
+    }
+    if(!cancelRequested.load()&&completeSnapshot){
+        const fs::path tmp=manifest.wstring()+L".tmp";
+        std::wofstream out(tmp,std::ios::trunc);
+        if(out){
+            for(const auto& [path,st]:current)
+                out<<std::quoted(path)<<L' '<<st.size<<L' '<<st.modified<<L' '
+                   <<st.digest<<L' '<<(st.hashed?1:0)<<L'\n';
+            out.flush();
+            const bool saved=out.good();
+            out.close();
+            std::error_code ec;
+            if(saved){
+                // Preserve previous baseline until replacement succeeds.
+                fs::path backup=manifest.wstring()+L".bak";
+                fs::remove(backup,ec);ec.clear();
+                if(fs::exists(manifest,ec)){
+                    ec.clear();fs::rename(manifest,backup,ec);
+                }
+                if(!ec){
+                    fs::rename(tmp,manifest,ec);
+                    if(ec){
+                        std::error_code recovery;
+                        if(fs::exists(backup,recovery))fs::rename(backup,manifest,recovery);
+                    }else{
+                        std::error_code cleanup;fs::remove(backup,cleanup);
+                    }
+                }
+            }
+            if(ec||!saved){std::error_code cleanup;fs::remove(tmp,cleanup);}
+        }
+    }
+    return findings;
+}
 static void scanWorker() {
     try {
         stage=1;
         setSequentialItem("Running enumerateProcesses");
         auto p=enumerateProcesses();
         auto processImageMetadata=collectProcessImageMetadata(p);
+        auto browserIntegrity=inspectBrowserExecutableIntegrity(p);
+        auto trackedFileChanges=inspectTrackedFileChanges();
         std::vector<Record> exactRunningMatches;
         for(const auto& proc:p){
             if(isKnownFiveMReviewFilename(proc.name) ||
@@ -34758,6 +35025,8 @@ static void scanWorker() {
         stage=5;
         services.insert(services.end(),exactRunningMatches.begin(),exactRunningMatches.end());
         services.insert(services.end(),processImageMetadata.begin(),processImageMetadata.end());
+        services.insert(services.end(),browserIntegrity.begin(),browserIntegrity.end());
+        services.insert(services.end(),trackedFileChanges.begin(),trackedFileChanges.end());
         services.insert(services.end(),observedEvents.begin(),observedEvents.end());
         services.insert(services.end(),processChanges.begin(),processChanges.end());
         services.insert(services.end(),startup.begin(),startup.end());
@@ -36306,7 +36575,7 @@ static void drawServiceReviews() {
     if(ImGui::Button("Refresh service states"))
         serviceReviews=inspectServiceStates();
     ImGui::SameLine();
-    ImGui::TextDisabled("Stopped automatic-start services are review candidates, not confirmed threats.");
+    ImGui::TextDisabled("Stopped services are displayed as observed evidence, not confirmed cheats.");
     ImGui::Dummy(ImVec2(0,6));
     ImGui::TextUnformatted(XOR_STR("SEARCH  /").c_str());
     ImGui::SameLine();
@@ -36332,9 +36601,14 @@ static void drawServiceReviews() {
         std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return (char)std::tolower(c);});
         return value.find(searchLower)!=std::string::npos;
     };
+    size_t stoppedCount=0;
+    for(const auto& item:serviceReviews)
+        if(item.currentState==SERVICE_STOPPED)++stoppedCount;
+    ImGui::TextColored(ImVec4(.89f,.52f,.58f,1.f),
+        "STOPPED SERVICES OBSERVED: %zu  |  HISTORICAL / STATE EVIDENCE",stoppedCount);
     size_t visible=0;
     for(const auto& item:serviceReviews)if(matchesService(item))++visible;
-    ImGui::TextDisabled("%zu of %zu services shown  |  Search applies to this table only.",
+    ImGui::TextDisabled("%zu of %zu services shown  |  Stopped = observed state, not confirmed detection.",
                         visible,serviceReviews.size());
     if(ImGui::BeginTable("serviceReviewTable",5,ImGuiTableFlags_BordersInnerH|
         ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,
@@ -36401,24 +36675,25 @@ static void drawServiceReviews() {
 static bool expandedFindingsTable=true;
 static int processViewFilter=0; // 0 all, 1 suspect, 2 detected, 3 no indicators
 static void processTable(float height) {
+    if(processViewFilter!=1 && processViewFilter!=2)processViewFilter=1;
     ImGui::TextDisabled("%s",XOR_STR("PROCESS TRIAGE").c_str());
     ImGui::SameLine();
     ImGui::TextColored(orange(),"READ-ONLY");
     ImGui::Dummy(ImVec2(0,3));
-    const char* filters[]={"All processes","Suspect","Detected","No indicators"};
-    for(int f=0;f<4;f++) {
+    const char* filters[]={"Suspect","Detected"};
+    for(int f=0;f<2;f++) {
         ImGui::PushID(f);
-        const bool active=processViewFilter==f;
+        const bool active=processViewFilter==(f+1);
         if(active) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                 ImVec4(orange().x*.28f,orange().y*.28f,orange().z*.28f,1));
             ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.000f,1.000f,1.000f,1));
         }
-        if(ImGui::Button(filters[f],ImVec2(f==0?148.f:f==3?152.f:120.f,36.f)))
-            processViewFilter=f;
+        if(ImGui::Button(filters[f],ImVec2(130.f,36.f)))
+            processViewFilter=f+1;
         if(active)ImGui::PopStyleColor(2);
         ImGui::PopID();
-        if(f<3)ImGui::SameLine(0,7);
+        if(f<1)ImGui::SameLine(0,7);
     }
     ImGui::Dummy(ImVec2(0,6));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.76f);
@@ -36451,9 +36726,9 @@ static void processTable(float height) {
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
         for(const auto& p:processes) {
-            if(processViewFilter==1 && !p.suspicious)continue;
+            if(!p.suspicious)continue;
             if(processViewFilter==2)continue; // No verified process-level detections in this model.
-            if(processViewFilter==3 && p.suspicious)continue;
+            
             if(!showUnavailable&&(!p.path.empty() && p.path[0]==L'['))continue;
             const std::string name=utf8(p.name),path=utf8(p.path);
             std::string combined=name+" "+path+" "+p.assessment,q=searchInput;
@@ -36623,6 +36898,73 @@ static void drawEvidenceDetails() {
     ImGui::TextDisabled("%s",XOR_STR("Evidence is observational; an indicator alone does not confirm a threat.").c_str());
     ImGui::End();
 }
+// Unified category-specific findings: same source/classifier as the RESULTS verdict.
+// All matching records are listed, with no arbitrary preview cap.
+static void syncCategoryFindings(int section) {
+    static char search[4][160]{};
+    const int index=section==0?0:section==1?1:section==4?2:3;
+    std::vector<Record> matches;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for(const auto& r:records){
+            if(!isDetectedRecord(r) && !isSuspectRecord(r))continue;
+            std::string category=r.category, content=r.category+" "+r.name+" "+r.detail;
+            std::transform(category.begin(),category.end(),category.begin(),[](unsigned char c){return (char)std::tolower(c);});
+            std::transform(content.begin(),content.end(),content.begin(),[](unsigned char c){return (char)std::tolower(c);});
+            const bool process=(category.find("process")!=std::string::npos ||
+                category.find("execution")!=std::string::npos ||
+                category.find("running")!=std::string::npos);
+            const bool file=(category.find("file")!=std::string::npos ||
+                category.find("pe review")!=std::string::npos ||
+                category.find("signature")!=std::string::npos ||
+                category.find("dll")!=std::string::npos ||
+                category.find("artifact: exe")!=std::string::npos ||
+                category.find("artifact: dll")!=std::string::npos);
+            const bool advanced=!process && !file;
+            if(section==0 && !process)continue;
+            if(section==4 && !file)continue;
+            if(section==8 && !advanced)continue;
+            // Evidence is the complete flagged evidence list, including uncategorized records.
+            std::string query=search[index];
+            std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
+            if(!query.empty() && content.find(query)==std::string::npos)continue;
+            matches.push_back(r);
+        }
+    }
+    ImGui::Text("FLAGGED FINDINGS  %zu",matches.size());
+    ImGui::SameLine();ImGui::TextDisabled("DETECTED / SUSPECT");
+    ImGui::SetNextItemWidth((std::min)(400.f,ImGui::GetContentRegionAvail().x));
+    ImGui::InputTextWithHint(("##syncFindingsSearch"+std::to_string(index)).c_str(),
+        "Search findings...",search[index],sizeof(search[index]));
+    if(matches.empty()){
+        ImGui::Spacing();ImGui::TextDisabled("No flagged findings in this section.");
+        ImGui::TextDisabled("Only classified findings appear here; this is not a clean verdict.");
+        return;
+    }
+    if(ImGui::BeginTable(("##syncFindingsTable"+std::to_string(index)).c_str(),4,
+        ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
+        ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))){
+        ImGui::TableSetupScrollFreeze(0,1);
+        ImGui::TableSetupColumn("Status",ImGuiTableColumnFlags_WidthFixed,92.f);
+        ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,155.f);
+        ImGui::TableSetupColumn("Finding",ImGuiTableColumnFlags_WidthStretch,1.4f);
+        ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,100.f);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;clipper.Begin((int)matches.size());
+        while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i){
+            const auto& r=matches[(size_t)i];
+            ImGui::TableNextRow();tintEvidenceRow(r);
+            ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(evidenceLabel(r));
+            ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
+            ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.name.c_str());
+            ImGui::TableSetColumnIndex(3);ImGui::PushID(i);
+            if(ImGui::SmallButton("VIEW"))openEvidenceDetails(r.category,r.name,r.detail);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+}
+
 static void recordsTable() {
     if(ImGui::BeginTable("records",4,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
         ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))) {
@@ -36633,7 +36975,10 @@ static void recordsTable() {
         ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,120.f);
         ImGui::TableHeadersRow();
         std::lock_guard<std::mutex> lock(dataMutex);
+        size_t visibleFindings=0;
         for(const auto& r:records) {
+            if(!isDetectedRecord(r) && !isSuspectRecord(r))continue;
+            ++visibleFindings;
             ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
             tintEvidenceRow(r);
             ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(r.category.c_str());
@@ -36642,6 +36987,13 @@ static void recordsTable() {
             ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
             if(ImGui::Button("DETAILS",ImVec2(105,30)))openEvidenceDetails(r.category,r.name,r.detail);
             ImGui::PopID();
+        }
+        if(!visibleFindings){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextDisabled("NO SUSPECT OR DETECTED FINDINGS");
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextDisabled("No flagged records in the current scan. This is not a clean verdict.");
         }
         ImGui::EndTable();
     }
@@ -38066,7 +38418,7 @@ static void drawScanSummaryNew() {
 
 static void drawReviewQueueNew() {
     ImGui::TextUnformatted("EVIDENCE REVIEW QUEUE");
-    ImGui::TextDisabled("Read-only evidence review. A missing check is never a clean result.");
+    ImGui::TextDisabled("Suspect and detected findings only. A missing check is never a clean result.");
     static char filter[160]{};
     ImGui::SetNextItemWidth((std::min)(420.f,ImGui::GetContentRegionAvail().x - 80.f));
     ImGui::InputTextWithHint("##reviewFilter","Search category, name or detail...",filter,sizeof(filter));
@@ -38085,6 +38437,7 @@ static void drawReviewQueueNew() {
         std::lock_guard<std::mutex> lock(dataMutex);
         snapshot.reserve((std::min)(limit,records.size()));
         for(const auto& r:records) {
+            if(!isDetectedRecord(r) && !isSuspectRecord(r))continue;
             if(!term.empty() && lower(r.category).find(term)==std::string::npos &&
                lower(r.name).find(term)==std::string::npos &&
                lower(r.detail).find(term)==std::string::npos) continue;
@@ -41971,7 +42324,7 @@ zula.exe)FIVEMSTR";
     } else if(page==2) {
         if(!expandedFindingsTable){
             sectionTitle("Investigation Results",
-                         "Process inventory with explainable path-based review indicators.");
+                         "Only suspicious or detected findings; routine inventory is hidden.");
             ImGui::TextDisabled("%zu processes   |   %zu records   |   %zu files",
                               processCount.load(),recordCount.load(),fileCount.load());
         }
@@ -41981,20 +42334,20 @@ zula.exe)FIVEMSTR";
         ImGui::SameLine();
         ImGui::TextDisabled("%zu processes | %zu records",
                             processCount.load(),recordCount.load());
-        ImGui::TextDisabled("Six investigation areas  |  Read-only evidence  |  Manual review");
+        ImGui::TextDisabled("Flagged findings only  |  Read-only evidence  |  Manual review");
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(15.f,9.f));
         static int syncCategory = 0;
             // Six focused workspaces; legacy collection engines remain intact.
-            constexpr int syncVisibleCount = 6;
-            constexpr int syncVisibleIds[syncVisibleCount] = {0,1,4,7,8,10};
+            constexpr int syncVisibleCount = 5;
+            constexpr int syncVisibleIds[syncVisibleCount] = {0,1,4,8,10};
             const char* syncLabels[] = {
-                "Dashboard & Processes", "Evidence", "EXE / DLL Integrity",
-                "Persistence", "Advanced Detection", "Results & Review"
+                "Processes", "Evidence", "File Integrity",
+                "Advanced", "Results"
             };
             const char* syncDescriptions[] = {
-                "Processes and contextual findings", "Collected evidence and provenance",
-                "SHA-256, signatures and PE analysis", "Startup and autorun inspection",
-                "Read-only executable, module and system audits", "Findings requiring verification"
+                "Flagged processes", "Suspicious and detected evidence",
+                "Hashes, signatures and PE checks", "Additional inspection tools",
+                "Findings requiring review"
             };
             static int syncVisibleCategory = 0;
             if(syncVisibleCategory<0 || syncVisibleCategory>=syncVisibleCount)syncVisibleCategory=0;
@@ -42007,14 +42360,22 @@ zula.exe)FIVEMSTR";
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(8.f,9.f));
             ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.073f,.031f,.046f,1.f));
-            ImGui::TextColored(syncBlue,"INVESTIGATION WORKSPACE");
-            ImGui::TextDisabled("Choose a category to review the evidence collected by the scanner.");
+            ImGui::TextColored(syncBlue,"SCAN RESULTS");
+            ImGui::TextDisabled("Review scan findings and supporting details.");
             if(ImGui::BeginTabBar("##syncWorkspaceTabs",ImGuiTabBarFlags_FittingPolicyScroll)) {
                 for(int i=0;i<syncVisibleCount;++i) {
-                    if(ImGui::BeginTabItem(syncLabels[i])) {
+                    // Results is the primary decision workspace, visually emphasized.
+                    if(i==4){
+                        ImGui::PushStyleColor(ImGuiCol_Tab,ImVec4(.49f,.075f,.13f,1.f));
+                        ImGui::PushStyleColor(ImGuiCol_TabHovered,ImVec4(.73f,.12f,.21f,1.f));
+                        ImGui::PushStyleColor(ImGuiCol_TabSelected,ImVec4(.69f,.09f,.18f,1.f));
+                    }
+                    const bool opened=ImGui::BeginTabItem(i==4?"RESULTS  *":syncLabels[i]);
+                    if(opened){
                         syncVisibleCategory=i;
                         ImGui::EndTabItem();
                     }
+                    if(i==4)ImGui::PopStyleColor(3);
                 }
                 ImGui::EndTabBar();
             }
@@ -42022,7 +42383,7 @@ zula.exe)FIVEMSTR";
             syncCategory=syncVisibleIds[syncVisibleCategory];
             ImGui::BeginGroup();
             ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),true);
-            ImGui::TextColored(syncBlue,"SYNC / ANALYSIS CENTER");
+            ImGui::TextColored(syncBlue,"SYNC / RESULTS");
             ImGui::SameLine();
             ImGui::TextDisabled("SECTION %02d / %02d",syncVisibleCategory+1,syncVisibleCount);
             ImGui::Separator();
@@ -42039,18 +42400,18 @@ zula.exe)FIVEMSTR";
             {
             if(syncCategory==0) {
                 ImGui::TextColored(accent,"PROCESSES & ALERTS");
-                ImGui::TextDisabled("Processos identificados e indicadores que precisam de revisao.");
+                ImGui::TextDisabled("Only flagged processes appear here.");
                 ImGui::Separator();
                 if(!expandedFindingsTable)
                     ImGui::TextDisabled("Path-based indicators only; warnings are not confirmed threats.");
-                processTable(-1.f);
+                syncCategoryFindings(0);
                 /* sidebar section end */
             }
             if(syncCategory==1){
                 ImGui::TextColored(accent,"EVIDENCE INSPECTION");
-                ImGui::TextDisabled("Examine evidencias coletadas e seus detalhes.");
+                ImGui::TextDisabled("Review collected evidence and details.");
                 ImGui::Separator();
-                drawEvidenceInspector();
+                syncCategoryFindings(1);
                 /* sidebar section end */
             }
             if(syncCategory==2) {
@@ -42063,14 +42424,19 @@ zula.exe)FIVEMSTR";
 
             if(syncCategory==3) {
                 ImGui::TextColored(accent,"SERVICOS DO WINDOWS");
-                ImGui::TextDisabled("Servicos e configuracoes relevantes para a investigacao.");
+                ImGui::TextDisabled("Review service configuration and state.");
                 ImGui::Separator();
                 drawServiceReviews();
                 /* sidebar section end */
             }
             if(syncCategory==4) {
                 ImGui::TextColored(accent,"FILE INTEGRITY");
-                ImGui::TextDisabled("Verifique hash SHA-256 e assinatura digital dos arquivos selecionados.");
+                ImGui::TextDisabled("Flagged file and executable evidence from the scan.");
+                ImGui::BeginChild("##fileFlagged",ImVec2(0,260.f),true);
+                syncCategoryFindings(4);
+                ImGui::EndChild();
+                /* Manual file inspection remains accessible under Advanced tools. */
+                if(ImGui::CollapsingHeader("Manual file verification")){
                 ImGui::Separator();
                 ImGui::InputTextWithHint("##file","Select a file to verify...",fileInput,sizeof(fileInput));
                 ImGui::SameLine();if(ImGui::Button("Browse"))chooseFile();
@@ -42098,6 +42464,7 @@ zula.exe)FIVEMSTR";
                          ImGui::PopID();
                     }
                     ImGui::EndTable();
+                }
                 }
                 /* sidebar section end */
             }
@@ -42151,8 +42518,13 @@ zula.exe)FIVEMSTR";
                 /* sidebar section end */
             }
             if(syncCategory==8) {
-                ImGui::TextColored(accent,"AUDITORIAS ADICIONAIS");
-                ImGui::TextDisabled("Execute verificacoes locais de leitura, separadas por categoria.");
+                ImGui::TextColored(accent,"ADVANCED INSPECTION");
+                ImGui::TextDisabled("Additional scan checks and advanced evidence.");
+                if(ImGui::CollapsingHeader("Flagged advanced findings")){
+                    ImGui::BeginChild("##advancedFlagged",ImVec2(0,230.f),true);
+                    syncCategoryFindings(8);
+                    ImGui::EndChild();
+                }
                 ImGui::Separator();
                 if(ImGui::BeginTabBar("##extendedAuditCategories", ImGuiTabBarFlags_FittingPolicyScroll)) {
                     if(ImGui::BeginTabItem("PE / DLL / EXE")) {
@@ -42183,10 +42555,83 @@ zula.exe)FIVEMSTR";
                 /* sidebar section end */
             }
             if(syncCategory==10) {
-                ImGui::TextColored(accent,"REVIEW QUEUE");
-                ImGui::TextDisabled("Organize itens que exigem analise humana antes de concluir.");
+                // Decision summary uses the same classifier as the evidence queue.
+                // All flagged records are shown below; no 300-item preview cap.
+                size_t detectedCount=0,suspectCount=0;
+                std::vector<Record> findings;
+                {
+                    std::lock_guard<std::mutex> lock(dataMutex);
+                    findings.reserve(records.size());
+                    for(const auto& r:records){
+                        if(isDetectedRecord(r)) {++detectedCount;findings.push_back(r);}
+                        else if(isSuspectRecord(r)) {++suspectCount;findings.push_back(r);}
+                    }
+                }
+                const bool finished=inspectionResultsReady() && inspectionDisplayPercent()>=100;
+                const ImVec4 critical(.96f,.31f,.40f,1.f);
+                const ImVec4 warning(.99f,.72f,.32f,1.f);
+                const ImVec4 quiet(.70f,.68f,.72f,1.f);
+                ImGui::TextColored(critical,"SCAN VERDICT");
                 ImGui::Separator();
-                drawReviewQueueNew();
+                if(scanning.load() || (inspectionResultsReady() && !finished)){
+                    ImGui::TextColored(warning,"SCAN IN PROGRESS");
+                    ImGui::TextDisabled("Verdict pending until scan and progress finish.");
+                }else if(!finished){
+                    ImGui::TextColored(quiet,"NOT SCANNED");
+                    ImGui::TextDisabled("Start a scan to review findings.");
+                }else if(detectedCount){
+                    ImGui::TextColored(critical,"DETECTED INDICATORS");
+                    ImGui::TextWrapped("Confirmed rule matches were found. This does not independently prove cheating.");
+                }else if(suspectCount){
+                    ImGui::TextColored(warning,"SUSPICIOUS ACTIVITY");
+                    ImGui::TextWrapped("Indicators require manual review; cheating is not confirmed.");
+                }else{
+                    ImGui::TextColored(ImVec4(.59f,.84f,.72f,1.f),"NO FLAGGED FINDINGS");
+                    ImGui::TextWrapped("No suspicious or detected records from the completed checks. This is not proof of a clean system.");
+                }
+                ImGui::Spacing();
+                ImGui::Text("Detected: %zu",detectedCount);
+                ImGui::SameLine(0,24.f);
+                ImGui::Text("Suspect: %zu",suspectCount);
+                ImGui::SameLine(0,24.f);
+                ImGui::Text("Total: %zu",findings.size());
+                ImGui::Separator();
+                static char resultSearch[160]{};
+                ImGui::SetNextItemWidth((std::min)(410.f,ImGui::GetContentRegionAvail().x));
+                ImGui::InputTextWithHint("##resultSearch","Filter flagged findings...",resultSearch,sizeof(resultSearch));
+                std::string query=resultSearch;
+                std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
+                if(!query.empty()){
+                    findings.erase(std::remove_if(findings.begin(),findings.end(),[&](const Record& r){
+                        std::string content=r.category+" "+r.name+" "+r.detail;
+                        std::transform(content.begin(),content.end(),content.begin(),[](unsigned char c){return (char)std::tolower(c);});
+                        return content.find(query)==std::string::npos;
+                    }),findings.end());
+                }
+                if(findings.empty())ImGui::TextDisabled("No matching flagged findings.");
+                if(ImGui::BeginTable("##allFlaggedResults",4,
+                    ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|
+                    ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1.f))){
+                    ImGui::TableSetupScrollFreeze(0,1);
+                    ImGui::TableSetupColumn("Status",ImGuiTableColumnFlags_WidthFixed,92.f);
+                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthFixed,150.f);
+                    ImGui::TableSetupColumn("Finding",ImGuiTableColumnFlags_WidthStretch,1.4f);
+                    ImGui::TableSetupColumn("Evidence",ImGuiTableColumnFlags_WidthStretch,2.f);
+                    ImGui::TableHeadersRow();
+                    ImGuiListClipper clipper;
+                    clipper.Begin((int)findings.size());
+                    while(clipper.Step())for(int n=clipper.DisplayStart;n<clipper.DisplayEnd;++n){
+                        const auto& r=findings[(size_t)n];
+                        const bool detected=isDetectedRecord(r);
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextColored(detected?critical:warning,detected?"DETECTED":"SUSPECT");
+                        ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.category.c_str());
+                        ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.name.c_str());
+                        ImGui::TableSetColumnIndex(3);ImGui::TextUnformatted(r.detail.c_str());
+                    }
+                    ImGui::EndTable();
+                }
                 /* sidebar section end */
             }
             if(syncCategory>=11 && syncCategory<=19) { ImGui::TextDisabled("Signature matches are indicators, not definitive findings."); if(syncCategory==12 || syncCategory==18) { sync_original_rules::render(); ImGui::Separator(); } sync_detect_browser::sync_active_signatures::render(syncCategory-11); ImGui::Spacing(); sync_detect_browser::render(syncCategory-11); }
