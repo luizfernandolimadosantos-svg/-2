@@ -35139,7 +35139,7 @@ static void applyTheme() {
     c[ImGuiCol_FrameBg]=ImVec4(.13f,.13f,.13f,1.f);
     c[ImGuiCol_FrameBgHovered]=ImVec4(.21f,.21f,.21f,1.f);
     c[ImGuiCol_FrameBgActive]=ImVec4(.29f,.29f,.29f,1.f);
-    c[ImGuiCol_Button]=ImVec4(.18f,.18f,.18f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.24f,.065f,.095f,1.f);
     c[ImGuiCol_ButtonHovered]=ImVec4(.29f,.29f,.29f,1.f);
     c[ImGuiCol_ButtonActive]=ImVec4(.38f,.38f,.38f,1.f);
     c[ImGuiCol_Header]=ImVec4(.18f,.18f,.18f,.95f);
@@ -35175,7 +35175,7 @@ static void applyTheme() {
     c[ImGuiCol_ModalWindowDimBg]=ImVec4(.01f,.01f,.01f,.82f);
     // Theme variants remain grayscale but visibly change the entire workspace.
     if(themeIndex==1){ // Graphite: lighter graphite panels and controls
-        c[ImGuiCol_WindowBg]=ImVec4(.095f,.095f,.095f,1.f);
+        c[ImGuiCol_WindowBg]=ImVec4(.105f,.045f,.060f,1.f);
         c[ImGuiCol_ChildBg]=ImVec4(.145f,.145f,.145f,1.f);
         c[ImGuiCol_PopupBg]=ImVec4(.19f,.19f,.19f,1.f);
         c[ImGuiCol_FrameBg]=ImVec4(.22f,.22f,.22f,1.f);
@@ -38384,49 +38384,13 @@ static void renderUI() {
                                IM_COL32(177,177,177,155),1.5f);
         }
     }
-    ImGui::SameLine(0,30);
-    ImGui::TextColored(ImVec4(.85f,.32f,.40f,1.f),"WINDOWS SECURITY & INTEGRITY");
 
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
-    ImGui::SetCursorPos(ImVec2(right-210.f,8.f));
-    if(ImGui::Button("REPORT##syncReport",ImVec2(94.f,36.f)))
-        ImGui::OpenPopup("REPORT SHARING##sync");
-    ImGui::SameLine(0,7);
     if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
     ImGui::SameLine(0,7);
     if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
     ImGui::EndChild();
-    if(ImGui::BeginPopupModal("REPORT SHARING##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-        ImGui::TextUnformatted("REPORT SHARING");
-        ImGui::Separator();
-        if(ImGui::Checkbox("Allow sharing with administrator",&shareScanWithAdmin)){
-            if(!shareScanWithAdmin){
-                reportStatus="Sharing disabled";
-                sendReportRequested=false;
-            }
-        }
-        ImGui::TextWrapped("The report can include file paths and scan findings.");
-        ImGui::TextDisabled("%s",scanComplete?"Scan completed":"Waiting for scan");
-        ImGui::TextUnformatted(reportStatus.c_str());
-        if(scanComplete && shareScanWithAdmin && !reportSent){
-            if(ImGui::Button("SEND REPORT",ImVec2(165.f,36.f)))
-                ImGui::OpenPopup("CONFIRM REPORT##sync");
-        }
-        if(ImGui::BeginPopupModal("CONFIRM REPORT##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-            ImGui::TextWrapped("Send the scan report, including file paths, to the administrator?");
-            if(ImGui::Button("CONFIRM",ImVec2(120.f,35.f))){
-                if(shareScanWithAdmin && scanComplete && !reportSent)sendReportRequested=true;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if(ImGui::Button("CANCEL",ImVec2(120.f,35.f)))ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
-        if(ImGui::Button("CLOSE",ImVec2(120.f,35.f)))ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-
     // Compact, factual status strip: no inferred malware verdict.
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.040f,.060f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
@@ -38497,11 +38461,11 @@ static void renderUI() {
     // V8: investigation cockpit. Persistent navigation rail, separate evidence workspace.
     const float availableRailWidth=ImGui::GetContentRegionAvail().x;
     const float railWidth = (std::min)(availableRailWidth * .40f, availableRailWidth < 680.f ? 148.f : availableRailWidth < 980.f ? 184.f : 226.f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.052f,.075f,.103f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.025f,.038f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_AlwaysVerticalScrollbar)){
-        ImGui::TextColored(ImVec4(.50f,.84f,.96f,1.f),"SYNC / SECURITY");
+        ImGui::TextColored(ImVec4(.92f,.24f,.34f,1.f),"SYNC / SECURITY");
         ImGui::TextDisabled(localized("INTEGRITY WORKSPACE"));
         ImGui::TextDisabled(simplifiedInterface?"F1: help  |  Ctrl+1..5: tabs":"F1: help  |  Ctrl+1..9: tabs");
         ImGui::Dummy(ImVec2(0,12));
@@ -38520,9 +38484,9 @@ static void renderUI() {
             const bool active=page==navPages[i];
             ImGui::PushID(i+9800);
             ImGui::PushStyleColor(ImGuiCol_Button,active?
-                ImVec4(.26f,.26f,.26f,1.f):ImVec4(.095f,.095f,.095f,1.f));
+                ImVec4(.42f,.055f,.105f,1.f):ImVec4(.105f,.045f,.060f,1.f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,active?
-                ImVec4(.33f,.33f,.33f,1.f):ImVec4(.18f,.18f,.18f,1.f));
+                ImVec4(.56f,.085f,.14f,1.f):ImVec4(.24f,.065f,.095f,1.f));
             ImGui::PushStyleColor(ImGuiCol_Text,active?
                 ImVec4(1.f,1.f,1.f,1.f):ImVec4(.76f,.76f,.76f,1.f));
             const bool clicked=ImGui::Button(localized(nav[i]),ImVec2(-1.f,44.f));
@@ -38537,13 +38501,13 @@ static void renderUI() {
                 ImDrawList* railDraw=ImGui::GetWindowDrawList();
                 railDraw->AddRectFilled(ImVec2(itemMin.x-3.f,navMarkerY+5.f),
                     ImVec2(itemMin.x,navMarkerY+39.f),
-                    IM_COL32(245,245,245,245),2.f);
+                    IM_COL32(225,47,78,245),2.f);
                 railDraw->AddRect(itemMin,itemMax,
-                    IM_COL32(190,190,190,150),10.f);
+                    IM_COL32(190,40,65,150),10.f);
                 railDraw->AddLine(
                     ImVec2(itemMin.x+13.f,itemMax.y-3.f),
                     ImVec2(itemMax.x-13.f,itemMax.y-3.f),
-                    IM_COL32(230,230,230,110),1.f);
+                    IM_COL32(215,45,70,110),1.f);
             }
             // Smooth hover underline, including keyboard focus.
             static float navHover[11]={};
@@ -38556,7 +38520,7 @@ static void renderUI() {
                 ImGui::GetWindowDrawList()->AddLine(
                     ImVec2(itemMin.x+14.f,itemMax.y-3.f),
                     ImVec2(itemMin.x+14.f+lineWidth,itemMax.y-3.f),
-                    IM_COL32(245,245,245,(int)(190.f*navHover[i])),1.5f);
+                    IM_COL32(220,45,76,(int)(190.f*navHover[i])),1.5f);
             }
             if(clicked && !active){
                 page=navPages[i]; navTransitionStart=uiNow;
@@ -38576,7 +38540,7 @@ static void renderUI() {
     ImGui::PopStyleColor();
     ImGui::SameLine(0.f,10.f);
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.044f,.062f,.086f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.020f,.030f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22,16));
     ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
     // Professional workstation backdrop: restrained tonal separation.
@@ -38588,11 +38552,11 @@ static void renderUI() {
         dl->PushClipRect(origin,ImVec2(origin.x+extent.x,origin.y+extent.y),true);
         dl->AddRectFilledMultiColor(
             origin,ImVec2(origin.x+extent.x,origin.y+210.f),
-            IM_COL32(23,44,59,255),IM_COL32(17,33,47,255),
-            IM_COL32(12,23,37,255),IM_COL32(15,31,44,255));
+            IM_COL32(40,12,24,255),IM_COL32(26,9,18,255),
+            IM_COL32(15,7,13,255),IM_COL32(28,9,18,255));
         dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
                     ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
-                    IM_COL32(90,166,196,55),1.f);
+                    IM_COL32(184,42,69,70),1.f);
         dl->PopClipRect();
     }
     const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
@@ -41471,129 +41435,93 @@ zula.exe)FIVEMSTR";
         ImGui::SameLine();
         if(ImGui::Button("Inspect evidence",ImVec2(190,40)))page=2;
     } else if(page==0 && simplifiedInterface) {
-        const ImVec4 muted(.67f,.67f,.67f,1.f);
-        // Same vector animation as the startup screen, centered in the scanner.
-        // Decorative only; does not imply that a scan is running.
-        {
-            const float availableWidth=ImGui::GetContentRegionAvail().x;
-            const float illustrationScale=(std::min)(1.f,
-                (std::max)(.60f,availableWidth/390.f));
-            const ImVec2 origin=ImGui::GetCursorScreenPos();
-            const float height=180.f*illustrationScale;
-            const float centerX=origin.x+availableWidth*.5f;
-            const float centerY=origin.y+155.f*illustrationScale;
-            drawSyncComputerMagnifier(ImGui::GetWindowDrawList(),
-                centerX,centerY,illustrationScale,
-                brandAnimation && !reducedMotion,
-                brandAnimation && !reducedMotion?(float)ImGui::GetTime():0.f);
-            ImGui::Dummy(ImVec2(0.f,height));
-            ImGui::Spacing();
-        }
-        ImGui::SetWindowFontScale(1.12f);
-        ImGui::TextUnformatted("PC Inspection");
+        const ImVec4 crimson(.86f,.22f,.33f,1.f);
+        const ImVec4 secondary(.64f,.58f,.62f,1.f);
+        const float width=ImGui::GetContentRegionAvail().x;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.035f,.052f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.32f,.10f,.17f,.8f));
+        ImGui::BeginChild("##commandHero",ImVec2(0,214.f),ImGuiChildFlags_Borders|
+            ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::TextColored(crimson,"S Y S T E M   I N S P E C T I O N");
+        ImGui::Spacing();
+        ImGui::SetWindowFontScale(1.55f);
+        ImGui::TextUnformatted("SCAN CONTROL");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(muted,"System scan and file inspection.");
-        ImGui::Dummy(ImVec2(0,16));
-        if(scanning){
-            ImGui::TextUnformatted(presentationHold.load()?
-                "Scan finished - preparing results":"Scanning your PC...");
-            if(presentationHold.load()){
-                ImGui::TextDisabled("Display wait: %u seconds (not extra analysis)",
-                    presentationWaitRemaining.load());
-            }
-            if(ImGui::Button("Cancel scan",ImVec2(170,44)))
+        ImGui::TextColored(secondary,"Read-only system analysis  /  Evidence review");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if(scanning.load()){
+            ImGui::TextColored(crimson,"SCANNING");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d%%",inspectionDisplayPercent());
+            if(ImGui::Button("CANCEL SCAN",ImVec2(190.f,44.f)))
                 cancelRequested=true;
         }else if(inspectionResultsReady()){
-            ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
-                "SCAN COMPLETE");
-            ImGui::SameLine();
-            if(ImGui::Button("View results",ImVec2(150,42)))page=9;
+            ImGui::TextColored(ImVec4(.66f,.83f,.67f,1.f),"SCAN COMPLETE");
+            if(drawStartScanButton(230.f))startScan();
         }else if(done && !scanFailed && !scanCancelled){
-            ImGui::TextDisabled("Finalizing progress display... %d%%",inspectionDisplayPercent());
+            ImGui::TextDisabled("Finalizing results  /  %d%%",inspectionDisplayPercent());
         }else{
-            if(drawStartScanButton(250.f))startScan();
-            if(ImGui::GetContentRegionAvail().x>=165.f)ImGui::SameLine(0,10.f);
-            if(ImGui::Button("View results",ImVec2(150,48)))page=9;
-        }
-        // Live scan telemetry, attached to the main scan action.
-        ImGui::Dummy(ImVec2(0,12));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.07f,.07f,.07f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.30f,.30f,.30f,.85f));
-        ImGui::BeginChild("##live_scan_telemetry",ImVec2(0,scanning.load()?147.f:124.f),
-            ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
-        ImGui::TextColored(ImVec4(.82f,.88f,.95f,1.f),"LIVE SCAN ACTIVITY");
-        if(scanning.load() && brandAnimation && !reducedMotion){
-            ImGui::SameLine();
-            const ImVec2 meter=ImGui::GetCursorScreenPos();
-            ImGui::Dummy(ImVec2(56.f,18.f));
-            ImDrawList* meterDraw=ImGui::GetWindowDrawList();
-            for(int bar=0;bar<9;++bar){
-                const float wave=.5f+.5f*std::sin(
-                    static_cast<float>(ImGui::GetTime()*5.5+bar*0.54));
-                const float h=3.f+14.f*wave*wave;
-                meterDraw->AddRectFilled(
-                    ImVec2(meter.x+bar*6.f,meter.y+18.f-h),
-                    ImVec2(meter.x+bar*6.f+3.f,meter.y+18.f),
-                    IM_COL32(230,230,230,180),1.f);
-            }
-        }
-        ImGui::SameLine();
-        if(scanning.load()) {
-            const char* frames[]={"|","/","-","\\"};
-            const int frame=static_cast<int>(ImGui::GetTime()*9.0)%4;
-            ImGui::TextColored(ImVec4(.94f,.94f,.94f,1.f),"%s RUNNING",frames[frame]);
-        }else if(done.load() && !scanFailed.load() && !scanCancelled.load()){
-            ImGui::TextColored(ImVec4(.45f,.83f,.57f,1.f),"COMPLETED");
-        }else{
-            ImGui::TextDisabled("%s",stateText());
-        }
-        if(scanCancelled.load()){
-            ImGui::TextColored(ImVec4(.98f,.76f,.31f,1.f),"Cancelled - partial evidence");
-        }else if(scanFailed.load()){
-            ImGui::TextColored(ImVec4(.96f,.38f,.38f,1.f),"Interrupted - inspect diagnostics");
-        }
-        if(ImGui::BeginTable("##live_telemetry_values",3,
-            ImGuiTableFlags_SizingStretchSame)){
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextDisabled("PROCESSES");
-            ImGui::Text("%zu",processCount.load());
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextDisabled("EVIDENCE");
-            ImGui::Text("%zu",recordCount.load());
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextDisabled("PE FILES CHECKED");
-            ImGui::Text("%zu",peFilesInspected.load());
-            ImGui::EndTable();
-        }
-        if(scanning.load() && brandAnimation && !reducedMotion){
-            const float phase=static_cast<float>(std::fmod(ImGui::GetTime()*1.2,1.0));
-            const ImVec2 q=ImGui::GetCursorScreenPos();
-            const float w=ImGui::GetContentRegionAvail().x;
-            ImGui::GetWindowDrawList()->AddRectFilled(q,
-                ImVec2(q.x+w,q.y+3.f),IM_COL32(42,52,65,255),2.f);
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                ImVec2(q.x+w*phase,q.y),
-                ImVec2(q.x+(std::min)(w,w*phase+36.f),q.y+3.f),
-                IM_COL32(169,202,235,210),2.f);
-            ImGui::Dummy(ImVec2(w,5.f));
+            if(drawStartScanButton(230.f))startScan();
         }
         ImGui::EndChild();
         ImGui::PopStyleColor(2);
-        if(scanFailed){
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.f,.37f,.37f,1.f),
-                "Scan failed at stage %d",scanFailureStage.load());
-            std::string failure;
-            {
-                std::lock_guard<std::mutex> guard(scanFailureMutex);
-                failure=scanFailureReason;
-            }
-            if(!failure.empty())ImGui::TextWrapped("%s",failure.c_str());
-            ImGui::TextDisabled("Details: %%TEMP%%\\SyncPCChecker\\diagnostic.log");
+        ImGui::Spacing();
+
+        const char* metrics[]={"PROCESSES","EVIDENCE","PE FILES CHECKED"};
+        const unsigned long long values[]={
+            (unsigned long long)processCount.load(),
+            (unsigned long long)recordCount.load(),
+            (unsigned long long)peFilesInspected.load()};
+        const int cols=width>=720.f?3:width>=420.f?2:1;
+        const float gap=10.f;
+        const float cell=(width-gap*(cols-1))/cols;
+        for(int i=0;i<3;i++){
+            if(i%cols)ImGui::SameLine(0,gap);
+            ImGui::PushID(700+i);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.095f,.055f,.072f,1.f));
+            ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.25f,.095f,.14f,1.f));
+            ImGui::BeginChild("##metric",ImVec2(cell,112.f),ImGuiChildFlags_Borders|
+                ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImGui::TextColored(secondary,"%s",metrics[i]);
+            ImGui::Spacing();
+            ImGui::SetWindowFontScale(1.7f);
+            ImGui::Text("%llu",values[i]);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            ImGui::PopID();
         }
-        ImGui::Dummy(ImVec2(0,18));
-        ImGui::TextColored(muted,"Need more detail? Select Advanced view above.");
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.045f,.061f,1.f));
+        ImGui::BeginChild("##scanStatus",ImVec2(0,158.f),ImGuiChildFlags_Borders|
+            ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::TextColored(crimson,"SCAN ACTIVITY");
+        ImGui::SameLine(0,18.f);
+        ImGui::TextDisabled("%s",stateText());
+        if(scanCancelled.load())
+            ImGui::TextColored(ImVec4(.95f,.67f,.37f,1.f),"Cancelled - partial evidence");
+        if(scanFailed.load()){
+            ImGui::TextColored(ImVec4(.96f,.35f,.40f,1.f),
+                "Scan failed at stage %d",scanFailureStage.load());
+            std::string reason;
+            {std::lock_guard<std::mutex> guard(scanFailureMutex);reason=scanFailureReason;}
+            if(!reason.empty())ImGui::TextWrapped("%s",reason.c_str());
+        }
+        if(scanning.load() || done.load()){
+            const int progress=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
+            char overlay[24];
+            snprintf(overlay,sizeof(overlay),"%d%%",progress);
+            ImGui::ProgressBar(progress/100.f,ImVec2(-1,19.f),overlay);
+        }else{
+            ImGui::Spacing();
+            ImGui::TextDisabled("No active scan. Start an inspection to populate this panel.");
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Findings require manual verification. No scan guarantees a clean PC.");
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
     } else if(page==0) {
         // V6: live metric cards; values come directly from the scan counters.
         if(!simplifiedInterface){
