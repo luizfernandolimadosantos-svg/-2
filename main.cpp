@@ -38286,25 +38286,38 @@ static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool moti
 static void drawCrimsonSeal(ImDrawList* d,ImVec2 c,float radius,bool motion){
     const float pi=3.14159265358979323846f;
     const float t=motion?(float)ImGui::GetTime():0.f;
-    for(int ring=0;ring<3;++ring){
-        float r=radius*(1.f-.16f*ring);
-        int alpha=ring==0?145:80;
-        d->AddCircle(c,r,IM_COL32(207,39,70,alpha),96,ring==0?2.f:1.f);
+    const float pulse=motion?.5f+.5f*sinf(t*2.2f):.45f;
+    const float turn=t*.25f;
+    const int glowAlpha=(int)(25.f+24.f*pulse);
+    for(int layer=4;layer>=1;--layer)
+        d->AddCircle(c,radius+layer*1.7f,IM_COL32(213,25,65,glowAlpha),
+                     72,1.4f);
+    d->AddCircle(c,radius,IM_COL32(236,49,82,215),96,2.1f);
+    d->AddCircle(c,radius*.83f,IM_COL32(170,38,65,170),96,1.2f);
+    d->AddCircle(c,radius*.61f,IM_COL32(232,62,88,185),96,1.2f);
+    for(int i=0;i<16;++i){
+        const float angle=i*2.f*pi/16.f+turn;
+        const float r0=radius*(i%4==0?.79f:.88f);
+        const ImVec2 x(c.x+cosf(angle)*r0,c.y+sinf(angle)*r0);
+        const ImVec2 y(c.x+cosf(angle)*radius*.98f,c.y+sinf(angle)*radius*.98f);
+        d->AddLine(x,y,IM_COL32(255,88,109,i%4==0?220:135),i%4==0?1.8f:1.f);
     }
-    for(int i=0;i<12;++i){
-        float a=i*2.f*pi/12.f+t*.09f;
-        ImVec2 x(c.x+cosf(a)*radius*.89f,c.y+sinf(a)*radius*.89f);
-        ImVec2 y(c.x+cosf(a)*radius*.98f,c.y+sinf(a)*radius*.98f);
-        d->AddLine(x,y,IM_COL32(234,69,91,150),1.4f);
-    }
-    ImVec2 pts[5];
+    ImVec2 points[5];
     for(int i=0;i<5;++i){
-        float a=-pi/2.f+i*4.f*pi/5.f-t*.035f;
-        pts[i]=ImVec2(c.x+cosf(a)*radius*.66f,c.y+sinf(a)*radius*.66f);
+        const float angle=-pi/2.f+i*4.f*pi/5.f-turn*.72f;
+        points[i]=ImVec2(c.x+cosf(angle)*radius*.67f,c.y+sinf(angle)*radius*.67f);
     }
-    for(int i=0;i<5;++i)d->AddLine(pts[i],pts[(i+1)%5],IM_COL32(234,55,80,190),2.f);
-    float pulse=motion?.5f+.5f*sinf(t*1.7f):.5f;
-    d->AddCircleFilled(c,3.f+2.f*pulse,IM_COL32(246,89,110,200),24);
+    for(int i=0;i<5;++i){
+        d->AddLine(points[i],points[(i+1)%5],IM_COL32(115,16,38,85),4.f);
+        d->AddLine(points[i],points[(i+1)%5],IM_COL32(247,66,96,230),1.6f);
+    }
+    for(int i=0;i<4;++i){
+        const float angle=t*(i%2==0?.65f:-.45f)+i*pi*.5f;
+        const ImVec2 glint(c.x+cosf(angle)*radius,c.y+sinf(angle)*radius);
+        d->AddCircleFilled(glint,1.4f+1.2f*pulse,
+                           IM_COL32(255,127,148,175),12);
+    }
+    d->AddCircleFilled(c,2.1f+1.2f*pulse,IM_COL32(255,105,129,205),24);
 }
 
 static void renderSyncOpening() {
@@ -38384,47 +38397,16 @@ static void renderSyncOpening() {
         const float duration=reducedMotion?0.35f:4.0f;
         const float progress=(std::min)(1.f,elapsed/duration);
         const ImVec2 center(p.x+sz.x*.5f,p.y+sz.y*.5f);
-        const float baseRadius=(std::min)(sz.x*.18f,sz.y*.19f);
+        const float baseRadius=(std::min)(sz.x*.16f,sz.y*.18f);
         // Fade the landing text with a dark theatrical curtain.
         d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),
             IM_COL32(7,2,7,255));
-        const float t=(float)now;
         const char* openingTitle="SYNC  /  SECURITY CONSOLE";
         const ImVec2 titleSize=ImGui::CalcTextSize(openingTitle);
         d->AddText(ImVec2(center.x-titleSize.x*.5f,center.y-baseRadius-58.f),
                    IM_COL32(246,213,221,255),openingTitle);
-        if(!reducedMotion){
-            const float radius=baseRadius*(.78f+.22f*sinf((std::min)(1.f,progress*1.5f)*1.570796f));
-            // Three rotating concentric rings and a pentagram, drawn in ImGui.
-            for(int ring=0;ring<3;++ring){
-                const float r=radius*(.72f+.17f*ring);
-                const ImU32 c=IM_COL32(185+ring*17,29+ring*9,61+ring*7,
-                    (int)(110.f+80.f*(1.f-progress*.45f)));
-                d->AddCircle(center,r,c,96,ring==1?2.5f:1.2f);
-                const float direction=ring==1?-1.f:1.f;
-                for(int j=0;j<12;++j){
-                    const float angle=t*(.22f+.12f*ring)*direction+
-                        j*6.2831853f/12.f;
-                    const ImVec2 a(center.x+cosf(angle)*r,center.y+sinf(angle)*r);
-                    const ImVec2 b(center.x+cosf(angle)*(r+8.f),
-                                   center.y+sinf(angle)*(r+8.f));
-                    d->AddLine(a,b,IM_COL32(238,65,89,185),1.5f);
-                }
-            }
-            ImVec2 points[5];
-            for(int j=0;j<5;++j){
-                const float angle=-1.570796f+j*4.f*3.14159265f/5.f-t*.24f;
-                points[j]=ImVec2(center.x+cosf(angle)*radius*.65f,
-                                  center.y+sinf(angle)*radius*.65f);
-            }
-            for(int j=0;j<5;++j)
-                d->AddLine(points[j],points[(j+1)%5],
-                           IM_COL32(238,48,83,235),2.3f);
-            const float glow=8.f+6.f*sinf(t*5.f)*sinf(t*5.f);
-            d->AddCircleFilled(center,glow,IM_COL32(245,46,82,155),32);
-        }else{
-            d->AddCircle(center,baseRadius*.65f,IM_COL32(218,45,76,220),64,2.f);
-        }
+        const float grow=(std::min)(1.f,progress*1.5f);
+        drawCrimsonSeal(d,center,baseRadius*(.72f+.28f*grow),!reducedMotion);
         const float barWidth=(std::min)(320.f,sz.x*.65f);
         const float bx=center.x-barWidth*.5f,by=center.y+baseRadius+24.f;
         d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth,by+5.f),
@@ -38944,14 +38926,15 @@ static void drawProposedDetectionCoverage() {
 
 static void renderUI() {
     static double liveLastCheck=-10.0;
-    // The opening is a one-time landing page, never a post-approval loading loop.
-    if(syncIntroOpen){renderSyncOpening();return;}
-    // Poll the real server while waiting; never replace an approved state with a fake local grant.
+    // Require genuine administrator authorization BEFORE showing the sigil intro.
+    // No local authorization fallback: only the server can unlock the scanner.
     if(syncLive::status!="unlocked" && ImGui::GetTime()-liveLastCheck>=5.0){
         liveLastCheck=ImGui::GetTime();
         syncLive::send("/hello");
     }
     if(syncLive::status!="unlocked"){syncLive::render();return;}
+    // The one-time Hellsing-inspired opening is visible only after approval.
+    if(syncIntroOpen){renderSyncOpening();return;}
     // Consent is opt-in, explicit and revocable; reports are never sent silently.
     static bool shareScanWithAdmin=false;
     static bool reportSent=false;
@@ -43194,9 +43177,6 @@ zula.exe)FIVEMSTR";
     } else if(page==4) {
         sectionTitle(localized("Workspace Preferences"),localized("Adjust appearance and investigation options"));
         ImGui::BeginChild("settings",ImVec2(0,0),ImGuiChildFlags_Borders);
-        if(ImGui::CollapsingHeader("DETECTION COVERAGE / REQUESTED CHECKS",ImGuiTreeNodeFlags_DefaultOpen))
-            drawProposedDetectionCoverage();
-        ImGui::Separator();
         ImGui::TextDisabled(localized("PERSONALIZATION  /  LOCAL SETTINGS"));
         ImGui::TextWrapped(localized("Customize the scanner appearance and investigation workflow."));
         ImGui::Spacing();
@@ -43210,18 +43190,8 @@ zula.exe)FIVEMSTR";
         ImGui::TextColored(orange(),localized("APPEARANCE"));
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::Text(localized("Scan Percentage Color"));
-        ImGui::TextDisabled(localized("Changes only the 0-100%% number; the interface stays monochrome."));
-        ImGui::SetNextItemWidth(320);
-        ImGui::Combo("##accent",&accentIndex,accentNames,IM_ARRAYSIZE(accentNames));
-        if(accentIndex==5) {
-            ImGui::ColorEdit3("Custom percentage color",(float*)&customAccent,
-                              ImGuiColorEditFlags_NoInputs);
-        }
-        ImGui::Spacing();
-        ImGui::Text(localized("Theme"));
-        ImGui::SetNextItemWidth(320);
-        if(ImGui::Combo("##theme",&themeIndex,themeNames,IM_ARRAYSIZE(themeNames)))applyTheme();
+        // Fixed crimson identity: no obsolete theme or percentage-color menus.
+        ImGui::TextDisabled("Crimson interface / system appearance");
         ImGui::Spacing();
         ImGui::Text(localized("Interface Scale"));
         ImGui::SetNextItemWidth(320);
