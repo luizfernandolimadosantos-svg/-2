@@ -35123,11 +35123,11 @@ static void applyTheme() {
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
     // V36 / NOIR: native grayscale theme, not merely a post-render filter.
-    const ImVec4 bg(.025f,.025f,.025f,1.f);
-    const ImVec4 panel(.058f,.058f,.058f,1.f);
-    const ImVec4 elevated(.105f,.105f,.105f,1.f);
-    const ImVec4 accent(.86f,.86f,.86f,1.f);
-    const ImVec4 accentHot(1.f,1.f,1.f,1.f);
+    const ImVec4 bg(.022f,.010f,.014f,1.f);
+    const ImVec4 panel(.060f,.025f,.033f,1.f);
+    const ImVec4 elevated(.105f,.040f,.050f,1.f);
+    const ImVec4 accent(.77f,.12f,.20f,1.f);
+    const ImVec4 accentHot(.96f,.26f,.34f,1.f);
     const ImVec4 ink(.96f,.96f,.96f,1.f);
     c[ImGuiCol_Text]=ink;
     c[ImGuiCol_TextDisabled]=ImVec4(.63f,.63f,.63f,1.f);
@@ -37265,7 +37265,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const float width=(std::max)(100.f,(std::min)(requestedWidth,available));
     const bool busy=scanning.load() || presentationHold.load();
     const bool blocked=busy;
-    const char* caption=busy ? "SCANNING..." : "START SCAN";
+    const char* caption=busy ? "SCANNING..." : "START FULL SCAN";
     ImGui::BeginDisabled(blocked);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(13.f,12.f));
@@ -37280,7 +37280,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const bool animate=brandAnimation && !reducedMotion;
     const float time=static_cast<float>(ImGui::GetTime());
     const float phase=animate ? .5f+.5f*std::sin(time*2.2f) : .35f;
-    const ImU32 border=IM_COL32(190,190,190,static_cast<int>(50.f+phase*65.f));
+    const ImU32 border=IM_COL32(180,35,52,static_cast<int>(50.f+phase*65.f));
     dl->AddRect(ImVec2(min.x+.5f,min.y+.5f),ImVec2(max.x-.5f,max.y-.5f),
         border,8.f,0,1.f);
     if(animate && !busy && width>130.f){
@@ -37289,7 +37289,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
         const float travel=std::fmod(time*70.f,span+34.f)-17.f;
         const float x=(std::max)(min.x+14.f,(std::min)(max.x-14.f,min.x+14.f+travel));
         dl->AddLine(ImVec2(x-13.f,max.y-2.f),ImVec2(x+13.f,max.y-2.f),
-            IM_COL32(235,235,235,100),1.5f);
+            IM_COL32(220,58,72,100),1.5f);
     }
     if(busy){
         // An unobtrusive activity spinner; not a simulated percentage.
@@ -41689,7 +41689,7 @@ zula.exe)FIVEMSTR";
         ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
         ImGui::SetWindowFontScale(1.12f);
-        ImGui::TextColored(pale,"System Inspection");
+        ImGui::TextColored(pale,"SYNC / SYSTEM INSPECTION");
         ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
         ImGui::Dummy(ImVec2(0,14));
@@ -41871,7 +41871,7 @@ zula.exe)FIVEMSTR";
             const float syncAvailableWidth = ImGui::GetContentRegionAvail().x;
             const bool syncCompact = syncAvailableWidth < 1000.f;
             static char syncNavSearch[96] = "";
-            const ImVec4 syncBlue(.30f,.78f,.96f,1.f);
+            const ImVec4 syncBlue(.89f,.23f,.30f,1.f);
             const ImVec4 syncMuted(.55f,.60f,.68f,1.f);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,10.f);
@@ -42710,7 +42710,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,appIcon,nullptr,nullptr,nullptr,
                   L"SyncPCChecker",appIcon};
     RegisterClassExW(&wc);
-    hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
+    hwnd=CreateWindowW(wc.lpszClassName,L"SYNC PC CHECKER",
                        WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1360,860,nullptr,nullptr,inst,nullptr);
     if(!hwnd){
         diagnosticLog("CreateWindowW failed.");
