@@ -13189,6 +13189,9 @@ static constexpr unsigned kProcessChecksPerPid=34;
 static std::atomic<unsigned long long> processChecksCompleted{0};
 static std::atomic<unsigned long long> processChecksUnavailable{0};
 static std::atomic<unsigned long long> processChecksPlanned{0};
+// Number of PIDs whose complete per-process check sequence has finished.
+static std::atomic<unsigned long long> processPidsInspected{0};
+static std::atomic<unsigned long long> processPidsPlanned{0};
 static std::vector<Record> inspectIndividualProcesses(
     const std::vector<Process>& processes){
     std::vector<Record> output;
@@ -13328,6 +13331,8 @@ static std::vector<Record> inspectIndividualProcesses(
         emit("Peak pagefile usage bytes",memoryOk?std::to_string(pmc.PeakPagefileUsage):"Unavailable",memoryOk);
         if(cancelRequested)break;
         emit("Quota paged pool bytes",memoryOk?std::to_string(pmc.QuotaPagedPoolUsage):"Unavailable",memoryOk);
+        // Count a PID only after its per-process checks reach the end.
+        ++processPidsInspected;
         // RAII closes both handles on normal completion or cancellation.
     }
     return output;
@@ -34233,6 +34238,8 @@ static void scanWorker() {
         const std::wstring winRoot=windowsRoot();
         sequentialTotal=static_cast<unsigned>(p.size()*(kProcessChecksPerPid+2));
         processChecksPlanned=static_cast<unsigned long long>(p.size())*kProcessChecksPerPid;
+        processPidsPlanned=static_cast<unsigned long long>(p.size());
+        processPidsInspected=0;
         processChecksCompleted=0;processChecksUnavailable=0;
         sequentialDone=0;
         for(auto& proc:p) {
@@ -34820,6 +34827,8 @@ static void startScan() {
     peEntropyInvalid=0;peEntropySectionsSkipped=0;peEntropyCancelled=0;
     batFilesSeen=0;batNameMatches=0;batDirsFailed=0;
     sequentialDone=0;sequentialTotal=0;
+    processPidsPlanned=0;processPidsInspected=0;
+    processChecksCompleted=0;processChecksUnavailable=0;processChecksPlanned=0;
     setSequentialItem("");
     forensicSourceStatus=0;
     forensicSourceChecks=0;
@@ -37468,13 +37477,13 @@ static void drawAtlasProgress(bool compact=false){
     const float radius=height*.5f;
     ImDrawList* draw=ImGui::GetWindowDrawList();
     const ImVec2 q(p.x+width,p.y+height);
-    // One continuous matte track. No outline, stripes, ticks or glass glare.
-    draw->AddRectFilled(p,q,IM_COL32(40,40,42,255),radius);
+    // Crimson track; completion is driven by verified work, not elapsed time.
+    draw->AddRectFilled(p,q,IM_COL32(37,12,22,255),radius);
+    draw->AddRect(p,q,IM_COL32(113,24,44,210),radius);
     const float fill=width*fraction;
     if(fill>.5f){
-        // A single, soft white fill with a rounded leading edge.
         const ImVec2 fillEnd(p.x+(std::min)(width,fill),q.y);
-        draw->AddRectFilled(p,fillEnd,IM_COL32(230,230,230,255),
+        draw->AddRectFilled(p,fillEnd,IM_COL32(194,24,54,255),
             (std::min)(radius,fill*.5f));
     }
     // A quiet status line under the bar keeps the percentage easy to read.
@@ -38581,7 +38590,7 @@ static void renderUI() {
     ImGui::TextColored(ImVec4(accentInk.x,accentInk.y,accentInk.z,titleAlpha),
                        "SYNC / %s",section);
     if(ImGui::GetContentRegionAvail().x>195.f)ImGui::SameLine(0,24);
-    ImGui::TextColored(subtleInk,"ENGINE: %s",stateText());
+    ImGui::TextColored(subtleInk,"%s",stateText());
     if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
     // A brief, non-blocking monochrome transition when switching view modes.
     if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view")){
@@ -38607,7 +38616,7 @@ static void renderUI() {
     }
     // Dashboard keeps the final 100% visible after completion.
     // Investigation pages show the lock from launch until scan completion and 100%.
-    if(page==0 && (scanning || done)){
+    if(page==0 && (scanning || done) && !simplifiedInterface){
         drawAtlasProgress(false);
         ImGui::Spacing();
     }
@@ -38663,7 +38672,29 @@ static void renderUI() {
                 IM_COL32(194,36,65,opacity),24,1.4f);
         }
     }
-    if(page==11) {
+    // Keep the investigation UI empty until the user actually starts a scan.
+    // No stale process tables or implied findings before the first inspection.
+    if((page==2 || page==9 || page==11 || page==3 || page==7 || page==8 || page==10 || page==12)
+       && inspectionProgressStart<=0.0 && !scanning.load() && !inspectionResultsReady()) {
+        ImGui::Dummy(ImVec2(0.f,32.f));
+        const ImVec2 avail=ImGui::GetContentRegionAvail();
+        const float panelHeight=(std::max)(220.f,(std::min)(avail.y-20.f,390.f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.072f,.029f,.043f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.09f,.17f,1.f));
+        ImGui::BeginChild("##emptyInspection",ImVec2(0.f,panelHeight),ImGuiChildFlags_Borders);
+        const float w=ImGui::GetContentRegionAvail().x;
+        ImGui::Dummy(ImVec2(0,50));
+        ImGui::SetCursorPosX((std::max)(20.f,(w-250.f)*.5f));
+        ImGui::TextColored(ImVec4(.93f,.28f,.38f,1.f),"NO SCAN COMPLETED");
+        ImGui::Dummy(ImVec2(0,13));
+        ImGui::SetCursorPosX((std::max)(20.f,(w-360.f)*.5f));
+        ImGui::TextDisabled("Start an inspection to populate this workspace.");
+        ImGui::Dummy(ImVec2(0,26));
+        ImGui::SetCursorPosX((std::max)(20.f,(w-220.f)*.5f));
+        if(ImGui::Button("GO TO SCANNER",ImVec2(220.f,46.f)))page=0;
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    } else if(page==11) {
         sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
         sync_module_audit::render();
         kb_echo_native::render();
@@ -41425,8 +41456,20 @@ zula.exe)FIVEMSTR";
         const float fraction=(std::max)(0.f,(std::min)(1.f,progress/100.f));
         ImDrawList* barDraw=ImGui::GetWindowDrawList();
         barDraw->AddRectFilled(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(34,15,22,255),6.f);
-        if(fraction>0.f)barDraw->AddRectFilled(barPos,
-            ImVec2(barPos.x+barWidth*fraction,barPos.y+22.f),IM_COL32(197,28,57,255),6.f);
+        if(fraction>0.f){
+            const float fill=barWidth*fraction;
+            barDraw->AddRectFilled(barPos,
+                ImVec2(barPos.x+fill,barPos.y+22.f),IM_COL32(197,28,57,255),6.f);
+            // A subtle moving highlight only inside the verified filled portion.
+            if(scanning.load() && !reducedMotion && fill>25.f){
+                const float phase=static_cast<float>(ImGui::GetTime()*64.0);
+                const float shimmer=fmodf(phase,(std::max)(20.f,fill));
+                const float x=barPos.x+shimmer;
+                barDraw->AddRectFilled(ImVec2(x,barPos.y+3.f),
+                    ImVec2((std::min)(x+9.f,barPos.x+fill),barPos.y+19.f),
+                    IM_COL32(255,120,138,65),3.f);
+            }
+        }
         barDraw->AddRect(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(138,35,55,230),6.f);
         ImGui::Dummy(ImVec2(barWidth,23.f));
         ImGui::SameLine(0,12.f);
@@ -41445,7 +41488,15 @@ zula.exe)FIVEMSTR";
             {std::lock_guard<std::mutex> guard(scanFailureMutex);reason=scanFailureReason;}
             if(!reason.empty())ImGui::TextWrapped("%s",reason.c_str());
         }
-        ImGui::TextDisabled("Progress follows verified work. Some stages may take longer.");
+        const auto pidsDone=processPidsInspected.load();
+        const auto pidsTotal=processPidsPlanned.load();
+        ImGui::Text("PROCESSES INSPECTED: %llu / %llu",
+            (unsigned long long)pidsDone,(unsigned long long)pidsTotal);
+        ImGui::TextDisabled("Individual checks: %llu available / %llu unavailable",
+            (unsigned long long)processChecksCompleted.load(),
+            (unsigned long long)processChecksUnavailable.load());
+        if(scanning.load() && progress<100)
+            ImGui::TextDisabled("Long-running stages can hold the number until work completes.");
         ImGui::EndChild();
         ImGui::PopStyleColor();
     } else if(page==0) {
