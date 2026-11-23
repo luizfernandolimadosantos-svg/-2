@@ -42803,6 +42803,42 @@ static void drawGothicScanProgress(float width,float height,int percent,bool mov
     ImGui::Dummy(ImVec2(w,h));
 }
 
+
+// V26 ornamental UI effects, visual-only and independent from detection state.
+static float syncV26FxStrength=.68f;
+static void syncV26Ornament(ImDrawList* d,ImVec2 a,ImVec2 b,float t,bool motion,float intensity){
+    if(!d || b.x-a.x<110.f || b.y-a.y<65.f)return;
+    const float k=std::clamp(intensity,0.f,1.f);
+    const ImU32 ink=IM_COL32(220,51,84,(int)(110.f*k));
+    const float x=a.x+12.f,y=a.y+12.f,r=b.x-12.f,bottom=b.y-12.f;
+    d->AddLine(ImVec2(x,y),ImVec2(x+23.f,y),ink,1.2f);
+    d->AddLine(ImVec2(x,y),ImVec2(x,y+23.f),ink,1.2f);
+    d->AddLine(ImVec2(r-23.f,bottom),ImVec2(r,bottom),ink,1.2f);
+    d->AddLine(ImVec2(r,bottom-23.f),ImVec2(r,bottom),ink,1.2f);
+    if(motion){
+        const float travel=fmodf(t*36.f,std::max(1.f,r-x));
+        d->AddLine(ImVec2(x+travel,y),ImVec2(std::min(r,x+travel+27.f),y),
+                   IM_COL32(255,92,125,(int)(180.f*k)),2.f);
+        const float vertical=fmodf(t*18.f,std::max(1.f,bottom-y));
+        d->AddCircleFilled(ImVec2(r,y+vertical),1.8f,
+                           IM_COL32(255,109,138,(int)(165.f*k)),12);
+    }
+}
+static void syncV26Moon(ImDrawList* d,ImVec2 c,float radius,float t,bool motion,float intensity){
+    if(!d || radius<8.f)return;
+    const float k=std::clamp(intensity,0.f,1.f);
+    const float pulse=motion?.5f+.5f*sinf(t*.9f):.5f;
+    d->AddCircleFilled(c,radius,IM_COL32(160,28,59,(int)((30.f+25.f*pulse)*k)),64);
+    d->AddCircle(c,radius,IM_COL32(230,68,103,(int)(125.f*k)),64,1.4f);
+    d->AddCircle(c,radius*.76f,IM_COL32(207,45,79,(int)(95.f*k)),64,1.f);
+    for(int i=0;i<9;++i){
+        const float ang=i*.6981317f+(motion?t*.11f:0.f);
+        d->AddCircleFilled(ImVec2(c.x+cosf(ang)*radius*1.12f,
+                                 c.y+sinf(ang)*radius*1.12f),1.f,
+                           IM_COL32(244,90,125,(int)(120.f*k)),8);
+    }
+}
+
 static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
@@ -42898,6 +42934,10 @@ static void renderSyncOpening() {
         const float grow=(std::min)(1.f,progress*1.5f);
         drawCrimsonSeal(d,center,baseRadius*(.72f+.28f*grow),!reducedMotion);
         drawOpeningHalo(d,center,baseRadius*(.72f+.28f*grow),(float)now);
+        syncV26Ornament(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
+            (float)now,animate,syncV26FxStrength);
+        if(sz.x>850.f)syncV26Moon(d,ImVec2(p.x+sz.x*.83f,p.y+sz.y*.25f),
+            (std::min)(sz.x,sz.y)*.085f,(float)now,animate,syncV26FxStrength*.6f);
         const float barWidth=(std::min)(320.f,sz.x*.65f);
         const float bx=center.x-barWidth*.5f,by=center.y+baseRadius+24.f;
         d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth,by+5.f),
@@ -43500,11 +43540,18 @@ static void renderUI() {
         const ImVec2 b(a.x+imageW,a.y+imageH);
         bg->AddImage((ImTextureID)alucardBannerTexture,a,b,
             ImVec2(.35f,0.f),ImVec2(1.f,1.f),IM_COL32(255,255,255,22));
+        syncV26Ornament(bg,a,b,(float)ImGui::GetTime(),
+            !reducedMotion,syncV26FxStrength*.7f);
         drawCrimsonWind(bg,ImVec2(wp.x+ws.x*.58f,wp.y+55.f),
             ImVec2(wp.x+ws.x-8.f,wp.y+ws.y-10.f),
             (float)ImGui::GetTime(),.30f);
     }
-    // SYNC: full-width operations canvas; no left navigation rail.
+    if(brandAnimation){
+        ImDrawList* d=ImGui::GetWindowDrawList();
+        const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
+        syncV26Ornament(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
+            (float)ImGui::GetTime(),!reducedMotion,syncV26FxStrength*.6f);
+    }
     if(page==1||page==5)page=0;
     const ImVec4 titleInk(.97f,.89f,.92f,1);
     const ImVec4 subtleInk(.69f,.48f,.55f,1);
@@ -43679,17 +43726,22 @@ static void renderUI() {
     if(lastNavPage!=page){ navTransitionStart=uiNow; lastNavPage=page; syncPageAnimationAt=uiNow; }
     // Primary navigation: Overview first, Results second, then Artifacts and Settings.
     // File Lab remains accessible inside Artifacts (OPEN BINARY LAB).
-    const char* nav[]={"OVERVIEW","SCAN RESULTS","ARTIFACTS","SETTINGS"};
-    const int navPages[]={0,2,9,4};
-    // Shortcuts follow the four visible navigation entries.
-    const int simpleNavIndices[]={0,1,2,3};
+    // Both modes have distinct, working navigation. Advanced mode exposes
+    // the existing read-only investigation pages rather than just changing a label.
+    const char* simpleNav[]={"OVERVIEW","SCAN RESULTS","ARTIFACTS","SETTINGS"};
+    const int simplePages[]={0,2,9,4};
+    const char* advancedNav[]={
+        "OVERVIEW","SCAN RESULTS","ARTIFACTS","SECURITY ACTIVITY",
+        "BINARY LAB","NETWORK","DRIVERS","SETTINGS"};
+    const int advancedPages[]={0,2,9,3,6,7,8,4};
+    const char* const* nav=simplifiedInterface?simpleNav:advancedNav;
+    const int* navPages=simplifiedInterface?simplePages:advancedPages;
+    const int visibleNavCount=simplifiedInterface?4:8;
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
-        const int shortcutCount=4;
-        for(int shortcut=0;shortcut<shortcutCount;shortcut++){
+        for(int shortcut=0;shortcut<visibleNavCount;shortcut++){
             if(ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1+shortcut),false)){
-                const int navIndex=shortcut;
-                page=navPages[navIndex]; navTransitionStart=uiNow;
+                page=navPages[shortcut]; navTransitionStart=uiNow;
                 lastNavPage=page; syncPageAnimationAt=uiNow;
             }
         }
@@ -43700,15 +43752,21 @@ static void renderUI() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(.065f,.025f,.038f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f,16.f));
     if(ImGui::BeginChild("##v8NavigationRail",ImVec2(railWidth,0.f),
-        ImGuiChildFlags_Borders,(simplifiedInterface ? (ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse) : 0))){
+        ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
         ImGui::TextColored(ImVec4(.92f,.24f,.34f,1.f),"SYNC / SECURITY");
         ImGui::TextDisabled(localized("INTEGRITY WORKSPACE"));
-        ImGui::TextDisabled(simplifiedInterface?"F1: help  |  Ctrl+1..4: tabs":"F1: help  |  Ctrl+1..4: tabs");
+        if(brandAnimation){
+            const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
+            syncV26Moon(ImGui::GetWindowDrawList(),
+                ImVec2(p.x+sz.x-29.f,p.y+37.f),13.f,
+                (float)ImGui::GetTime(),!reducedMotion,syncV26FxStrength);
+        }
+        ImGui::TextDisabled(simplifiedInterface?
+            "F1: help  |  Ctrl+1..4: tabs":"F1: help  |  Ctrl+1..8: tabs");
         ImGui::Dummy(ImVec2(0,12));
         ImGui::Separator();
         ImGui::TextDisabled(localized("WORKSPACE"));
         ImGui::Dummy(ImVec2(0,5));
-        const int visibleNavCount=4;
         static float navMarkerY=-1.f;
         for(int visible=0;visible<visibleNavCount;visible++){
             const int i=visible;
@@ -43741,7 +43799,7 @@ static void renderUI() {
                     IM_COL32(215,45,70,110),1.f);
             }
             // Smooth hover underline, including keyboard focus.
-            static float navHover[4]={};
+            static float navHover[8]={};
             const float hoverTarget=(ImGui::IsItemHovered() || ImGui::IsItemFocused())?1.f:0.f;
             const float hoverRate=reducedMotion?1.f:
                 1.f-std::exp(-14.f*ImGui::GetIO().DeltaTime);
@@ -43773,7 +43831,7 @@ static void renderUI() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.045f,.020f,.030f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22,16));
-    ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None);
+    ImGui::BeginChild("##atlasMain",ImVec2(0,0),ImGuiChildFlags_None,ImGuiWindowFlags_NoScrollbar);
     // Professional workstation backdrop: restrained tonal separation.
     // No moving rings, artificial radar sweeps or fabricated activity.
     {
@@ -43788,6 +43846,22 @@ static void renderUI() {
         dl->AddLine(ImVec2(origin.x+28.f,origin.y+207.f),
                     ImVec2(origin.x+extent.x-28.f,origin.y+207.f),
                     IM_COL32(184,42,69,70),1.f);
+        // Ambient, noninteractive Hellsing-inspired light shafts across every tab.
+        if(brandAnimation && !reducedMotion && extent.x>280.f){
+            const float time=(float)ImGui::GetTime();
+            for(int i=0;i<4;++i){
+                const float offset=fmodf(time*(14.f+i*4.f)+i*193.f,extent.x+180.f)-90.f;
+                const float x=origin.x+offset;
+                const float y=origin.y+45.f+i*37.f;
+                dl->AddLine(ImVec2(x-68.f,y+16.f),ImVec2(x+60.f,y-7.f),
+                    IM_COL32(218,34,71,28+i*5),1.f);
+            }
+            // A low-intensity rim light follows the right edge, not the content.
+            const float wave=.5f+.5f*sinf(time*.8f);
+            dl->AddLine(ImVec2(origin.x+extent.x-3.f,origin.y+36.f),
+                ImVec2(origin.x+extent.x-3.f,origin.y+(std::min)(extent.y,310.f)),
+                IM_COL32(184,37,67,(int)(38.f+37.f*wave)),1.4f);
+        }
         // Hellsing-inspired gothic panel engraving; lightweight geometry only.
         const float time=(float)ImGui::GetTime();
         const float pulse=reducedMotion?0.45f:(0.42f+0.18f*sinf(time*.9f));
@@ -43795,6 +43869,13 @@ static void renderUI() {
         const float right=origin.x+extent.x-18.f;
         dl->AddLine(ImVec2(right,origin.y+23.f),
                     ImVec2(right,origin.y+156.f),IM_COL32(187,45,72,ink),1.f);
+        if(brandAnimation){
+            syncV26Ornament(dl,origin,ImVec2(origin.x+extent.x,origin.y+extent.y),
+                time,!reducedMotion,syncV26FxStrength*.6f);
+            if(page==2 || page==9 || page==3)
+                syncV26Moon(dl,ImVec2(origin.x+extent.x-66.f,origin.y+82.f),
+                    24.f,time,!reducedMotion,syncV26FxStrength*.48f);
+        }
         dl->PopClipRect();
     }
     const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
@@ -43813,14 +43894,22 @@ static void renderUI() {
     ImGui::TextColored(subtleInk,"%s",stateText());
     if(ImGui::GetContentRegionAvail().x>190.f)ImGui::SameLine(0,16);
     // A brief, non-blocking monochrome transition when switching view modes.
-    if(ImGui::SmallButton(simplifiedInterface?"Advanced view":"Simple view")){
+    if(ImGui::SmallButton(simplifiedInterface?"ADVANCED VIEW":"SIMPLE VIEW")){
         simplifiedInterface=!simplifiedInterface;
+        // Stay on the current page if it exists in the selected mode;
+        // otherwise return to the Overview instead of an invisible workspace.
+        if(simplifiedInterface && page!=0 && page!=2 && page!=9 && page!=4)
+            page=0;
+        navTransitionStart=(float)ImGui::GetTime();
+        lastNavPage=page;
         viewTransitionStart=(float)ImGui::GetTime();
         viewTransitionActive=!reducedMotion;
         syncPageAnimationAt=reducedMotion?-100.0:ImGui::GetTime();
     }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Use Ctrl + 1 through Ctrl + 4 to switch pages.");
+        ImGui::SetTooltip(simplifiedInterface?
+            "Simple: 4 workspaces. Click for 8 advanced workspaces.":
+            "Advanced: 8 workspaces. Click for the compact 4-workspace view.");
     {
         const ImVec2 lineStart=ImGui::GetCursorScreenPos();
         const float lineWidth=ImGui::GetContentRegionAvail().x;
@@ -46737,7 +46826,25 @@ zula.exe)FIVEMSTR";
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.045f,.061f,1.f));
         ImGui::BeginChild("##scanStatus",ImVec2(0,ImGui::GetContentRegionAvail().x<490.f?246.f:218.f),ImGuiChildFlags_Borders|
-            ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoScrollbar);
+        // Header ornament is time-driven and never changes the scan result.
+        if(brandAnimation && !reducedMotion){
+            ImDrawList* dl=ImGui::GetWindowDrawList();
+            const ImVec2 wp=ImGui::GetWindowPos();
+            const float w=ImGui::GetWindowSize().x;
+            if(w>160.f){
+                const float travel=fmodf((float)ImGui::GetTime()*26.f,w-60.f);
+                dl->AddLine(ImVec2(wp.x+18.f+travel,wp.y+1.5f),
+                    ImVec2(wp.x+48.f+travel,wp.y+1.5f),
+                    IM_COL32(241,68,103,155),1.7f);
+            }
+        }
+        if(brandAnimation){
+            const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
+            syncV26Ornament(ImGui::GetWindowDrawList(),p,
+                ImVec2(p.x+sz.x,p.y+sz.y),(float)ImGui::GetTime(),
+                scanning.load()&&!reducedMotion,syncV26FxStrength*.55f);
+        }
         ImGui::TextColored(crimson,"SCAN PROGRESS");
         if(ImGui::GetContentRegionAvail().x>250.f)ImGui::SameLine(0,18.f);
         ImGui::TextDisabled("%s",stateText());
@@ -46747,12 +46854,12 @@ zula.exe)FIVEMSTR";
         ImGui::Spacing();
         const float barWidth=(std::max)(110.f,ImGui::GetContentRegionAvail().x-72.f);
         drawGothicScanProgress(barWidth,25.f,progress,scanning.load() && !reducedMotion);
+        ImGui::TextColored(crimson,"%d%%",progress);
         if(scanning.load()){
+            ImGui::SameLine(0,16.f);
             ImGui::TextDisabled("%s",
                 sequentialTotal.load()>0?"Processing verified items":"Inspecting system evidence");
         }
-        ImGui::SameLine(0,12.f);
-        ImGui::TextColored(crimson,"%d%%",progress);
         ImGui::Spacing();ImGui::Separator();
 
         ImGui::TextColored(secondary,"CURRENT ACTIVITY");
@@ -46776,7 +46883,7 @@ zula.exe)FIVEMSTR";
             ImGui::TextDisabled("Process counters appear when inspection begins.");
         }
         if(scanning.load() && progress<100)
-            ImGui::TextDisabled("Long-running stages can hold the number until work completes.");
+            ImGui::TextDisabled("Progress reflects completed inspection work.");
         ImGui::EndChild();
         ImGui::PopStyleColor();
     } else if(page==0) {
@@ -47812,6 +47919,11 @@ zula.exe)FIVEMSTR";
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),localized("INTERFACE DETAILS"));
         ImGui::Checkbox(localized("Animate scanner branding"),&brandAnimation);
+        ImGui::BeginDisabled(!brandAnimation || reducedMotion);
+        ImGui::SetNextItemWidth(240.f);
+        ImGui::SliderFloat("Gothic effects intensity",&syncV26FxStrength,.15f,1.f,"%.2f");
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Decorative only: does not affect scan results.");
         ImGui::Checkbox(localized("Monochrome rain across the window"),&ambientMotesEnabled);
         ImGui::BeginDisabled(!ambientMotesEnabled);
         ImGui::SetNextItemWidth(200);
@@ -48239,7 +48351,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
                 ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextUnformatted("SYNC SCANNER - KEYBOARD SHORTCUTS");
             ImGui::Separator();
-            ImGui::TextWrapped("Ctrl + 1..5: visible workspaces in Simple view; Ctrl + 1..9 in Advanced view.");
+            ImGui::TextWrapped("Ctrl + 1..4: Simple view; Ctrl + 1..8: Advanced view.");
             ImGui::TextWrapped("Use Simple view to focus on five workspaces. Advanced view exposes additional read-only tools.");
             ImGui::TextWrapped("F1: show this help window");
             ImGui::TextWrapped("Esc: close this help window");
