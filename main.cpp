@@ -38333,6 +38333,8 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.40f,.045f,.10f,1.f));
         if(ImGui::Button("ENTER SCANNER  >>",ImVec2(bw,48.f))){
             syncIntroTransition=now;
+            syncIntroOpen=false; // Enter immediately; do not trap the user in an artificial loading screen.
+            syncIntroRevealAt=now;
             beginStartupWindowExpand();
         }
         ImGui::PopStyleColor(3);
@@ -38742,6 +38744,20 @@ namespace syncLive {
         ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.033f,.012f,.024f,1.f));
         ImGui::Begin("##syncLiveGate",nullptr,ImGuiWindowFlags_NoDecoration|
             ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
+        // Approval screen is distinct from the opening. Use the character artwork
+        // as a subtle backdrop, not the old cross/loading artwork.
+        if(alucardBannerTexture){
+            ImDrawList* bg=ImGui::GetWindowDrawList();
+            const float ratio=1.7778f, area=size.x/(std::max)(size.y,1.f);
+            ImVec2 uv0(0,0),uv1(1,1);
+            if(area>ratio){float f=ratio/area;uv0.y=(1.f-f)*.5f;uv1.y=1.f-uv0.y;}
+            else {float f=area/ratio;uv0.x=(1.f-f)*.5f;uv1.x=1.f-uv0.x;}
+            bg->AddImage((ImTextureID)alucardBannerTexture,pos,
+                ImVec2(pos.x+size.x,pos.y+size.y),uv0,uv1,IM_COL32(255,255,255,130));
+            bg->AddRectFilledMultiColor(pos,ImVec2(pos.x+size.x,pos.y+size.y),
+                IM_COL32(9,4,9,225),IM_COL32(9,4,9,100),
+                IM_COL32(9,4,9,130),IM_COL32(9,4,9,230));
+        }
         const float w=(std::min)(520.f,(std::max)(280.f,size.x-36.f));
         const float h=292.f;
         ImGui::SetCursorScreenPos(ImVec2(pos.x+(size.x-w)*.5f,pos.y+(size.y-h)*.5f));
@@ -38752,15 +38768,15 @@ namespace syncLive {
         ImGui::TextColored(ImVec4(.85f,.20f,.31f,1.f),"SYNC / ACCESS");
         ImGui::Separator();ImGui::Spacing();
         ImGui::SetWindowFontScale(1.4f);
-        ImGui::TextUnformatted("Authorization required");
+        ImGui::TextUnformatted("SECURE ACCESS");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextDisabled("Administrator approval is required to continue.");
+        ImGui::TextDisabled("Checking administrator approval for this device.");
         ImGui::Spacing();ImGui::Spacing();
         ImGui::TextColored(ImVec4(.88f,.28f,.38f,1.f),"STATUS");
         ImGui::SameLine();ImGui::TextUnformatted(status.c_str());
         if(!message.empty())ImGui::TextWrapped("%s",message.c_str());
         ImGui::Spacing();
-        if(ImGui::Button("RETRY CONNECTION",ImVec2(-1.f,44.f)))send("/hello");
+        if(ImGui::Button("CHECK APPROVAL",ImVec2(-1.f,44.f)))send("/hello");
         ImGui::Spacing();
         ImGui::TextDisabled("Access is validated by the administrator service.");
         ImGui::EndChild();ImGui::PopStyleColor(2);
@@ -38837,12 +38853,13 @@ static void drawProposedDetectionCoverage() {
 
 static void renderUI() {
     static double liveLastCheck=-10.0;
-    if(ImGui::GetTime()-liveLastCheck>=2.0){
+    // The opening is a one-time landing page, never a post-approval loading loop.
+    if(syncIntroOpen){renderSyncOpening();return;}
+    // Poll the real server while waiting; never replace an approved state with a fake local grant.
+    if(syncLive::status!="unlocked" && ImGui::GetTime()-liveLastCheck>=5.0){
         liveLastCheck=ImGui::GetTime();
         syncLive::send("/hello");
     }
-    // Show the opening first; the real administrator gate remains mandatory afterwards.
-    if(syncIntroOpen){renderSyncOpening();return;}
     if(syncLive::status!="unlocked"){syncLive::render();return;}
     // Consent is opt-in, explicit and revocable; reports are never sent silently.
     static bool shareScanWithAdmin=false;
