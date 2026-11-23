@@ -35094,7 +35094,7 @@ static LRESULT WINAPI wndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     return DefWindowProcW(h,msg,w,l);
 }
 
-static ImVec4 orange(){return ImVec4(.88f,.88f,.88f,1.f);}
+static ImVec4 orange(){return ImVec4(.88f,.20f,.27f,1.f);}
 static void applyTheme() {
     // V36 / NOIR EDITION: native black-and-white design, scanner rules untouched.
     ImGui::StyleColorsDark();
@@ -35123,11 +35123,11 @@ static void applyTheme() {
     st.AntiAliasedFill=true;
     auto& c=st.Colors;
     // V36 / NOIR: native grayscale theme, not merely a post-render filter.
-    const ImVec4 bg(.022f,.010f,.014f,1.f);
-    const ImVec4 panel(.060f,.025f,.033f,1.f);
-    const ImVec4 elevated(.105f,.040f,.050f,1.f);
-    const ImVec4 accent(.77f,.12f,.20f,1.f);
-    const ImVec4 accentHot(.96f,.26f,.34f,1.f);
+    const ImVec4 bg(.025f,.025f,.025f,1.f);
+    const ImVec4 panel(.058f,.058f,.058f,1.f);
+    const ImVec4 elevated(.105f,.105f,.105f,1.f);
+    const ImVec4 accent(.86f,.86f,.86f,1.f);
+    const ImVec4 accentHot(1.f,1.f,1.f,1.f);
     const ImVec4 ink(.96f,.96f,.96f,1.f);
     c[ImGuiCol_Text]=ink;
     c[ImGuiCol_TextDisabled]=ImVec4(.63f,.63f,.63f,1.f);
@@ -35198,6 +35198,29 @@ static void applyTheme() {
         c[ImGuiCol_ScrollbarBg]=ImVec4(.012f,.012f,.012f,1.f);
         c[ImGuiCol_Border]=ImVec4(.39f,.39f,.39f,.8f);
     }
+    // HELLSING / ALUCARD EDITION: deep oxblood and restrained crimson accents.
+    c[ImGuiCol_WindowBg]=ImVec4(.035f,.018f,.025f,1.f);
+    c[ImGuiCol_ChildBg]=ImVec4(.075f,.030f,.040f,1.f);
+    c[ImGuiCol_PopupBg]=ImVec4(.095f,.037f,.052f,1.f);
+    c[ImGuiCol_Border]=ImVec4(.48f,.12f,.19f,.80f);
+    c[ImGuiCol_FrameBg]=ImVec4(.13f,.050f,.067f,1.f);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(.22f,.067f,.094f,1.f);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.32f,.075f,.11f,1.f);
+    c[ImGuiCol_Button]=ImVec4(.28f,.060f,.088f,1.f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(.47f,.085f,.13f,1.f);
+    c[ImGuiCol_ButtonActive]=ImVec4(.60f,.10f,.16f,1.f);
+    c[ImGuiCol_Header]=ImVec4(.23f,.065f,.09f,1.f);
+    c[ImGuiCol_HeaderHovered]=ImVec4(.38f,.085f,.12f,1.f);
+    c[ImGuiCol_HeaderActive]=ImVec4(.48f,.09f,.14f,1.f);
+    c[ImGuiCol_CheckMark]=ImVec4(.98f,.32f,.38f,1.f);
+    c[ImGuiCol_SliderGrab]=ImVec4(.70f,.15f,.23f,1.f);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.90f,.21f,.28f,1.f);
+    c[ImGuiCol_Tab]=ImVec4(.13f,.04f,.06f,1.f);
+    c[ImGuiCol_TabHovered]=ImVec4(.39f,.07f,.11f,1.f);
+    c[ImGuiCol_TabSelected]=ImVec4(.44f,.08f,.13f,1.f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(.19f,.05f,.075f,1.f);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.70f,.12f,.20f,.40f);
+    c[ImGuiCol_NavHighlight]=ImVec4(.92f,.19f,.27f,1.f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -37250,9 +37273,9 @@ static void draw(){
 
 // Shared primary action button for dashboard, file verification and settings.
 static bool accentButton(const char* label, ImVec2 size=ImVec2(0,0)) {
-    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.355f,0.355f,0.355f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.443f,0.443f,0.443f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(0.278f,0.278f,0.278f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.38f,.07f,.12f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.58f,.11f,.17f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.27f,.05f,.08f,1.f));
     ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(1.000f,1.000f,1.000f,1.f));
     const bool pressed=ImGui::Button(label,size);
     ImGui::PopStyleColor(4);
@@ -37265,7 +37288,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const float width=(std::max)(100.f,(std::min)(requestedWidth,available));
     const bool busy=scanning.load() || presentationHold.load();
     const bool blocked=busy;
-    const char* caption=busy ? "SCANNING..." : "START FULL SCAN";
+    const char* caption=busy ? "SCANNING..." : "START SCAN  |  ALUCARD";
     ImGui::BeginDisabled(blocked);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(13.f,12.f));
@@ -37280,7 +37303,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const bool animate=brandAnimation && !reducedMotion;
     const float time=static_cast<float>(ImGui::GetTime());
     const float phase=animate ? .5f+.5f*std::sin(time*2.2f) : .35f;
-    const ImU32 border=IM_COL32(180,35,52,static_cast<int>(50.f+phase*65.f));
+    const ImU32 border=IM_COL32(190,190,190,static_cast<int>(50.f+phase*65.f));
     dl->AddRect(ImVec2(min.x+.5f,min.y+.5f),ImVec2(max.x-.5f,max.y-.5f),
         border,8.f,0,1.f);
     if(animate && !busy && width>130.f){
@@ -37289,7 +37312,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
         const float travel=std::fmod(time*70.f,span+34.f)-17.f;
         const float x=(std::max)(min.x+14.f,(std::min)(max.x-14.f,min.x+14.f+travel));
         dl->AddLine(ImVec2(x-13.f,max.y-2.f),ImVec2(x+13.f,max.y-2.f),
-            IM_COL32(220,58,72,100),1.5f);
+            IM_COL32(235,235,235,100),1.5f);
     }
     if(busy){
         // An unobtrusive activity spinner; not a simulated percentage.
@@ -37756,7 +37779,7 @@ static void renderSyncOpening() {
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
     ImGui::SetNextWindowPos(p);
     ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.025f,.025f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.014f,.023f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0.f);
     ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
@@ -37838,7 +37861,7 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
-        const bool openClicked=ImGui::Button("OPEN SCANNER   >>",ImVec2(buttonW,47.f));
+        const bool openClicked=ImGui::Button("ENTER HELLSING SCANNER   >>",ImVec2(buttonW,47.f));
         if(ImGui::IsItemHovered() && animate){
             const ImVec2 a=ImGui::GetItemRectMin();
             const ImVec2 b=ImGui::GetItemRectMax();
@@ -37861,7 +37884,7 @@ static void renderSyncOpening() {
     }else{
         // Opening sequence is a visual handoff, not a fake scan.
         static constexpr const char* captions[]={
-            "SYNC PC CHECKER","ADVANCED ANTI-CHEAT","FOR FIVEM","BYPASS HUNTER"
+            "HELLSING  /  ALUCARD","SYNC PC CHECKER","SYSTEM INSPECTION","OPEN THE SCANNER"
         };
         const float stageTime=(std::max)(0.f,elapsed-.20f);
         const int stage=(std::min)(3,(int)(stageTime/1.03f));
@@ -38441,7 +38464,7 @@ static void renderUI() {
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.08f);
-    ImGui::TextColored(titleInk,"SYNC PC CHECKER  /  V14");
+    ImGui::TextColored(titleInk,"HELLSING  /  SYNC SCANNER");
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
@@ -41689,7 +41712,7 @@ zula.exe)FIVEMSTR";
         ImGui::TextColored(accent,"SECURITY OPERATIONS / ENDPOINT");
         ImGui::Dummy(ImVec2(0,8));
         ImGui::SetWindowFontScale(1.12f);
-        ImGui::TextColored(pale,"SYNC / SYSTEM INSPECTION");
+        ImGui::TextColored(pale,"System Inspection");
         ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(quiet,"Processes, services, persistence and event evidence");
         ImGui::Dummy(ImVec2(0,14));
@@ -41871,7 +41894,7 @@ zula.exe)FIVEMSTR";
             const float syncAvailableWidth = ImGui::GetContentRegionAvail().x;
             const bool syncCompact = syncAvailableWidth < 1000.f;
             static char syncNavSearch[96] = "";
-            const ImVec4 syncBlue(.89f,.23f,.30f,1.f);
+            const ImVec4 syncBlue(.30f,.78f,.96f,1.f);
             const ImVec4 syncMuted(.55f,.60f,.68f,1.f);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,10.f);
@@ -42710,7 +42733,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,appIcon,nullptr,nullptr,nullptr,
                   L"SyncPCChecker",appIcon};
     RegisterClassExW(&wc);
-    hwnd=CreateWindowW(wc.lpszClassName,L"SYNC PC CHECKER",
+    hwnd=CreateWindowW(wc.lpszClassName,L"Sync PC Checker - Mudin",
                        WS_POPUP|WS_MINIMIZEBOX|WS_SYSMENU|WS_THICKFRAME|WS_MAXIMIZEBOX,100,100,1360,860,nullptr,nullptr,inst,nullptr);
     if(!hwnd){
         diagnosticLog("CreateWindowW failed.");
@@ -42799,59 +42822,9 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
             drawAmbientMotes(mainViewport->WorkPos,mainViewport->WorkSize);
         }
         ImGui::Render();
-        // V15: retained legacy monochrome rendering pass for compatibility.
-        // TODO: replace the per-vertex transform with semantic ImGui style colors
-        // to avoid an O(vertex count) CPU pass on every frame.
-        // V35 monochrome rendering pass: applies to all custom-drawn widgets,
-        // legacy colored badges, effects, and ImGui controls consistently.
-        // Preserve alpha and apply contrast-aware luminance, without modifying
-        // the scanner's underlying status or evidence classification.
-        if(ImDrawData* monochromeData=ImGui::GetDrawData()){
-            for(int listIndex=0;listIndex<monochromeData->CmdListsCount;++listIndex){
-                ImDrawList* list=monochromeData->CmdLists[listIndex];
-                for(int vertexIndex=0;vertexIndex<list->VtxBuffer.Size;++vertexIndex){
-                    ImDrawVert& vertex=list->VtxBuffer[vertexIndex];
-                    const ImU32 color=vertex.col;
-                    const unsigned int r=(color>>IM_COL32_R_SHIFT)&255u;
-                    const unsigned int g=(color>>IM_COL32_G_SHIFT)&255u;
-                    const unsigned int b=(color>>IM_COL32_B_SHIFT)&255u;
-                    const unsigned int a=(color>>IM_COL32_A_SHIFT)&255u;
-                    const unsigned int lum=(54u*r+183u*g+19u*b+128u)>>8;
-                    // Lift bright text while keeping dark panels nearly black.
-                    const unsigned int gray=lum>170u
-                        ? (std::min)(255u,lum+((lum-170u)/4u))
-                        : lum<55u ? (lum*3u)/4u : lum;
-                    // V40: keep semantic verdict colors readable in the
-                    // otherwise monochrome UI. Do not recolor unrelated blue
-                    // accents or neutral panels.
-                    const bool redStatus = r>=145u && r>g*14u/10u &&
-                        r>b*13u/10u && g<155u;
-                    const bool yellowStatus = r>=160u && g>=115u &&
-                        r>b*15u/10u && g>b*14u/10u &&
-                        g*10u>=r*6u;
-                    const bool greenStatus = g>=145u && g>r*12u/10u &&
-                        g>b*11u/10u && r<170u;
-                    // Only the scan percentage uses the selected accent color.
-                    // Preserve its exact packed RGB in the monochrome pass.
-                    const ImVec4 percentageAccent=accentColor();
-                    const unsigned int ar=(unsigned int)(percentageAccent.x*255.f+.5f);
-                    const unsigned int ag=(unsigned int)(percentageAccent.y*255.f+.5f);
-                    const unsigned int ab=(unsigned int)(percentageAccent.z*255.f+.5f);
-                    const bool selectedPercentageColor=
-                        r==ar && g==ag && b==ab;
-                    if(redStatus || yellowStatus || greenStatus ||
-                       selectedPercentageColor){
-                        vertex.col=color;
-                    }else{
-                        vertex.col=(gray<<IM_COL32_R_SHIFT)
-                                  |(gray<<IM_COL32_G_SHIFT)
-                                  |(gray<<IM_COL32_B_SHIFT)
-                                  |(a<<IM_COL32_A_SHIFT);
-                    }
-                }
-            }
-        }
-        const float clear[4]={.025f,.025f,.025f,1.f};
+        // Hellsing theme uses semantic ImGui colors directly.
+        // No grayscale postprocessing; keep original status colors intact.
+        const float clear[4]={.035f,.014f,.023f,1.f};
         context->OMSetRenderTargets(1,&target,nullptr);
         context->ClearRenderTargetView(target,clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
