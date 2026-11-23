@@ -22,6 +22,7 @@
 #include <bcrypt.h>
 #pragma comment(lib,"bcrypt.lib")
 #include <shellapi.h>
+#include <shobjidl.h> // SetCurrentProcessExplicitAppUserModelID
 #pragma comment(lib,"shell32.lib")
 #include <map>
 #include <set>
@@ -37874,6 +37875,20 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
             draw->AddLine(ImVec2(x,y-3.f),ImVec2(x,y),
                 IM_COL32(203,40,65,27),1.f);
     }
+    // Rare, slow crimson streaks inspired by gothic anime title sequences.
+    // Decorative only, clipped to the window, and never used as scan progress.
+    if(size.x>700.f && rainDensity!=0){
+        for(int i=0;i<3;++i){
+            const float travel=size.x+320.f;
+            const float phase=std::fmod(t*(22.f+i*7.f)+i*travel*.37f,travel);
+            const float x=origin.x-160.f+phase;
+            const float y=origin.y+size.y*(.18f+.28f*i);
+            draw->AddLine(ImVec2(x-95.f,y+9.f),ImVec2(x+55.f,y-9.f),
+                IM_COL32(215,31,66,13),1.1f);
+            draw->AddLine(ImVec2(x-22.f,y+2.5f),ImVec2(x+12.f,y-2.5f),
+                IM_COL32(245,57,87,20),1.2f);
+        }
+    }
     draw->PopClipRect();
 }
 
@@ -39097,6 +39112,17 @@ static void renderUI() {
         const ImVec2 p=ImGui::GetCursorScreenPos();
         drawCrimsonSeal(ImGui::GetWindowDrawList(),ImVec2(p.x+24.f,p.y+23.f),
                         20.f,brandAnimation && !reducedMotion);
+        // Two faint orbiting red sparks, purely decorative; never cover text.
+        if(brandAnimation && !reducedMotion){
+            ImDrawList* glow=ImGui::GetWindowDrawList();
+            const float angle=brandTime*.43f;
+            for(int i=0;i<2;++i){
+                const float a=angle+i*3.14159265f;
+                const ImVec2 dot(p.x+24.f+cosf(a)*26.f,p.y+23.f+sinf(a)*26.f);
+                glow->AddCircleFilled(dot,2.2f,IM_COL32(239,64,93,155),12);
+                glow->AddCircle(dot,4.4f,IM_COL32(196,32,63,55),12,1.f);
+            }
+        }
         ImGui::Dummy(ImVec2(50.f,46.f));
         ImGui::SameLine(0,12.f);
     }
@@ -39240,9 +39266,8 @@ static void renderUI() {
     // File Lab remains accessible inside Artifacts (OPEN BINARY LAB).
     const char* nav[]={"OVERVIEW","SCAN RESULTS","ARTIFACTS","SETTINGS"};
     const int navPages[]={0,2,9,4};
+    // Shortcuts follow the four visible navigation entries.
     const int simpleNavIndices[]={0,1,2,3};
-    // Shortcuts follow the *visible* navigation, including simple mode.
-    const int simpleNavIndices[]={0,2,6,3,9};
     if(!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl &&
        !ImGui::GetIO().KeyAlt && !ImGui::GetIO().KeyShift){
         const int shortcutCount=4;
