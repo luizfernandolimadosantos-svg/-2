@@ -38366,6 +38366,14 @@ static void drawGothicScanProgress(float width,float height,int percent,bool mov
                          IM_COL32(163,23,53,255),2.f);
         d->AddLine(ImVec2(x0, y-3.f),ImVec2(tip,y-3.f),
                    IM_COL32(251,86,112,235),1.2f);
+        if(moving){
+            const float gleam=(.5f+.5f*sinf(t*3.f));
+            const float glowLeft=(std::max)(x0,tip-30.f);
+            d->AddRectFilledMultiColor(
+                ImVec2(glowLeft,y-4.f),ImVec2(tip,y+5.f),
+                IM_COL32(255,89,120,0),IM_COL32(255,111,140,(int)(65.f*gleam)),
+                IM_COL32(255,111,140,(int)(65.f*gleam)),IM_COL32(255,89,120,0));
+        }
     }
     for(int i=1;i<10;++i){
         const float x=x0+(x1-x0)*(float)i/10.f;
@@ -39127,6 +39135,22 @@ static void renderUI() {
     if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
     ImGui::SameLine(0,7);
     if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
+    // Fine crimson rule and moving glint: visual-only, no input or scan state.
+    {
+        ImDrawList* dl=ImGui::GetWindowDrawList();
+        const ImVec2 hp=ImGui::GetWindowPos();
+        const float hw=ImGui::GetWindowSize().x;
+        const float y=hp.y+ImGui::GetWindowSize().y-2.f;
+        dl->AddLine(ImVec2(hp.x+14.f,y),ImVec2(hp.x+hw-14.f,y),
+                    IM_COL32(116,29,49,160),1.f);
+        if(brandAnimation&&!reducedMotion&&hw>140.f){
+            const float span=hw-80.f;
+            const float travel=fmodf(brandTime*47.f,span);
+            dl->AddLine(ImVec2(hp.x+20.f+travel,y),
+                        ImVec2(hp.x+48.f+travel,y),
+                        IM_COL32(240,69,104,200),2.f);
+        }
+    }
     ImGui::EndChild();
     // Compact, factual status strip: no inferred malware verdict.
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.040f,.060f,1.f));
@@ -39141,6 +39165,17 @@ static void renderUI() {
             running?ImVec4(.93f,.74f,.38f,1.f):
             completed?ImVec4(.36f,.90f,.68f,1.f):
             ImVec4(.65f,.74f,.81f,1.f);
+        {
+            const ImVec2 c=ImGui::GetCursorScreenPos();
+            const float pulse=(!reducedMotion&&running)?
+                .65f+.35f*sinf((float)ImGui::GetTime()*3.f):1.f;
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(c.x+5.f,c.y+ImGui::GetTextLineHeight()*.5f),3.5f,
+                ImGui::ColorConvertFloat4ToU32(ImVec4(
+                    stateColor.x,stateColor.y,stateColor.z,pulse)),16);
+            ImGui::Dummy(ImVec2(12.f,ImGui::GetTextLineHeight()));
+            ImGui::SameLine(0,7.f);
+        }
         ImGui::TextColored(stateColor,"%s",
             scanFailed?"SCAN FAILED":scanCancelled?"CANCELLED":
             running?"SCANNING":completed?"SCAN COMPLETE":finalizing?"FINALIZING PROGRESS":done?"PREPARING RESULTS":"READY");
@@ -39172,6 +39207,8 @@ static void renderUI() {
                 scanning.load()?"SCAN IN PROGRESS":"FINALIZING PROGRESS");
             ImGui::SameLine();
             ImGui::TextDisabled("%d%%",miniPercent);
+            ImGui::SameLine(0,12.f);
+            ImGui::TextColored(ImVec4(.68f,.43f,.51f,1.f)," /  SYNC");
             const float width=ImGui::GetContentRegionAvail().x;
             drawGothicScanProgress(width,22.f,miniPercent,scanning.load() && !reducedMotion);
         }
@@ -39431,13 +39468,9 @@ static void renderUI() {
         const float centerX=ImGui::GetCursorScreenPos().x+contentWidth*.5f;
         const float topY=ImGui::GetCursorScreenPos().y;
         ImDrawList* draw=ImGui::GetWindowDrawList();
-        // Small burgundy insignia instead of the old large locked screen.
+        // Small matching insignia, no fake findings or attention-grabbing animation.
         const float emblemY=topY+(std::max)(38.f,contentHeight*.23f);
-        draw->AddCircle(ImVec2(centerX,emblemY),26.f,IM_COL32(156,29,52,120),48,1.3f);
-        draw->AddLine(ImVec2(centerX,emblemY-13),ImVec2(centerX,emblemY+13),
-                      IM_COL32(205,44,72,210),2.f);
-        draw->AddLine(ImVec2(centerX-10,emblemY-3),ImVec2(centerX+10,emblemY-3),
-                      IM_COL32(205,44,72,210),2.f);
+        drawCrimsonSeal(draw,ImVec2(centerX,emblemY),22.f,false);
         const char* heading="NO SCAN COMPLETED";
         const char* description="Start a scan to view verified findings.";
         const ImVec2 hSize=ImGui::CalcTextSize(heading);
@@ -42171,6 +42204,16 @@ zula.exe)FIVEMSTR";
             const int alpha=(int)(175.f*pulse);
             accent->AddRectFilled(ImVec2(pos.x+1.f,pos.y+18.f),
                 ImVec2(pos.x+4.f,pos.y+size.y-18.f),IM_COL32(210,33,61,alpha),2.f);
+            accent->AddLine(ImVec2(pos.x+18.f,pos.y+size.y-2.f),
+                ImVec2(pos.x+size.x*.45f,pos.y+size.y-2.f),
+                IM_COL32(187,36,64,115),1.3f);
+            const float corner=15.f;
+            accent->AddLine(ImVec2(pos.x+size.x-corner-8.f,pos.y+12.f),
+                ImVec2(pos.x+size.x-8.f,pos.y+12.f),
+                IM_COL32(226,68,99,155),1.4f);
+            accent->AddLine(ImVec2(pos.x+size.x-8.f,pos.y+12.f),
+                ImVec2(pos.x+size.x-8.f,pos.y+12.f+corner),
+                IM_COL32(226,68,99,155),1.4f);
         }
         ImGui::TextColored(crimson,"S Y S T E M   I N S P E C T I O N");
         ImGui::Spacing();
@@ -42214,6 +42257,18 @@ zula.exe)FIVEMSTR";
             ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.25f,.095f,.14f,1.f));
             ImGui::BeginChild("##metric",ImVec2(cell,112.f),ImGuiChildFlags_Borders|
                 ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
+            {
+                ImDrawList* d=ImGui::GetWindowDrawList();
+                const ImVec2 q=ImGui::GetWindowPos();
+                const ImVec2 r=ImGui::GetWindowSize();
+                const bool hovered=ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+                d->AddRectFilled(ImVec2(q.x+1.f,q.y+1.f),
+                    ImVec2(q.x+3.f,q.y+r.y-1.f),
+                    hovered?IM_COL32(245,72,108,235):IM_COL32(160,38,65,135));
+                d->AddLine(ImVec2(q.x+12.f,q.y+r.y-2.f),
+                    ImVec2(q.x+r.x-12.f,q.y+r.y-2.f),
+                    IM_COL32(164,39,70,hovered?185:65),1.f);
+            }
             ImGui::TextColored(secondary,"%s",metrics[i]);
             ImGui::Spacing();
             ImGui::SetWindowFontScale(1.7f);
