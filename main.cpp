@@ -38248,27 +38248,34 @@ namespace syncLive {
     }
     static void render(){
         ImGuiViewport* vp=ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(vp->WorkPos);
-        ImGui::SetNextWindowSize(vp->WorkSize);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.035f,.04f,1.f));
-        ImGui::Begin("##syncLiveGate",nullptr,
-            ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|
-            ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight()*.28f);
-        ImGui::SetCursorPosX((std::max)(15.f,(ImGui::GetContentRegionAvail().x-480.f)*.5f));
-        ImGui::BeginGroup();
-        ImGui::SetWindowFontScale(1.6f);
+        const ImVec2 pos=vp->WorkPos, size=vp->WorkSize;
+        ImGui::SetNextWindowPos(pos);ImGui::SetNextWindowSize(size);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.033f,.012f,.024f,1.f));
+        ImGui::Begin("##syncLiveGate",nullptr,ImGuiWindowFlags_NoDecoration|
+            ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings);
+        const float w=(std::min)(520.f,(std::max)(280.f,size.x-36.f));
+        const float h=292.f;
+        ImGui::SetCursorScreenPos(ImVec2(pos.x+(size.x-w)*.5f,pos.y+(size.y-h)*.5f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.032f,.051f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.44f,.085f,.16f,1.f));
+        ImGui::BeginChild("##authorizationCard",ImVec2(w,h),ImGuiChildFlags_Borders|
+            ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::TextColored(ImVec4(.85f,.20f,.31f,1.f),"SYNC / ACCESS");
+        ImGui::Separator();ImGui::Spacing();
+        ImGui::SetWindowFontScale(1.4f);
         ImGui::TextUnformatted("Authorization required");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::Spacing();
-        ImGui::TextDisabled("Waiting for administrator approval.");
-        ImGui::Spacing();
-        ImGui::Text("STATUS: %s",status.c_str());
+        ImGui::TextDisabled("Administrator approval is required to continue.");
+        ImGui::Spacing();ImGui::Spacing();
+        ImGui::TextColored(ImVec4(.88f,.28f,.38f,1.f),"STATUS");
+        ImGui::SameLine();ImGui::TextUnformatted(status.c_str());
         if(!message.empty())ImGui::TextWrapped("%s",message.c_str());
-        if(ImGui::Button("RETRY CONNECTION",ImVec2(240,40)))send("/hello");
-        ImGui::EndGroup();
-        ImGui::End();
-        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        if(ImGui::Button("RETRY CONNECTION",ImVec2(-1.f,44.f)))send("/hello");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Access is validated by the administrator service.");
+        ImGui::EndChild();ImGui::PopStyleColor(2);
+        ImGui::End();ImGui::PopStyleColor();
     }
 }
 
@@ -38644,106 +38651,17 @@ static void renderUI() {
             const float strip=std::max(12.f,35.f*transitionAmount);
             dl->AddRectFilledMultiColor(
                 ImVec2(x-strip,o.y+5.f),ImVec2(x+strip,o.y+size.y),
-                IM_COL32(220,220,220,0),IM_COL32(235,235,235,opacity/4),
-                IM_COL32(235,235,235,opacity/8),IM_COL32(220,220,220,0));
+                IM_COL32(220,220,220,0),IM_COL32(180,24,52,opacity/4),
+                IM_COL32(180,24,52,opacity/8),IM_COL32(220,220,220,0));
             dl->AddLine(ImVec2(o.x,o.y+2.f),
                 ImVec2(o.x+size.x*t,o.y+2.f),
-                IM_COL32(255,255,255,(int)(220.f*transitionAmount)),2.f);
+                IM_COL32(194,36,65,(int)(160.f*transitionAmount)),2.f);
             const float r=5.f+12.f*(1.f-t);
             dl->AddCircle(ImVec2(x,o.y+2.f),r,
-                IM_COL32(245,245,245,opacity),24,1.4f);
+                IM_COL32(194,36,65,opacity),24,1.4f);
         }
     }
-    if((waitingForPresentation || (unlocking && !reducedMotion)) &&
-       page!=0 && page!=4) {
-        const float opening=unlocking?
-            std::clamp(static_cast<float>(unlockElapsed/1.25),0.f,1.f):0.f;
-        const float eased=opening*opening*(3.f-2.f*opening);
-        const float fade=unlocking?
-            1.f-std::clamp((opening-.72f)/.28f,0.f,1.f):1.f;
-        const auto fadeAlpha=[&](int alpha){
-            return static_cast<int>(alpha*fade);
-        };
-        const ImVec2 area=ImGui::GetCursorScreenPos();
-        const ImVec2 avail=ImGui::GetContentRegionAvail();
-        const float w=(std::max)(300.f,avail.x);
-        const float h=(std::max)(290.f,avail.y);
-        ImDrawList* curtain=ImGui::GetWindowDrawList();
-        // Frosted-glass approximation: layered translucent panels and
-        // diffuse highlights. No unimplemented GPU blur is claimed.
-        curtain->AddRectFilled(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(17,17,17,fadeAlpha(247)),14.f);
-        curtain->AddRectFilledMultiColor(
-            ImVec2(area.x+12,area.y+12),ImVec2(area.x+w-12,area.y+h-12),
-            IM_COL32(64,64,64,fadeAlpha(85)),IM_COL32(41,41,41,fadeAlpha(65)),
-            IM_COL32(24,24,24,fadeAlpha(95)),IM_COL32(44,44,44,fadeAlpha(80)));
-        for(int ring=9;ring>=1;--ring){
-            const float r=95.f+ring*13.f;
-            curtain->AddCircleFilled(
-                ImVec2(area.x+w*.5f,area.y+h*.39f),r,
-                IM_COL32(120,120,120,fadeAlpha(2)),48);
-        }
-        curtain->AddRect(area,ImVec2(area.x+w,area.y+h),
-            IM_COL32(110,110,110,fadeAlpha(130)),14.f,0,1.2f);
-        // Lock silhouette rendered directly with ImDrawList.
-        const ImVec2 center(area.x+w*.5f,area.y+h*.39f);
-        curtain->AddCircleFilled(center,54.f,IM_COL32(49,49,49,fadeAlpha(220)),48);
-        curtain->AddCircle(center,54.f,IM_COL32(143,143,143,fadeAlpha(160)),48,1.6f);
-        curtain->PathClear();
-        // The shackle rotates and rises as the scan unlocks.
-        const ImVec2 shackleCenter(center.x-9.f*eased,
-                                   center.y-9.f-13.f*eased);
-        curtain->PathArcTo(shackleCenter,19.f,
-            3.14159265f-0.62f*eased,
-            6.2831853f-0.62f*eased,24);
-        curtain->PathStroke(IM_COL32(223,223,223,fadeAlpha(255)),0,5.f);
-        curtain->AddRectFilled(
-            ImVec2(center.x-26.f,center.y-13.f),
-            ImVec2(center.x+26.f,center.y+26.f),
-            IM_COL32(165,165,165,fadeAlpha(255)),7.f);
-        curtain->AddCircleFilled(
-            ImVec2(center.x,center.y+3.f),4.5f,IM_COL32(29,29,29,fadeAlpha(255)),16);
-        curtain->AddRectFilled(
-            ImVec2(center.x-2.f,center.y+3.f),
-            ImVec2(center.x+2.f,center.y+14.f),
-            IM_COL32(29,29,29,fadeAlpha(255)),2.f);
-        ImGui::SetCursorScreenPos(ImVec2(area.x,center.y+76.f));
-        ImGui::PushTextWrapPos(area.x+w-24.f);
-        ImGui::SetWindowFontScale(1.10f);
-        const char* heading=unlocking?"INSPECTION UNLOCKED":"INSPECTION LOCKED";
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
-            (w-ImGui::CalcTextSize(heading).x)*.5f);
-        ImGui::TextColored(ImVec4(0.950f,0.950f,0.950f,1.f),"%s",heading);
-        ImGui::SetWindowFontScale(1.f);
-        ImGui::Dummy(ImVec2(0,9.f));
-        const char* detail=unlocking?
-            "Access granted. Opening inspection results...":
-            inspectionProgressStart<=0.0 ?
-                "Run a full inspection to unlock this section." :
-                scanFailed ? "Inspection failed. Start a new scan to unlock." :
-                scanCancelled ? "Inspection cancelled. Start a new scan to unlock." :
-                "Results unlock after inspection completes at 100%.";
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
-            (w-ImGui::CalcTextSize(detail).x)*.5f);
-        ImGui::TextColored(ImVec4(0.716f,0.716f,0.716f,1.f),"%s",detail);
-        ImGui::PopTextWrapPos();
-        ImGui::Dummy(ImVec2(0,22.f));
-        const float buttonWidth=245.f;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+
-            (w-buttonWidth)*.5f);
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.327f,0.327f,0.327f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.430f,0.430f,0.430f,1.f));
-        if(waitingForPresentation){
-            if(ImGui::Button(localized("GO TO DASHBOARD"),ImVec2(buttonWidth,45.f)))
-                page=0;
-        }else{
-            ImGui::BeginDisabled();
-            ImGui::Button("UNLOCKING...",ImVec2(buttonWidth,45.f));
-            ImGui::EndDisabled();
-        }
-        ImGui::PopStyleColor(2);
-        ImGui::Dummy(ImVec2(0,1.f));
-    } else if(page==11) {
+    if(page==11) {
         sectionTitle("SCAN VERDICT", "Evidence-based assessment - no definitive clean or bypass claims");
         sync_module_audit::render();
         kb_echo_native::render();
@@ -41455,8 +41373,7 @@ zula.exe)FIVEMSTR";
             ImGui::TextColored(crimson,"SCANNING");
             ImGui::SameLine();
             ImGui::TextDisabled("%d%%",inspectionDisplayPercent());
-            if(ImGui::Button("CANCEL SCAN",ImVec2(190.f,44.f)))
-                cancelRequested=true;
+            ImGui::TextDisabled("Inspection in progress. Results update as evidence is collected.");
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.66f,.83f,.67f,1.f),"SCAN COMPLETE");
             if(drawStartScanButton(230.f))startScan();
@@ -41582,7 +41499,7 @@ zula.exe)FIVEMSTR";
             }else{
                 ImGui::TextColored(accent,"INSPECTION RUNNING - LIVE EVIDENCE COLLECTION");
             }
-            if(ImGui::Button("CANCEL SCAN",ImVec2(155,37)))cancelRequested=true;
+            ImGui::TextDisabled("Inspection in progress");
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.45f,.85f,.56f,1.f),
                 "SCAN COMPLETE");
