@@ -36840,42 +36840,52 @@ static std::string evidenceFileAvailability(const std::wstring& path) {
 }
 static void drawEvidenceDetails() {
     if(!evidenceDetailsOpen)return;
-    ImGui::SetNextWindowSize(ImVec2(790,510),ImGuiCond_FirstUseEver);
-    if(!ImGui::Begin("Evidence Details - Read Only",&evidenceDetailsOpen)) {
-        ImGui::End();return;
-    }
-    ImGui::TextColored(orange(),"%s",evidenceCategory.c_str());
-    ImGui::Separator();
-    ImGui::TextWrapped("Item: %s",evidenceTitle.c_str());
-    ImGui::Spacing();
-    ImGui::TextWrapped("%s",evidenceDescription.c_str());
-    if(ImGui::SmallButton("Copy Evidence")){
-        const std::string text="Category: "+evidenceCategory+
-            "\nItem: "+evidenceTitle+"\nEvidence: "+evidenceDescription+
-            "\nAssessment: "+evidenceAssessment;
-        ImGui::SetClipboardText(text.c_str());
-    }
-    if(!evidenceAssessment.empty()) {
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.587f,0.587f,0.587f,1.f),"Security assessment");
-        ImGui::TextWrapped("%s",evidenceAssessment.c_str());
-    }
-    if(!evidenceFile.empty()) {
+    // Open the modal from the root UI every frame until acknowledged.
+    // This avoids a floating details window ending up behind the main viewport.
+    if(!ImGui::IsPopupOpen("FINDING DETAILS##syncEvidence"))
+        ImGui::OpenPopup("FINDING DETAILS##syncEvidence");
+    ImGuiViewport* viewport=ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(),ImGuiCond_Appearing,ImVec2(.5f,.5f));
+    ImGui::SetNextWindowSize(ImVec2((std::min)(730.f,viewport->WorkSize.x-40.f),
+                                    (std::min)(490.f,viewport->WorkSize.y-40.f)),ImGuiCond_Appearing);
+    if(ImGui::BeginPopupModal("FINDING DETAILS##syncEvidence",nullptr,
+        ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextColored(ImVec4(.94f,.31f,.40f,1.f),"EVIDENCE / %s",evidenceCategory.c_str());
         ImGui::Separator();
-        ImGui::TextWrapped("File: %s",utf8(evidenceFile).c_str());
-        const std::string fileAvailability=evidenceFileAvailability(evidenceFile);
-        ImGui::TextWrapped("File status: %s",fileAvailability.c_str());
-        ImGui::TextDisabled("Status checked now; this does not establish when or why a file disappeared.");
-        if(ImGui::Button("Verify SHA-256 and Authenticode")) {
-            evidenceHash=sha256(evidenceFile);
-            evidenceSignature=signatureStatus(evidenceFile);
+        ImGui::TextWrapped("%s",evidenceTitle.c_str());
+        ImGui::Spacing();
+        ImGui::BeginChild("##evidenceBody",ImVec2(0,-54.f),true);
+        ImGui::TextDisabled("OBSERVED EVIDENCE");
+        ImGui::TextWrapped("%s",evidenceDescription.c_str());
+        if(!evidenceAssessment.empty()){
+            ImGui::Separator();ImGui::TextDisabled("ASSESSMENT");
+            ImGui::TextWrapped("%s",evidenceAssessment.c_str());
         }
-        if(!evidenceHash.empty())ImGui::TextWrapped("SHA-256: %s",evidenceHash.c_str());
-        if(!evidenceSignature.empty())ImGui::TextWrapped("Signature: %s",evidenceSignature.c_str());
+        if(!evidenceFile.empty()){
+            ImGui::Separator();
+            ImGui::TextWrapped("File: %s",utf8(evidenceFile).c_str());
+            const std::string availability=evidenceFileAvailability(evidenceFile);
+            ImGui::TextWrapped("File status: %s",availability.c_str());
+            if(ImGui::Button("VERIFY SHA-256 / SIGNATURE")){
+                evidenceHash=sha256(evidenceFile);
+                evidenceSignature=signatureStatus(evidenceFile);
+            }
+            if(!evidenceHash.empty())ImGui::TextWrapped("SHA-256: %s",evidenceHash.c_str());
+            if(!evidenceSignature.empty())ImGui::TextWrapped("Signature: %s",evidenceSignature.c_str());
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("An indicator alone does not establish cheating.");
+        ImGui::EndChild();
+        if(ImGui::Button("COPY DETAILS",ImVec2(150.f,36.f))){
+            const std::string copied=evidenceCategory+" | "+evidenceTitle+"\n"+evidenceDescription;
+            ImGui::SetClipboardText(copied.c_str());
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("CLOSE",ImVec2(120.f,36.f))){
+            evidenceDetailsOpen=false;ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
-    ImGui::Spacing();
-    ImGui::TextDisabled("%s",XOR_STR("Evidence is observational; an indicator alone does not confirm a threat.").c_str());
-    ImGui::End();
 }
 // Unified category-specific findings: same source/classifier as the RESULTS verdict.
 // All matching records are listed, with no arbitrary preview cap.
@@ -38273,6 +38283,31 @@ static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool moti
     for(int i=0;i<5;i++)draw->AddLine(star[i],star[(i+1)%5],red,1.5f);
 }
 
+// Layered, time-based occult seal; no textures or persistent allocations.
+static void drawCrimsonSeal(ImDrawList* d,ImVec2 c,float radius,bool motion){
+    const float pi=3.14159265358979323846f;
+    const float t=motion?(float)ImGui::GetTime():0.f;
+    for(int ring=0;ring<3;++ring){
+        float r=radius*(1.f-.16f*ring);
+        int alpha=ring==0?145:80;
+        d->AddCircle(c,r,IM_COL32(207,39,70,alpha),96,ring==0?2.f:1.f);
+    }
+    for(int i=0;i<12;++i){
+        float a=i*2.f*pi/12.f+t*.09f;
+        ImVec2 x(c.x+cosf(a)*radius*.89f,c.y+sinf(a)*radius*.89f);
+        ImVec2 y(c.x+cosf(a)*radius*.98f,c.y+sinf(a)*radius*.98f);
+        d->AddLine(x,y,IM_COL32(234,69,91,150),1.4f);
+    }
+    ImVec2 pts[5];
+    for(int i=0;i<5;++i){
+        float a=-pi/2.f+i*4.f*pi/5.f-t*.035f;
+        pts[i]=ImVec2(c.x+cosf(a)*radius*.66f,c.y+sinf(a)*radius*.66f);
+    }
+    for(int i=0;i<5;++i)d->AddLine(pts[i],pts[(i+1)%5],IM_COL32(234,55,80,190),2.f);
+    float pulse=motion?.5f+.5f*sinf(t*1.7f):.5f;
+    d->AddCircleFilled(c,3.f+2.f*pulse,IM_COL32(246,89,110,200),24);
+}
+
 static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
@@ -38304,8 +38339,12 @@ static void renderSyncOpening() {
             ImVec2(p.x+sz.x,p.y+sz.y),uv0,uv1,IM_COL32(255,255,255,205));
     }
     d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
-        IM_COL32(6,3,7,244),IM_COL32(6,3,7,75),
-        IM_COL32(6,3,7,100),IM_COL32(6,3,7,238));
+        IM_COL32(6,3,7,226),IM_COL32(6,3,7,38),
+        IM_COL32(6,3,7,75),IM_COL32(6,3,7,204));
+    // Large animated seal on the open side of the composition.
+    const float sealRadius=(std::min)(sz.x*.14f,sz.y*.27f);
+    if(sz.x>780.f)drawCrimsonSeal(d,ImVec2(p.x+sz.x*.76f,p.y+sz.y*.48f),
+                                  sealRadius,animate);
     const float left=p.x+(std::max)(28.f,sz.x*.065f);
     const float baseline=p.y+sz.y*.38f;
     d->AddRectFilled(ImVec2(left,baseline-76.f),ImVec2(left+3.f,baseline+76.f),
@@ -38320,7 +38359,7 @@ static void renderSyncOpening() {
     d->AddText(ImVec2(left+22.f,p.y+sz.y-58.f),IM_COL32(126,95,108,255),
         "SYNC SCANNER    |    LOCAL INSPECTION");
     d->AddText(ImVec2(left+22.f,baseline-70.f),IM_COL32(237,91,111,255),"SYNC / SECURITY SYSTEM");
-    d->AddText(ImVec2(left+22.f,baseline-32.f),IM_COL32(248,239,241,255),"SYNC PC CHECKER");
+    d->AddText(ImVec2(left+22.f,baseline-32.f),IM_COL32(248,239,241,255),"SYNC PC CHECKER  /  SECURITY CONSOLE");
     d->AddText(ImVec2(left+22.f,baseline+1.f),IM_COL32(194,167,176,255),"Windows integrity and evidence review");
     d->AddText(ImVec2(left+22.f,baseline+29.f),IM_COL32(142,122,133,255),"AUTHORIZED ACCESS  /  LOCAL INSPECTION");
     const float bw=(std::min)(310.f,(std::max)(140.f,sz.x-80.f));
@@ -38936,7 +38975,8 @@ static void renderUI() {
     const float brandTime=static_cast<float>(ImGui::GetTime());
     {
         const ImVec2 p=ImGui::GetCursorScreenPos();
-        drawAlucardSigil(ImGui::GetWindowDrawList(),ImVec2(p.x+24.f,p.y+23.f),21.f,brandAnimation && !reducedMotion);
+        drawCrimsonSeal(ImGui::GetWindowDrawList(),ImVec2(p.x+24.f,p.y+23.f),
+                        20.f,brandAnimation && !reducedMotion);
         ImGui::Dummy(ImVec2(50.f,46.f));
         ImGui::SameLine(0,12.f);
     }
@@ -43252,7 +43292,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     SetUnhandledExceptionFilter(diagnosticUnhandledException);
     diagnosticLog("Application starting.");
     HICON appIcon=reinterpret_cast<HICON>(
-        LoadImageW(inst,MAKEINTRESOURCEW(1),IMAGE_ICON,32,32,LR_DEFAULTCOLOR));
+        LoadImageW(inst,MAKEINTRESOURCEW(101),IMAGE_ICON,32,32,LR_DEFAULTCOLOR));
     if(!appIcon)appIcon=LoadIconW(nullptr,IDI_APPLICATION);
     WNDCLASSEXW wc{sizeof(wc),CS_CLASSDC,wndProc,0,0,inst,appIcon,nullptr,nullptr,nullptr,
                   L"SyncPCChecker",appIcon};
