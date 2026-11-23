@@ -38295,6 +38295,29 @@ static void drawCrimsonSeal(ImDrawList* d,ImVec2 c,float radius,bool motion){
     d->AddCircle(c,radius,IM_COL32(236,49,82,215),96,2.1f);
     d->AddCircle(c,radius*.83f,IM_COL32(170,38,65,170),96,1.2f);
     d->AddCircle(c,radius*.61f,IM_COL32(232,62,88,185),96,1.2f);
+    // Two opposing partial arcs create slow, legible motion without flashing.
+    for(int arc=0;arc<2;++arc){
+        const float start=(arc==0?turn:-turn*.72f)+(arc==0?0.f:pi);
+        const float r=radius*(arc==0?1.075f:.735f);
+        for(int k=0;k<19;++k){
+            const float a=start+(float)k*.034f;
+            const float b=start+(float)(k+1)*.034f;
+            d->AddLine(ImVec2(c.x+cosf(a)*r,c.y+sinf(a)*r),
+                       ImVec2(c.x+cosf(b)*r,c.y+sinf(b)*r),
+                       IM_COL32(255,95,126,175),arc==0?2.f:1.5f);
+        }
+    }
+    // Cardinal diamonds and radial inscriptions stay inside the seal boundary.
+    for(int i=0;i<8;++i){
+        const float angle=(float)i*pi/4.f-turn*.35f;
+        const float rr=radius*.72f;
+        const ImVec2 q(c.x+cosf(angle)*rr,c.y+sinf(angle)*rr);
+        const float size=(i%2==0?3.f:1.8f);
+        d->AddLine(ImVec2(q.x-size,q.y),ImVec2(q.x,q.y-size),IM_COL32(224,66,96,155),1.f);
+        d->AddLine(ImVec2(q.x,q.y-size),ImVec2(q.x+size,q.y),IM_COL32(224,66,96,155),1.f);
+        d->AddLine(ImVec2(q.x+size,q.y),ImVec2(q.x,q.y+size),IM_COL32(224,66,96,155),1.f);
+        d->AddLine(ImVec2(q.x,q.y+size),ImVec2(q.x-size,q.y),IM_COL32(224,66,96,155),1.f);
+    }
     for(int i=0;i<16;++i){
         const float angle=i*2.f*pi/16.f+turn;
         const float r0=radius*(i%4==0?.79f:.88f);
@@ -38318,6 +38341,57 @@ static void drawCrimsonSeal(ImDrawList* d,ImVec2 c,float radius,bool motion){
                            IM_COL32(255,127,148,175),12);
     }
     d->AddCircleFilled(c,2.1f+1.2f*pulse,IM_COL32(255,105,129,205),24);
+}
+
+// Ornamental Hellsing-inspired progress rail: decorative, not a weapon model.
+// Uses the existing verified display percent; no independent progress timer.
+static void drawGothicScanProgress(float width,float height,int percent,bool moving){
+    const ImVec2 pos=ImGui::GetCursorScreenPos();
+    ImDrawList* d=ImGui::GetWindowDrawList();
+    const float w=(std::max)(100.f,width),h=(std::max)(16.f,height);
+    const float y=pos.y+h*.5f;
+    const float x0=pos.x+24.f,x1=pos.x+w-12.f;
+    const float fraction=(std::max)(0.f,(std::min)(1.f,percent/100.f));
+    const float tip=x0+(x1-x0)*fraction;
+    const float t=(float)ImGui::GetTime();
+    // Gunmetal frame with ornate gothic accents, not a functional gun silhouette.
+    d->AddRectFilled(ImVec2(x0-8.f,y-9.f),ImVec2(x1+5.f,y+9.f),
+                     IM_COL32(25,16,22,255),5.f);
+    d->AddRect(ImVec2(x0-8.f,y-9.f),ImVec2(x1+5.f,y+9.f),
+               IM_COL32(122,58,76,235),5.f,0,1.2f);
+    d->AddLine(ImVec2(x0,y-3.f),ImVec2(x1,y-3.f),IM_COL32(77,49,62,235),1.f);
+    d->AddLine(ImVec2(x0,y+4.f),ImVec2(x1,y+4.f),IM_COL32(66,43,53,210),1.f);
+    if(fraction>0.f){
+        d->AddRectFilled(ImVec2(x0,y-4.f),ImVec2(tip,y+5.f),
+                         IM_COL32(163,23,53,255),2.f);
+        d->AddLine(ImVec2(x0, y-3.f),ImVec2(tip,y-3.f),
+                   IM_COL32(251,86,112,235),1.2f);
+    }
+    for(int i=1;i<10;++i){
+        const float x=x0+(x1-x0)*(float)i/10.f;
+        d->AddLine(ImVec2(x,y-7.f),ImVec2(x,y-5.f),
+                   IM_COL32(169,84,99,155),1.f);
+    }
+    // Decorative octagonal crest travels only within the actual filled amount.
+    const float cx=tip;
+    if(percent>0){
+        const float pulse=moving?.5f+.5f*sinf(t*5.f):.55f;
+        d->AddCircleFilled(ImVec2(cx,y),8.f,IM_COL32(190,27,60,55+(int)(55*pulse)),12);
+        d->AddCircle(ImVec2(cx,y),5.5f,IM_COL32(248,91,119,230),8,1.5f);
+        d->AddLine(ImVec2(cx-3.f,y),ImVec2(cx+3.f,y),IM_COL32(255,173,187,230),1.f);
+        d->AddLine(ImVec2(cx,y-3.f),ImVec2(cx,y+3.f),IM_COL32(255,173,187,230),1.f);
+    }
+    // Left medallion acts as the rail's identifying emblem.
+    d->AddCircleFilled(ImVec2(pos.x+12.f,y),10.f,IM_COL32(34,13,23,255),20);
+    d->AddCircle(ImVec2(pos.x+12.f,y),9.f,IM_COL32(215,53,86,220),20,1.5f);
+    for(int i=0;i<5;++i){
+        const float a=-1.5707963f+i*4.f*3.14159265f/5.f;
+        const float b=-1.5707963f+((i+1)%5)*4.f*3.14159265f/5.f;
+        d->AddLine(ImVec2(pos.x+12.f+cosf(a)*5.f,y+sinf(a)*5.f),
+                   ImVec2(pos.x+12.f+cosf(b)*5.f,y+sinf(b)*5.f),
+                   IM_COL32(234,81,111,220),1.f);
+    }
+    ImGui::Dummy(ImVec2(w,h));
 }
 
 static void renderSyncOpening() {
@@ -38394,17 +38468,23 @@ static void renderSyncOpening() {
     }else{
         // A deterministic, time-based 4-second transition (not tied to FPS).
         const float elapsed=(float)(now-syncIntroTransition);
-        const float duration=reducedMotion?0.35f:4.0f;
+        const float duration=reducedMotion?0.6f:9.0f;
         const float progress=(std::min)(1.f,elapsed/duration);
         const ImVec2 center(p.x+sz.x*.5f,p.y+sz.y*.5f);
         const float baseRadius=(std::min)(sz.x*.16f,sz.y*.18f);
         // Fade the landing text with a dark theatrical curtain.
         d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),
             IM_COL32(7,2,7,255));
-        const char* openingTitle="SYNC  /  SECURITY CONSOLE";
+        const char* openingTitle=progress<.33f?"SCANNER":
+                                 progress<.66f?"BYPASS HUNTER":"SYNC PC CHECKER";
         const ImVec2 titleSize=ImGui::CalcTextSize(openingTitle);
-        d->AddText(ImVec2(center.x-titleSize.x*.5f,center.y-baseRadius-58.f),
-                   IM_COL32(246,213,221,255),openingTitle);
+        const float segment=(std::min)(2.999f,progress*3.f);
+        const float within=segment-floorf(segment);
+        const float fadeIn=(std::min)(1.f,within*6.f);
+        const float fadeOut=(std::min)(1.f,(1.f-within)*6.f);
+        const int titleAlpha=(int)(255.f*(std::min)(fadeIn,fadeOut));
+        d->AddText(ImVec2(center.x-titleSize.x*.5f,center.y-baseRadius-66.f),
+                   IM_COL32(246,213,221,titleAlpha),openingTitle);
         const float grow=(std::min)(1.f,progress*1.5f);
         drawCrimsonSeal(d,center,baseRadius*(.72f+.28f*grow),!reducedMotion);
         const float barWidth=(std::min)(320.f,sz.x*.65f);
@@ -38413,12 +38493,13 @@ static void renderSyncOpening() {
                          IM_COL32(58,22,35,245),3.f);
         d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth*progress,by+5.f),
                          IM_COL32(221,37,75,255),3.f);
-        const char* phase=progress<.28f?"INITIALIZING":
-                          progress<.72f?"LOADING SECURITY CONSOLE":
-                          progress<1.f?"PREPARING WORKSPACE":"READY";
+        // Each title remains visible for three seconds; the lower caption
+        // describes the animation rather than repeating the title.
+        const char* phase=progress<.33f?"SYSTEM INITIALIZATION":
+                          progress<.66f?"SECURITY MODULES":"READY TO ENTER";
         const ImVec2 phaseSize=ImGui::CalcTextSize(phase);
         d->AddText(ImVec2(center.x-phaseSize.x*.5f,by-29.f),
-                   IM_COL32(241,192,203,255),phase);
+                   IM_COL32(176,127,145,245),phase);
         if(progress>=1.f){
             syncIntroOpen=false;
             syncIntroTransition=-1.0;
@@ -39092,10 +39173,7 @@ static void renderUI() {
             ImGui::SameLine();
             ImGui::TextDisabled("%d%%",miniPercent);
             const float width=ImGui::GetContentRegionAvail().x;
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.77f,.12f,.23f,1.f));
-            ImGui::ProgressBar(static_cast<float>(miniPercent)/100.f,
-                               ImVec2(width,8.f),"");
-            ImGui::PopStyleColor();
+            drawGothicScanProgress(width,22.f,miniPercent,scanning.load() && !reducedMotion);
         }
         ImGui::EndChild();
         ImGui::PopStyleVar();
@@ -42156,27 +42234,8 @@ zula.exe)FIVEMSTR";
             inspectionResultsReady() || done.load();
         const int progress=scanEverStarted ? (std::max)(0,(std::min)(100,inspectionDisplayPercent())) : 0;
         ImGui::Spacing();
-        const ImVec2 barPos=ImGui::GetCursorScreenPos();
-        const float barWidth=(std::max)(40.f,ImGui::GetContentRegionAvail().x-72.f);
-        const float fraction=(std::max)(0.f,(std::min)(1.f,progress/100.f));
-        ImDrawList* barDraw=ImGui::GetWindowDrawList();
-        barDraw->AddRectFilled(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(34,15,22,255),6.f);
-        if(fraction>0.f){
-            const float fill=barWidth*fraction;
-            barDraw->AddRectFilled(barPos,
-                ImVec2(barPos.x+fill,barPos.y+22.f),IM_COL32(197,28,57,255),6.f);
-            // A subtle moving highlight only inside the verified filled portion.
-            if(scanning.load() && !reducedMotion && fill>25.f){
-                const float phase=static_cast<float>(ImGui::GetTime()*64.0);
-                const float shimmer=fmodf(phase,(std::max)(20.f,fill));
-                const float x=barPos.x+shimmer;
-                barDraw->AddRectFilled(ImVec2(x,barPos.y+3.f),
-                    ImVec2((std::min)(x+9.f,barPos.x+fill),barPos.y+19.f),
-                    IM_COL32(255,120,138,65),3.f);
-            }
-        }
-        barDraw->AddRect(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(138,35,55,230),6.f);
-        ImGui::Dummy(ImVec2(barWidth,23.f));
+        const float barWidth=(std::max)(110.f,ImGui::GetContentRegionAvail().x-72.f);
+        drawGothicScanProgress(barWidth,25.f,progress,scanning.load() && !reducedMotion);
         ImGui::SameLine(0,12.f);
         ImGui::TextColored(crimson,"%d%%",progress);
         ImGui::Spacing();ImGui::Separator();
