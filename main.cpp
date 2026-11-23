@@ -37302,7 +37302,7 @@ static bool drawStartScanButton(float requestedWidth=250.f) {
     const float width=(std::max)(100.f,(std::min)(requestedWidth,available));
     const bool busy=scanning.load() || presentationHold.load();
     const bool blocked=busy;
-    const char* caption=busy ? "SCANNING..." : "START SCAN  |  ALUCARD";
+    const char* caption=busy ? "SCANNING..." : "START SCAN";
     ImGui::BeginDisabled(blocked);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(13.f,12.f));
@@ -37808,12 +37808,9 @@ static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool moti
 }
 
 static void renderSyncOpening() {
-    // V46: redesigned opening — animated computer, code and magnifier,
-    // animated typography and a genuine, clickable Open Scanner action.
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
-    ImGui::SetNextWindowPos(p);
-    ImGui::SetNextWindowSize(sz);
+    ImGui::SetNextWindowPos(p); ImGui::SetNextWindowSize(sz);
     ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.014f,.023f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0.f);
@@ -37822,137 +37819,52 @@ static void renderSyncOpening() {
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollbar);
     ImDrawList* d=ImGui::GetWindowDrawList();
     const double now=ImGui::GetTime();
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
-    const float cardW=(std::max)(200.f,(std::min)(sz.x-28.f,590.f));
-    const float cardH=(std::max)(230.f,(std::min)(sz.y-28.f,405.f));
-    const ImVec2 lo(cx-cardW*.5f,cy-cardH*.50f);
-    const ImVec2 hi(cx+cardW*.5f,cy+cardH*.50f);
-    const bool transitioning=syncIntroTransition>=0.0;
-    const float elapsed=transitioning?(float)(now-syncIntroTransition):0.f;
-    auto ease=[&](float start,float duration){
-        return syncIntroEase((elapsed-start)/duration);
-    };
-    auto ink=[](int g,float opacity){
-        const float a=(std::max)(0.f,(std::min)(1.f,opacity));
-        return IM_COL32(g,g,g,(int)(255.f*a));
-    };
     const bool animate=brandAnimation && !reducedMotion;
-    const float clock=animate?(float)now:0.f;
-    const float entrance=transitioning?ease(.05f,.70f):0.f;
-    const float exit=transitioning?ease(4.65f,.60f):0.f;
-    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(11,4,8,255));
-    drawSyncNoirAtmosphere(d,p,sz,animate);
-    drawSyncCornerAccents(d,p,sz,animate);
-    // No outer card fill or outline: opening content sits directly
-    // on the fullscreen background, with no enclosing rectangle.
-    // Fine editorial rails; subtle enough not to compete with text.
-
-    // V71: editorial stacked identity, clear of the monitor illustration.
-    // SYNC is the hero word; PC CHECKER is a restrained tracking label.
-    ImFont* wordFont=ImGui::GetFont();
-    const float wordSize=ImGui::GetFontSize()*2.15f;
-    const float labelSize=ImGui::GetFontSize()*.93f;
-    const char* syncWord="HELLSING";
-    const char* restWord="S Y N C   /   A L U C A R D   E D I T I O N";
-    const ImVec2 syncSize=wordFont->CalcTextSizeA(wordSize,FLT_MAX,0.f,syncWord);
-    const ImVec2 restSize=wordFont->CalcTextSizeA(labelSize,FLT_MAX,0.f,restWord);
-    // Keep both lines above the monitor, even on a compact viewport.
-    const float wordY=(std::max)(p.y+12.f,cy-238.f);
-    const float wordX=cx-syncSize.x*.5f;
-    const float labelY=wordY+wordSize+5.f;
-    const float pulse=animate?(.5f+.5f*std::sin(clock*1.65f)):.6f;
-    // Tiny soft glow, avoiding blurred / doubled letters.
-    if(animate){
-        d->AddText(wordFont,wordSize,ImVec2(wordX-1.f,wordY),
-            ink(190,.10f+.07f*pulse),syncWord);
-        d->AddText(wordFont,wordSize,ImVec2(wordX+1.f,wordY),
-            ink(190,.10f+.07f*pulse),syncWord);
-    }
-    d->AddText(wordFont,wordSize,ImVec2(wordX,wordY),
-        ink(255,.92f+.08f*pulse),syncWord);
-    d->AddText(wordFont,labelSize,ImVec2(cx-restSize.x*.5f,labelY),
-        ink(180,.74f+.14f*pulse),restWord);
-    // Animated fine rule under SYNC: clean and typographic, no extra text.
-    const float lineAlpha=animate?(.18f+.16f*pulse):.22f;
-    const float lineY=labelY+labelSize+13.f;
-    const float lineW=animate?(syncSize.x*(.52f+.12f*std::sin(clock*.8f))):
-        syncSize.x*.58f;
-    d->AddLine(ImVec2(cx-lineW*.5f,lineY),
-        ImVec2(cx+lineW*.5f,lineY),
-        ink(245,lineAlpha),1.f);
-    // Clean wordmark: no subtitle or decorative interface caption.
-    const float illustrationScale=(std::min)(1.f,
-        (std::min)(cardW/590.f,cardH/405.f));
-    drawAlucardSigil(d,ImVec2(cx,cy-2.f),100.f*illustrationScale,animate);
-    const char* heading=transitioning?"AWAKENING SCANNER":"ALUCARD EDITION";
-    const ImVec2 headingSize=ImGui::CalcTextSize(heading);
-    const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
-    d->AddText(ImVec2(cx-headingSize.x*.5f,cy+25.f-8.f*entrance),
-        ink(249,headingOpacity),heading);
+    const float t=animate?(float)now:0.f;
+    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
+    const float r=(std::min)(98.f,(std::min)(sz.x*.17f,sz.y*.19f));
+    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(10,5,9,255));
+    // Minimal editorial geometry: no text labels, anime names, pentagram, or white button.
+    const ImU32 border=IM_COL32(115,25,42,145);
+    const ImU32 red=IM_COL32(191,32,61,230);
+    const float side=(std::min)(sz.x*.77f,710.f);
+    d->AddLine(ImVec2(cx-side*.5f,p.y+sz.y*.22f),
+               ImVec2(cx+side*.5f,p.y+sz.y*.22f),border,1.f);
+    d->AddLine(ImVec2(cx-side*.5f,p.y+sz.y*.79f),
+               ImVec2(cx+side*.5f,p.y+sz.y*.79f),border,1.f);
+    const float pulse=animate?.92f+.08f*sinf(t*1.3f):1.f;
+    d->AddCircle(ImVec2(cx,cy-10.f),r,IM_COL32(166,24,48,140),96,1.5f);
+    d->AddCircle(ImVec2(cx,cy-10.f),r*.68f,IM_COL32(166,24,48,85),96,1.f);
+    // Abstract gothic cross insignia, kept distinct from the removed pentagram.
+    const ImVec2 center(cx,cy-10.f);
+    const float q=r*.46f;
+    d->AddLine(ImVec2(center.x,center.y-q),ImVec2(center.x,center.y+q),red,3.f*pulse);
+    d->AddLine(ImVec2(center.x-q*.65f,center.y-q*.18f),
+               ImVec2(center.x+q*.65f,center.y-q*.18f),red,3.f*pulse);
+    const bool transitioning=syncIntroTransition>=0.0;
     if(!transitioning){
-        const float buttonW=(std::min)(255.f,cardW-44.f);
-        ImGui::SetCursorScreenPos(ImVec2(cx-buttonW*.5f,cy+78.f));
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.88f,.88f,.88f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
-        const bool openClicked=ImGui::Button("ENTER SCANNER   >>",ImVec2(buttonW,47.f));
-        if(ImGui::IsItemHovered() && animate){
-            const ImVec2 a=ImGui::GetItemRectMin();
-            const ImVec2 b=ImGui::GetItemRectMax();
-            const float shimmer=.4f+.6f*(.5f+.5f*std::sin(clock*4.f));
-            d->AddRect(ImVec2(a.x-3.f,a.y-3.f),
-                ImVec2(b.x+3.f,b.y+3.f),
-                ink(230,.12f+.17f*shimmer),9.f,0,1.2f);
-        }
-        if(openClicked){
+        const float bw=(std::min)(290.f,sz.x-60.f);
+        ImGui::SetCursorScreenPos(ImVec2(cx-bw*.5f,cy+r+32.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.34f,.045f,.085f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.55f,.08f,.14f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.23f,.035f,.07f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.96f,.89f,.91f,1.f));
+        if(ImGui::Button("ENTER SCANNER",ImVec2(bw,50.f))){
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
         ImGui::PopStyleColor(4);
-        if(animate){
-            const float sweep=.5f+.5f*std::sin(clock*1.8f);
-            d->AddLine(ImVec2(cx-buttonW*.5f+8.f,cy+128.f),
-                ImVec2(cx-buttonW*.5f+8.f+buttonW*sweep*.75f,cy+128.f),
-                ink(220,.25f),1.f);
-        }
     }else{
-        // Opening sequence is a visual handoff, not a fake scan.
-        static constexpr const char* captions[]={
-            "HELLSING  /  ALUCARD","SYNC PC CHECKER","SYSTEM INSPECTION","OPEN THE SCANNER"
-        };
-        const float stageTime=(std::max)(0.f,elapsed-.20f);
-        const int stage=(std::min)(3,(int)(stageTime/1.03f));
-        const float phase=(std::max)(0.f,(std::min)(1.f,
-            (stageTime-stage*1.03f)/1.03f));
-        const float opacity=ease(.18f,.40f)*(1.f-exit);
-        const float captionIn=syncIntroEase(phase/.22f);
-        const float captionOut=1.f-syncIntroEase((phase-.78f)/.22f);
-        const ImVec2 labelSize=ImGui::CalcTextSize(captions[stage]);
-        d->AddText(ImVec2(cx-labelSize.x*.5f,cy+99.f+(1.f-captionIn)*13.f),
-            ink(240,opacity*captionIn*captionOut),captions[stage]);
-        const float trackW=(std::min)(310.f,cardW-70.f);
-        const float trackX=cx-trackW*.5f;
-        d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW,cy+128.f),ink(80,.65f*opacity),2.f);
-        const float progress=(std::min)(1.f,(std::max)(0.f,elapsed/4.65f));
-        d->AddRectFilled(ImVec2(trackX,cy+139.f),
-            ImVec2(trackX+trackW*progress,cy+128.f),
-            ink(248,.98f*opacity),2.f);
-        // A thin white scanning beam moves across the transition track.
-        if(animate && progress>.01f){
-            const float head=trackX+trackW*progress;
-            d->AddCircleFilled(ImVec2(head,cy+141.5f),4.f,
-                ink(255,opacity),16);
-        }
-        if(elapsed>=5.25f){
-            syncIntroOpen=false;
-            syncIntroRevealAt=now;
-        }
+        const float elapsed=(float)(now-syncIntroTransition);
+        const float progress=(std::min)(1.f,elapsed/1.35f);
+        const float w=(std::min)(290.f,sz.x-60.f);
+        d->AddRectFilled(ImVec2(cx-w*.5f,cy+r+52.f),
+            ImVec2(cx+w*.5f,cy+r+56.f),IM_COL32(45,18,28,255),2.f);
+        d->AddRectFilled(ImVec2(cx-w*.5f,cy+r+52.f),
+            ImVec2(cx-w*.5f+w*progress,cy+r+56.f),red,2.f);
+        if(elapsed>=1.5f){syncIntroOpen=false;syncIntroRevealAt=now;}
     }
-    ImGui::End();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
+    ImGui::End();ImGui::PopStyleVar(2);ImGui::PopStyleColor();
 }
 
 // Lightweight result views: use snapshots to keep the UI responsive while scanning.
@@ -38405,41 +38317,6 @@ static void renderUI() {
             reportStatus="Report not sent";
         }
     }
-    ImGui::SetNextWindowBgAlpha(.98f);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->WorkPos.x+16.f,
-        ImGui::GetMainViewport()->WorkPos.y+16.f),ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(360.f,0.f),ImGuiCond_Always);
-    ImGui::Begin("SYNC / REPORT",nullptr,
-        ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings|
-        ImGuiWindowFlags_AlwaysAutoResize);
-    if(ImGui::Checkbox("Allow report sharing with administrator", &shareScanWithAdmin)){
-        if(!shareScanWithAdmin){
-            reportStatus="Sharing disabled";
-            sendReportRequested=false;
-        }
-    }
-    ImGui::TextWrapped("The report includes file paths and scan findings.");
-    ImGui::TextDisabled("%s",scanComplete?"Scan completed":"Waiting for scan");
-    ImGui::TextWrapped("%s",reportStatus.c_str());
-    if(scanComplete && shareScanWithAdmin && !reportSent){
-        if(ImGui::Button("Send report",ImVec2(220.f,30.f)))
-            ImGui::OpenPopup("Confirm sharing##sync");
-    }
-    if(ImGui::BeginPopupModal("Confirm sharing##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-        ImGui::TextUnformatted("Send report to the administrator?");
-        ImGui::TextWrapped("The report may include filenames, paths, and scan results.");
-        ImGui::Spacing();
-        if(ImGui::Button("Confirm sharing",ImVec2(150.f,0.f))){
-            if(shareScanWithAdmin && scanComplete && !reportSent)
-                sendReportRequested=true;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if(ImGui::Button("Cancel",ImVec2(110.f,0.f)))
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-    ImGui::End();
     if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
@@ -38469,7 +38346,7 @@ static void renderUI() {
     const ImVec4 titleInk(.97f,.89f,.92f,1);
     const ImVec4 subtleInk(.69f,.48f,.55f,1);
     const ImVec4 accentInk(.90f,.23f,.33f,1);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.057f,.082f,.112f,1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.080f,.035f,.050f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##syncHeader",ImVec2(0,72),ImGuiChildFlags_None);
     // Quiet brand animation: a restrained breathing frame around the original
@@ -38484,11 +38361,11 @@ static void renderUI() {
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.08f);
-    ImGui::TextColored(titleInk,"HELLSING  /  SYNC SCANNER");
+    ImGui::TextColored(titleInk,"SYNC SCANNER");
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextColored(subtleInk,"ALUCARD EDITION  /  SYSTEM INSPECTION");
+    ImGui::TextColored(subtleInk,"SYSTEM INSPECTION");
     ImGui::EndGroup();
     {
         ImDrawList* brandDraw=ImGui::GetWindowDrawList();
@@ -38508,18 +38385,50 @@ static void renderUI() {
         }
     }
     ImGui::SameLine(0,30);
-    ImGui::TextColored(ImVec4(.51f,.81f,.94f,1.f),"WINDOWS SECURITY & INTEGRITY");
-    ImGui::SameLine(0,22.f);
-    ImGui::TextDisabled("STATUS / %s",stateText());
+    ImGui::TextColored(ImVec4(.85f,.32f,.40f,1.f),"WINDOWS SECURITY & INTEGRITY");
+
     float right=ImGui::GetWindowContentRegionMax().x;
     ImGui::SetCursorPos(ImVec2(right-107.f,8.f));
+    ImGui::SetCursorPos(ImVec2(right-210.f,8.f));
+    if(ImGui::Button("REPORT##syncReport",ImVec2(94.f,36.f)))
+        ImGui::OpenPopup("REPORT SHARING##sync");
+    ImGui::SameLine(0,7);
     if(ImGui::Button("_##atlasMin",ImVec2(43,36)))ShowWindow(hwnd,SW_MINIMIZE);
     ImGui::SameLine(0,7);
     if(ImGui::Button("X##atlasExit",ImVec2(43,36)))PostMessageW(hwnd,WM_CLOSE,0,0);
     ImGui::EndChild();
+    if(ImGui::BeginPopupModal("REPORT SHARING##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        ImGui::TextUnformatted("REPORT SHARING");
+        ImGui::Separator();
+        if(ImGui::Checkbox("Allow sharing with administrator",&shareScanWithAdmin)){
+            if(!shareScanWithAdmin){
+                reportStatus="Sharing disabled";
+                sendReportRequested=false;
+            }
+        }
+        ImGui::TextWrapped("The report can include file paths and scan findings.");
+        ImGui::TextDisabled("%s",scanComplete?"Scan completed":"Waiting for scan");
+        ImGui::TextUnformatted(reportStatus.c_str());
+        if(scanComplete && shareScanWithAdmin && !reportSent){
+            if(ImGui::Button("SEND REPORT",ImVec2(165.f,36.f)))
+                ImGui::OpenPopup("CONFIRM REPORT##sync");
+        }
+        if(ImGui::BeginPopupModal("CONFIRM REPORT##sync",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+            ImGui::TextWrapped("Send the scan report, including file paths, to the administrator?");
+            if(ImGui::Button("CONFIRM",ImVec2(120.f,35.f))){
+                if(shareScanWithAdmin && scanComplete && !reportSent)sendReportRequested=true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if(ImGui::Button("CANCEL",ImVec2(120.f,35.f)))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        if(ImGui::Button("CLOSE",ImVec2(120.f,35.f)))ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 
     // Compact, factual status strip: no inferred malware verdict.
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.072f,.112f,.148f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.040f,.060f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(18.f,9.f));
     if(ImGui::BeginChild("##uiV91Status",ImVec2(0,48.f),
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)) {
