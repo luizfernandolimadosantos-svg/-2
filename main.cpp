@@ -17814,7 +17814,7 @@ static void inspectWER(Collector& out) {
     for(const auto& root:roots) {
         if(out.stopped() || inspected>=160)break;
         std::error_code ec;
-        if(!fs::is_directory(root,ec)){completeSnapshot=false;continue;}
+        if(!fs::is_directory(root,ec))continue;
         for(fs::directory_iterator it(root,
             fs::directory_options::skip_permission_denied,ec),end;
             !ec && it!=end && inspected<160 && !out.stopped();
@@ -34512,27 +34512,6 @@ static std::vector<Record> inspectTrackedFileChanges() {
                 findings.push_back({"File Change Review",utf8(old),
                     "SUSPECT - REVIEW ONLY | Previously tracked file no longer present. "
                     "Could be deletion, move, or unavailable storage; not proof of cheating."});
-        }
-        for(const auto& now:created){
-                const auto& b=current.at(now);
-                if(b.hashed&&a.size==b.size&&a.digest==b.digest){
-                    match=now;++count;
-                }
-            }
-            if(count==1&&!paired.count(match)){
-                findings.push_back({"File Change Review",utf8(old),
-                    "SUSPECT - REVIEW ONLY | Possible rename/move to "+utf8(match)+
-                    " | Identical size and content fingerprint; not proof of cheating."});
-                paired.insert(match);
-            }
-        }
-        for(const auto& old:deleted){
-            bool renamed=false;
-            for(const auto& r:findings)
-                if(r.name==utf8(old)){renamed=true;break;}
-            if(!renamed)findings.push_back({"File Change Review",utf8(old),
-                "SUSPECT - REVIEW ONLY | Previously tracked file no longer present. "
-                "Could be deletion, move, or unavailable storage; not proof of cheating."});
         }
         for(const auto& now:created){
             if(paired.count(now))continue;
