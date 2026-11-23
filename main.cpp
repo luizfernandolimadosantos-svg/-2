@@ -35221,6 +35221,20 @@ static void applyTheme() {
     c[ImGuiCol_TableHeaderBg]=ImVec4(.19f,.05f,.075f,1.f);
     c[ImGuiCol_TextSelectedBg]=ImVec4(.70f,.12f,.20f,.40f);
     c[ImGuiCol_NavHighlight]=ImVec4(.92f,.19f,.27f,1.f);
+    c[ImGuiCol_Text]=ImVec4(.95f,.90f,.92f,1.f);
+    c[ImGuiCol_TextDisabled]=ImVec4(.65f,.52f,.57f,1.f);
+    c[ImGuiCol_Separator]=ImVec4(.41f,.11f,.17f,1.f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(.06f,.02f,.035f,1.f);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(.34f,.075f,.13f,1.f);
+    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(.55f,.11f,.19f,1.f);
+    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(.73f,.14f,.24f,1.f);
+    c[ImGuiCol_TableRowBg]=ImVec4(.10f,.03f,.05f,.45f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(.18f,.04f,.08f,.43f);
+    c[ImGuiCol_PlotHistogram]=ImVec4(.78f,.12f,.22f,1.f);
+    c[ImGuiCol_PlotLines]=ImVec4(.85f,.17f,.27f,1.f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(.55f,.12f,.19f,.28f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(.7f,.16f,.24f,.65f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(.83f,.2f,.3f,1.f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -37772,6 +37786,27 @@ static void drawSyncCornerAccents(ImDrawList* draw,
     draw->AddLine(ImVec2(x1,y1),ImVec2(x1-len,y1),c,1.f);
     draw->AddLine(ImVec2(x1,y1),ImVec2(x1,y1-len),c,1.f);
 }
+// Alucard-inspired animated sigil, drawn directly with Dear ImGui.
+static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool motion) {
+    const float pi=3.14159265358979323846f;
+    const float t=motion?(float)ImGui::GetTime()*.09f:0.f;
+    const ImU32 red=IM_COL32(188,28,52,170), faint=IM_COL32(188,28,52,55);
+    draw->AddCircle(c,radius,red,80,1.7f);
+    draw->AddCircle(c,radius*.80f,faint,80,1.3f);
+    draw->AddCircle(c,radius*.59f,red,80,1.2f);
+    for(int i=0;i<8;i++){
+        const float a=t+i*pi/4.f;
+        draw->AddLine(ImVec2(c.x+std::cos(a)*radius*.85f,c.y+std::sin(a)*radius*.85f),
+                      ImVec2(c.x+std::cos(a)*radius*.96f,c.y+std::sin(a)*radius*.96f),red,1.4f);
+    }
+    ImVec2 star[5];
+    for(int i=0;i<5;i++){
+        const float a=-pi/2.f+i*4.f*pi/5.f+t*.20f;
+        star[i]=ImVec2(c.x+std::cos(a)*radius*.48f,c.y+std::sin(a)*radius*.48f);
+    }
+    for(int i=0;i<5;i++)draw->AddLine(star[i],star[(i+1)%5],red,1.5f);
+}
+
 static void renderSyncOpening() {
     // V46: redesigned opening — animated computer, code and magnifier,
     // animated typography and a genuine, clickable Open Scanner action.
@@ -37805,7 +37840,7 @@ static void renderSyncOpening() {
     const float clock=animate?(float)now:0.f;
     const float entrance=transitioning?ease(.05f,.70f):0.f;
     const float exit=transitioning?ease(4.65f,.60f):0.f;
-    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,8,8,255));
+    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(11,4,8,255));
     drawSyncNoirAtmosphere(d,p,sz,animate);
     drawSyncCornerAccents(d,p,sz,animate);
     // No outer card fill or outline: opening content sits directly
@@ -37817,8 +37852,8 @@ static void renderSyncOpening() {
     ImFont* wordFont=ImGui::GetFont();
     const float wordSize=ImGui::GetFontSize()*2.15f;
     const float labelSize=ImGui::GetFontSize()*.93f;
-    const char* syncWord="SYNC";
-    const char* restWord="P C   C H E C K E R";
+    const char* syncWord="HELLSING";
+    const char* restWord="S Y N C   /   A L U C A R D   E D I T I O N";
     const ImVec2 syncSize=wordFont->CalcTextSizeA(wordSize,FLT_MAX,0.f,syncWord);
     const ImVec2 restSize=wordFont->CalcTextSizeA(labelSize,FLT_MAX,0.f,restWord);
     // Keep both lines above the monitor, even on a compact viewport.
@@ -37848,8 +37883,8 @@ static void renderSyncOpening() {
     // Clean wordmark: no subtitle or decorative interface caption.
     const float illustrationScale=(std::min)(1.f,
         (std::min)(cardW/590.f,cardH/405.f));
-    drawSyncComputerMagnifier(d,cx,cy,illustrationScale,animate,clock);
-    const char* heading=transitioning?"OPENING CHECKER":"CHECKER";
+    drawAlucardSigil(d,ImVec2(cx,cy-2.f),100.f*illustrationScale,animate);
+    const char* heading=transitioning?"AWAKENING SCANNER":"ALUCARD EDITION";
     const ImVec2 headingSize=ImGui::CalcTextSize(heading);
     const float headingOpacity=transitioning?(1.f-ease(4.6f,.55f)):1.f;
     d->AddText(ImVec2(cx-headingSize.x*.5f,cy+25.f-8.f*entrance),
@@ -37861,7 +37896,7 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(1.f,1.f,1.f,1.f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.72f,.72f,.72f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.04f,.04f,.04f,1.f));
-        const bool openClicked=ImGui::Button("ENTER HELLSING SCANNER   >>",ImVec2(buttonW,47.f));
+        const bool openClicked=ImGui::Button("ENTER SCANNER   >>",ImVec2(buttonW,47.f));
         if(ImGui::IsItemHovered() && animate){
             const ImVec2 a=ImGui::GetItemRectMin();
             const ImVec2 b=ImGui::GetItemRectMax();
@@ -38310,15 +38345,14 @@ namespace syncLive {
         ImGui::SetCursorPosY(ImGui::GetWindowHeight()*.28f);
         ImGui::SetCursorPosX((std::max)(15.f,(ImGui::GetContentRegionAvail().x-480.f)*.5f));
         ImGui::BeginGroup();
-        ImGui::TextDisabled("SYNC / LIVE ACCESS CONTROL");
-        ImGui::Spacing();
         ImGui::SetWindowFontScale(1.6f);
-        ImGui::TextUnformatted("WAITING FOR ADMIN");
+        ImGui::TextUnformatted("Authorization required");
         ImGui::SetWindowFontScale(1.f);
+        ImGui::Spacing();
+        ImGui::TextDisabled("Waiting for administrator approval.");
+        ImGui::Spacing();
         ImGui::Text("STATUS: %s",status.c_str());
-        ImGui::TextWrapped("Your request appears automatically in SYNC ADMIN.");
-        ImGui::TextWrapped("DEVICE: %s",deviceId().c_str());
-        if(!message.empty())ImGui::TextDisabled("%s",message.c_str());
+        if(!message.empty())ImGui::TextWrapped("%s",message.c_str());
         if(ImGui::Button("RETRY CONNECTION",ImVec2(240,40)))send("/hello");
         ImGui::EndGroup();
         ImGui::End();
@@ -38336,13 +38370,13 @@ static void renderUI() {
     // Consent is opt-in, explicit and revocable; reports are never sent silently.
     static bool shareScanWithAdmin=false;
     static bool reportSent=false;
-    static std::string reportStatus="Nao enviado";
+    static std::string reportStatus="Not sent";
     static bool lastDone=false;
     const bool scanComplete=done.load();
     if(!scanComplete && lastDone){
         reportSent=false;
         shareScanWithAdmin=false;
-        reportStatus="Nao enviado";
+        reportStatus="Not sent";
     }
     lastDone=scanComplete;
     // Explicit permission is separate from sending. No automatic upload.
@@ -38432,9 +38466,9 @@ static void renderUI() {
         ImGuiWindowFlags_NoBringToFrontOnFocus);
     // SYNC: full-width operations canvas; no left navigation rail.
     if(page==1||page==5)page=0;
-    const ImVec4 titleInk(.94f,.97f,1.f,1);
-    const ImVec4 subtleInk(.65f,.66f,.69f,1);
-    const ImVec4 accentInk(.84f,.85f,.87f,1);
+    const ImVec4 titleInk(.97f,.89f,.92f,1);
+    const ImVec4 subtleInk(.69f,.48f,.55f,1);
+    const ImVec4 accentInk(.90f,.23f,.33f,1);
     ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.057f,.082f,.112f,1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(25,13));
     ImGui::BeginChild("##syncHeader",ImVec2(0,72),ImGuiChildFlags_None);
@@ -38442,25 +38476,11 @@ static void renderUI() {
     // logo and a short traveling highlight under the wordmark. Draw-only,
     // non-interactive, and independent of scan findings.
     const float brandTime=static_cast<float>(ImGui::GetTime());
-    if(syncLogoTexture){
-        ImGui::Image((ImTextureID)syncLogoTexture,ImVec2(44,44));
-        const ImVec2 lo=ImGui::GetItemRectMin();
-        const ImVec2 hi=ImGui::GetItemRectMax();
-        ImDrawList* brandDraw=ImGui::GetWindowDrawList();
-        const float breathe=brandAnimation?(.5f+.5f*std::sin(brandTime*1.35f)):.45f;
-        const int borderAlpha=static_cast<int>(36.f+51.f*breathe);
-        brandDraw->AddRect(ImVec2(lo.x-5.f,lo.y-5.f),
-                           ImVec2(hi.x+5.f,hi.y+5.f),
-                           IM_COL32(155,155,155,borderAlpha),5.f,0,1.f);
-        // Two tiny moving corner accents, rather than a distracting radar glow.
-        const float edge=brandAnimation?(8.f+24.f*(.5f+.5f*std::sin(brandTime*.65f))):16.f;
-        if(brandAnimation)brandDraw->AddLine(ImVec2(lo.x-5.f,lo.y+edge),
-                           ImVec2(lo.x-5.f,lo.y+edge+7.f),
-                           IM_COL32(187,187,187,115),1.5f);
-        if(brandAnimation)brandDraw->AddLine(ImVec2(hi.x+5.f,hi.y-edge),
-                           ImVec2(hi.x+5.f,hi.y-edge-7.f),
-                           IM_COL32(187,187,187,115),1.5f);
-        ImGui::SameLine(0,15);
+    {
+        const ImVec2 p=ImGui::GetCursorScreenPos();
+        drawAlucardSigil(ImGui::GetWindowDrawList(),ImVec2(p.x+24.f,p.y+23.f),21.f,brandAnimation && !reducedMotion);
+        ImGui::Dummy(ImVec2(50.f,46.f));
+        ImGui::SameLine(0,12.f);
     }
     ImGui::BeginGroup();
     ImGui::SetWindowFontScale(1.08f);
@@ -38468,7 +38488,7 @@ static void renderUI() {
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextColored(subtleInk,"DEVELOPED BY MUDIN");
+    ImGui::TextColored(subtleInk,"ALUCARD EDITION  /  SYSTEM INSPECTION");
     ImGui::EndGroup();
     {
         ImDrawList* brandDraw=ImGui::GetWindowDrawList();
