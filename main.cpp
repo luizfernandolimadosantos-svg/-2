@@ -34882,27 +34882,29 @@ static double inspectionPresentationFraction(){
 // so the visible sequence is 0, 1, 2, ... 100, without numeric jumps.
 // This is a PRESENTATION counter: it never claims the scan has completed
 // before the worker confirms success, and it does not slow the scan worker.
+// Rate-limited presentation: a user can actually see each integer value.
+// Never advances beyond verified worker progress. Shared across all tabs.
 static int inspectionDisplayPercent(){
     static int displayed=0;
-    static int lastFrame=-1;
     static double lastScanStart=-1.0;
-    if(inspectionProgressStart!=lastScanStart){
+    static double lastIncrementAt=-1.0;
+    static int lastCompletedStage=0;
+    const double now=ImGui::GetTime();
+    if(inspectionProgressStart!=lastScanStart ||
+       completedStages.load()<lastCompletedStage){
         displayed=0;
-        lastFrame=-1;
+        lastIncrementAt=now;
         lastScanStart=inspectionProgressStart;
     }
+    lastCompletedStage=completedStages.load();
     if(inspectionProgressStart<=0.0)return 0;
-    // Guard against stale UI progress when a scan is restarted/reset.
-    static int lastCompletedStage=0;
-    const int stageNow=completedStages.load();
-    if(stageNow<lastCompletedStage){displayed=0;lastFrame=-1;}
-    lastCompletedStage=stageNow;
-    const int frame=ImGui::GetFrameCount();
-    if(frame!=lastFrame){
-        lastFrame=frame;
-        const int target=std::clamp(static_cast<int>(
-            std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
-        if(displayed<target)++displayed;
+    const int target=std::clamp(static_cast<int>(
+        std::floor(inspectionPresentationFraction()*100.0+0.00001)),0,100);
+    // Exactly one point per 80ms, even on a 240Hz display.
+    // Never catch up with a burst of increments after a stalled frame.
+    if(displayed<target && now-lastIncrementAt>=0.080){
+        ++displayed;
+        lastIncrementAt=now;
     }
     return displayed;
 }
@@ -37944,7 +37946,7 @@ static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
     ImGui::SetNextWindowPos(p); ImGui::SetNextWindowSize(sz);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.035f,.014f,.023f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImVec4(.025f,.012f,.020f,1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0.f);
     ImGui::Begin("##syncOpening",nullptr,ImGuiWindowFlags_NoDecoration|
@@ -37953,49 +37955,61 @@ static void renderSyncOpening() {
     ImDrawList* d=ImGui::GetWindowDrawList();
     const double now=ImGui::GetTime();
     const bool animate=brandAnimation && !reducedMotion;
-    const float t=animate?(float)now:0.f;
-    const float cx=p.x+sz.x*.5f, cy=p.y+sz.y*.47f;
-    const float r=(std::min)(98.f,(std::min)(sz.x*.17f,sz.y*.19f));
-    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(10,5,9,255));
-    // Minimal editorial geometry: no text labels, anime names, pentagram, or white button.
-    const ImU32 border=IM_COL32(115,25,42,145);
-    const ImU32 red=IM_COL32(191,32,61,230);
-    const float side=(std::min)(sz.x*.77f,710.f);
-    d->AddLine(ImVec2(cx-side*.5f,p.y+sz.y*.22f),
-               ImVec2(cx+side*.5f,p.y+sz.y*.22f),border,1.f);
-    d->AddLine(ImVec2(cx-side*.5f,p.y+sz.y*.79f),
-               ImVec2(cx+side*.5f,p.y+sz.y*.79f),border,1.f);
-    const float pulse=animate?.92f+.08f*sinf(t*1.3f):1.f;
-    d->AddCircle(ImVec2(cx,cy-10.f),r,IM_COL32(166,24,48,140),96,1.5f);
-    d->AddCircle(ImVec2(cx,cy-10.f),r*.68f,IM_COL32(166,24,48,85),96,1.f);
-    // Abstract gothic cross insignia, kept distinct from the removed pentagram.
-    const ImVec2 center(cx,cy-10.f);
-    const float q=r*.46f;
-    d->AddLine(ImVec2(center.x,center.y-q),ImVec2(center.x,center.y+q),red,3.f*pulse);
-    d->AddLine(ImVec2(center.x-q*.65f,center.y-q*.18f),
-               ImVec2(center.x+q*.65f,center.y-q*.18f),red,3.f*pulse);
+    const float cx=p.x+sz.x*.5f;
+    d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),IM_COL32(8,4,8,255));
+    // Full-bleed character artwork; a dark veil preserves contrast.
+    if(alucardBannerTexture){
+        const float imageRatio=1.7778f;
+        const float areaRatio=sz.x/(std::max)(1.f,sz.y);
+        ImVec2 uv0(0,0),uv1(1,1);
+        if(areaRatio>imageRatio){
+            const float fraction=imageRatio/areaRatio;
+            uv0.y=(1.f-fraction)*.5f;uv1.y=1.f-uv0.y;
+        }else{
+            const float fraction=areaRatio/imageRatio;
+            uv0.x=(1.f-fraction)*.5f;uv1.x=1.f-uv0.x;
+        }
+        d->AddImage((ImTextureID)alucardBannerTexture,p,
+            ImVec2(p.x+sz.x,p.y+sz.y),uv0,uv1,IM_COL32(255,255,255,205));
+    }
+    d->AddRectFilledMultiColor(p,ImVec2(p.x+sz.x,p.y+sz.y),
+        IM_COL32(6,3,7,244),IM_COL32(6,3,7,75),
+        IM_COL32(6,3,7,100),IM_COL32(6,3,7,238));
+    const float left=p.x+(std::max)(28.f,sz.x*.065f);
+    const float baseline=p.y+sz.y*.38f;
+    d->AddRectFilled(ImVec2(left,baseline-76.f),ImVec2(left+3.f,baseline+76.f),
+        IM_COL32(196,35,65,235),2.f);
+    d->AddText(ImVec2(left+22.f,baseline-70.f),IM_COL32(237,91,111,255),"SYNC / SECURITY SYSTEM");
+    d->AddText(ImVec2(left+22.f,baseline-32.f),IM_COL32(248,239,241,255),"SYNC PC CHECKER");
+    d->AddText(ImVec2(left+22.f,baseline+1.f),IM_COL32(194,167,176,255),"Windows integrity and evidence review");
+    d->AddText(ImVec2(left+22.f,baseline+29.f),IM_COL32(142,122,133,255),"AUTHORIZED ACCESS  /  LOCAL INSPECTION");
+    const float bw=(std::min)(310.f,(std::max)(140.f,sz.x-80.f));
+    const float buttonY=(std::min)(p.y+sz.y-90.f,baseline+110.f);
     const bool transitioning=syncIntroTransition>=0.0;
     if(!transitioning){
-        const float bw=(std::min)(290.f,sz.x-60.f);
-        ImGui::SetCursorScreenPos(ImVec2(cx-bw*.5f,cy+r+32.f));
-        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.34f,.045f,.085f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.55f,.08f,.14f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.23f,.035f,.07f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.96f,.89f,.91f,1.f));
-        if(ImGui::Button("ENTER SCANNER",ImVec2(bw,50.f))){
+        ImGui::SetCursorScreenPos(ImVec2(left+22.f,buttonY));
+        ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.62f,.075f,.14f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(.78f,.12f,.20f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.40f,.045f,.10f,1.f));
+        if(ImGui::Button("ENTER SCANNER  >>",ImVec2(bw,48.f))){
             syncIntroTransition=now;
             beginStartupWindowExpand();
         }
-        ImGui::PopStyleColor(4);
+        ImGui::PopStyleColor(3);
     }else{
         const float elapsed=(float)(now-syncIntroTransition);
         const float progress=(std::min)(1.f,elapsed/1.35f);
-        const float w=(std::min)(290.f,sz.x-60.f);
-        d->AddRectFilled(ImVec2(cx-w*.5f,cy+r+52.f),
-            ImVec2(cx+w*.5f,cy+r+56.f),IM_COL32(45,18,28,255),2.f);
-        d->AddRectFilled(ImVec2(cx-w*.5f,cy+r+52.f),
-            ImVec2(cx-w*.5f+w*progress,cy+r+56.f),red,2.f);
+        const ImVec2 a(left+22.f,buttonY+18.f);
+        d->AddRectFilled(a,ImVec2(a.x+bw,a.y+5.f),IM_COL32(53,24,35,255),3.f);
+        d->AddRectFilled(a,ImVec2(a.x+bw*progress,a.y+5.f),IM_COL32(211,35,70,255),3.f);
+        d->AddText(ImVec2(a.x,a.y-25.f),IM_COL32(220,173,183,255),"OPENING SCANNER");
         if(elapsed>=1.5f){syncIntroOpen=false;syncIntroRevealAt=now;}
+    }
+    if(animate){
+        const float t=(float)now;
+        d->AddLine(ImVec2(left,p.y+sz.y-35.f),
+            ImVec2(left+110.f+25.f*sinf(t*.9f),p.y+sz.y-35.f),
+            IM_COL32(192,34,65,135),1.f);
     }
     ImGui::End();ImGui::PopStyleVar(2);ImGui::PopStyleColor();
 }
