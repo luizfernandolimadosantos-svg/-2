@@ -38310,6 +38310,15 @@ static void renderSyncOpening() {
     const float baseline=p.y+sz.y*.38f;
     d->AddRectFilled(ImVec2(left,baseline-76.f),ImVec2(left+3.f,baseline+76.f),
         IM_COL32(196,35,65,235),2.f);
+    // Fine-grain rails and calm status line, intentionally restrained.
+    d->AddRectFilled(ImVec2(left+22.f,baseline-94.f),
+        ImVec2(left+235.f,baseline-92.f),IM_COL32(172,31,56,180));
+    d->AddRectFilled(ImVec2(left+22.f,baseline+65.f),
+        ImVec2(left+335.f,baseline+66.f),IM_COL32(114,30,49,100));
+    d->AddText(ImVec2(left+22.f,baseline+77.f),IM_COL32(177,131,143,255),
+        "SECURE SESSION  /  WINDOWS ENDPOINT");
+    d->AddText(ImVec2(left+22.f,p.y+sz.y-58.f),IM_COL32(126,95,108,255),
+        "SYNC SCANNER    |    LOCAL INSPECTION");
     d->AddText(ImVec2(left+22.f,baseline-70.f),IM_COL32(237,91,111,255),"SYNC / SECURITY SYSTEM");
     d->AddText(ImVec2(left+22.f,baseline-32.f),IM_COL32(248,239,241,255),"SYNC PC CHECKER");
     d->AddText(ImVec2(left+22.f,baseline+1.f),IM_COL32(194,167,176,255),"Windows integrity and evidence review");
@@ -38832,6 +38841,8 @@ static void renderUI() {
         liveLastCheck=ImGui::GetTime();
         syncLive::send("/hello");
     }
+    // Show the opening first; the real administrator gate remains mandatory afterwards.
+    if(syncIntroOpen){renderSyncOpening();return;}
     if(syncLive::status!="unlocked"){syncLive::render();return;}
     // Consent is opt-in, explicit and revocable; reports are never sent silently.
     static bool shareScanWithAdmin=false;
@@ -38871,7 +38882,6 @@ static void renderUI() {
             reportStatus="Report not sent";
         }
     }
-    if(syncIntroOpen){renderSyncOpening();return;}
     if(defenderNotificationPending.exchange(false))
         ImGui::OpenPopup("Windows Defender detection alert");
     if(ImGui::BeginPopupModal("Windows Defender detection alert",nullptr,
@@ -42176,9 +42186,6 @@ zula.exe)FIVEMSTR";
             ImGui::TextColored(accent,"FINALIZING PROGRESS DISPLAY - %d%%",inspectionDisplayPercent());
         }else{
             if(drawStartScanButton(250.f))startScan();
-            if(ImGui::GetContentRegionAvail().x>145.f)ImGui::SameLine(0,8);
-            if(ImGui::Button("VIEW RESULTS",
-                ImVec2((std::min)(130.f,ImGui::GetContentRegionAvail().x),42)))page=2;
         }
         if(scanFailed){
             ImGui::Separator();
@@ -42301,6 +42308,28 @@ zula.exe)FIVEMSTR";
         modulesList();
         ImGui::EndChild();
     } else if(page==2) {
+        if(!inspectionPresentationComplete()) {
+            ImGui::Dummy(ImVec2(0,24));
+            ImGui::SetWindowFontScale(1.35f);
+            ImGui::TextColored(ImVec4(.91f,.28f,.38f,1.f),"RESULTS LOCKED");
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::Separator();
+            if(scanning.load()) {
+                ImGui::TextUnformatted("Scan in progress");
+                ImGui::Text("%d%% complete",inspectionDisplayPercent());
+                ImGui::ProgressBar(inspectionSmoothFraction(),ImVec2(-1.f,10.f),"");
+                ImGui::TextDisabled("Findings will be available after the scan finishes.");
+            } else if(inspectionResultsReady()) {
+                ImGui::TextUnformatted("Finalizing results");
+                ImGui::Text("%d%%",inspectionDisplayPercent());
+                ImGui::ProgressBar(inspectionSmoothFraction(),ImVec2(-1.f,10.f),"");
+            } else if(scanFailed.load() || scanCancelled.load()) {
+                ImGui::TextWrapped("The scan did not complete. No final verdict is available.");
+            } else {
+                ImGui::TextWrapped("Run a full scan to view verified results.");
+            }
+            if(ImGui::Button("BACK TO DASHBOARD",ImVec2(220.f,40.f)))page=0;
+        } else {
         if(!expandedFindingsTable){
             sectionTitle("Investigation Results",
                          "Only suspicious or detected findings; routine inventory is hidden.");
@@ -42620,6 +42649,7 @@ zula.exe)FIVEMSTR";
             ImGui::PopStyleVar(4);
         }
         ImGui::PopStyleVar();
+        } // completed scan results
     } else if(page==3) {
         sectionTitle("EXECUTION TIMELINE",
             "Real Windows events from the past 7 days, ordered newest first");
