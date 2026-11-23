@@ -38372,19 +38372,72 @@ static void renderSyncOpening() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4(.40f,.045f,.10f,1.f));
         if(ImGui::Button("ENTER SCANNER  >>",ImVec2(bw,48.f))){
             syncIntroTransition=now;
-            syncIntroOpen=false; // Enter immediately; do not trap the user in an artificial loading screen.
-            syncIntroRevealAt=now;
-            beginStartupWindowExpand();
+            // Run a single four-second opening animation, then enter the real access gate.
+            syncIntroRevealAt=-1.0;
         }
         ImGui::PopStyleColor(3);
     }else{
+        // A deterministic, time-based 4-second transition (not tied to FPS).
         const float elapsed=(float)(now-syncIntroTransition);
-        const float progress=(std::min)(1.f,elapsed/1.35f);
-        const ImVec2 a(left+22.f,buttonY+18.f);
-        d->AddRectFilled(a,ImVec2(a.x+bw,a.y+5.f),IM_COL32(53,24,35,255),3.f);
-        d->AddRectFilled(a,ImVec2(a.x+bw*progress,a.y+5.f),IM_COL32(211,35,70,255),3.f);
-        d->AddText(ImVec2(a.x,a.y-25.f),IM_COL32(220,173,183,255),"OPENING SCANNER");
-        if(elapsed>=1.5f){syncIntroOpen=false;syncIntroRevealAt=now;}
+        const float duration=reducedMotion?0.35f:4.0f;
+        const float progress=(std::min)(1.f,elapsed/duration);
+        const float eased=progress*progress*(3.f-2.f*progress);
+        const ImVec2 center(p.x+sz.x*.5f,p.y+sz.y*.5f);
+        const float baseRadius=(std::min)(sz.x,sz.y)*.22f;
+        // Fade the landing text with a dark theatrical curtain.
+        d->AddRectFilled(p,ImVec2(p.x+sz.x,p.y+sz.y),
+            IM_COL32(7,2,7,(int)(210.f*eased)));
+        const float t=(float)now;
+        if(!reducedMotion){
+            const float radius=baseRadius*(.78f+.22f*sinf((std::min)(1.f,progress*1.5f)*1.570796f));
+            // Three rotating concentric rings and a pentagram, drawn in ImGui.
+            for(int ring=0;ring<3;++ring){
+                const float r=radius*(.72f+.17f*ring);
+                const ImU32 c=IM_COL32(185+ring*17,29+ring*9,61+ring*7,
+                    (int)(110.f+80.f*(1.f-progress*.45f)));
+                d->AddCircle(center,r,c,96,ring==1?2.5f:1.2f);
+                const float direction=ring==1?-1.f:1.f;
+                for(int j=0;j<12;++j){
+                    const float angle=t*(.22f+.12f*ring)*direction+
+                        j*6.2831853f/12.f;
+                    const ImVec2 a(center.x+cosf(angle)*r,center.y+sinf(angle)*r);
+                    const ImVec2 b(center.x+cosf(angle)*(r+8.f),
+                                   center.y+sinf(angle)*(r+8.f));
+                    d->AddLine(a,b,IM_COL32(238,65,89,185),1.5f);
+                }
+            }
+            ImVec2 points[5];
+            for(int j=0;j<5;++j){
+                const float angle=-1.570796f+j*4.f*3.14159265f/5.f-t*.24f;
+                points[j]=ImVec2(center.x+cosf(angle)*radius*.65f,
+                                  center.y+sinf(angle)*radius*.65f);
+            }
+            for(int j=0;j<5;++j)
+                d->AddLine(points[j],points[(j+1)%5],
+                           IM_COL32(238,48,83,235),2.3f);
+            const float glow=8.f+6.f*sinf(t*5.f)*sinf(t*5.f);
+            d->AddCircleFilled(center,glow,IM_COL32(245,46,82,155),32);
+        }else{
+            d->AddCircle(center,baseRadius*.65f,IM_COL32(218,45,76,220),64,2.f);
+        }
+        const float barWidth=(std::min)(320.f,sz.x*.65f);
+        const float bx=center.x-barWidth*.5f,by=center.y+baseRadius+40.f;
+        d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth,by+5.f),
+                         IM_COL32(58,22,35,245),3.f);
+        d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth*progress,by+5.f),
+                         IM_COL32(221,37,75,255),3.f);
+        const char* phase=progress<.28f?"INITIALIZING":
+                          progress<.72f?"LOADING SECURITY CONSOLE":
+                          progress<1.f?"PREPARING WORKSPACE":"READY";
+        const ImVec2 phaseSize=ImGui::CalcTextSize(phase);
+        d->AddText(ImVec2(center.x-phaseSize.x*.5f,by-29.f),
+                   IM_COL32(241,192,203,255),phase);
+        if(progress>=1.f){
+            syncIntroOpen=false;
+            syncIntroTransition=-1.0;
+            syncIntroRevealAt=now;
+            beginStartupWindowExpand();
+        }
     }
     if(animate){
         const float t=(float)now;
