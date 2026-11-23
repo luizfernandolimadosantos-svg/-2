@@ -1,3 +1,5 @@
+// SYNC Scanner: English-only simplified dashboard UI update.
+// Progress never advances ahead of verified engine work; exact timing is not guaranteed.
 #include <regex>
 #include <cstdio>
 #include <cstdlib>
@@ -36340,7 +36342,7 @@ static void processTable(float height) {
                 ImGui::TextDisabled("%s",p.assessment.c_str());
             ImGui::TableSetColumnIndex(5);
             ImGui::PushID((int)p.pid);
-            if(ImGui::Button("Show Details",ImVec2(130,32)))selectProcessDetails(p);
+            if(ImGui::Button("DETAILS",ImVec2(105,30)))selectProcessDetails(p);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -36504,7 +36506,7 @@ static void recordsTable() {
             ImGui::TableSetColumnIndex(1);ImGui::Text("%s | %s",r.name.c_str(),evidenceLabel(r));
             ImGui::TableSetColumnIndex(2);ImGui::TextUnformatted(r.detail.c_str());
             ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-            if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails(r.category,r.name,r.detail);
+            if(ImGui::Button("DETAILS",ImVec2(105,30)))openEvidenceDetails(r.category,r.name,r.detail);
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -41358,22 +41360,21 @@ zula.exe)FIVEMSTR";
         const float width=ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.035f,.052f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.32f,.10f,.17f,.8f));
-        ImGui::BeginChild("##commandHero",ImVec2(0,214.f),ImGuiChildFlags_Borders|
+        ImGui::BeginChild("##commandHero",ImVec2(0,190.f),ImGuiChildFlags_Borders|
             ImGuiChildFlags_AlwaysUseWindowPadding);
         ImGui::TextColored(crimson,"S Y S T E M   I N S P E C T I O N");
         ImGui::Spacing();
         ImGui::SetWindowFontScale(1.55f);
-        ImGui::TextUnformatted("SCAN CONTROL");
+        ImGui::TextUnformatted(scanning.load()?"SCAN IN PROGRESS":inspectionResultsReady()?"SCAN COMPLETE":"READY TO SCAN");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(secondary,"Read-only system analysis  /  Evidence review");
+        ImGui::TextColored(secondary,"Analyzing processes, executable files and system evidence");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
         if(scanning.load()){
             ImGui::TextColored(crimson,"SCANNING");
             ImGui::SameLine();
-            ImGui::TextDisabled("%d%%",inspectionDisplayPercent());
-            ImGui::TextDisabled("Inspection in progress. Results update as evidence is collected.");
+            ImGui::TextDisabled("Inspection in progress. Evidence is collected locally.");
         }else if(inspectionResultsReady()){
             ImGui::TextColored(ImVec4(.66f,.83f,.67f,1.f),"SCAN COMPLETE");
             if(drawStartScanButton(230.f))startScan();
@@ -41386,7 +41387,7 @@ zula.exe)FIVEMSTR";
         ImGui::PopStyleColor(2);
         ImGui::Spacing();
 
-        const char* metrics[]={"PROCESSES","EVIDENCE","PE FILES CHECKED"};
+        const char* metrics[]={"PROCESSES","RECORDS","PE FILES"};
         const unsigned long long values[]={
             (unsigned long long)processCount.load(),
             (unsigned long long)recordCount.load(),
@@ -41412,31 +41413,39 @@ zula.exe)FIVEMSTR";
         }
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.045f,.061f,1.f));
-        ImGui::BeginChild("##scanStatus",ImVec2(0,158.f),ImGuiChildFlags_Borders|
+        ImGui::BeginChild("##scanStatus",ImVec2(0,220.f),ImGuiChildFlags_Borders|
             ImGuiChildFlags_AlwaysUseWindowPadding);
-        ImGui::TextColored(crimson,"SCAN ACTIVITY");
+        ImGui::TextColored(crimson,"SCAN PROGRESS");
         ImGui::SameLine(0,18.f);
         ImGui::TextDisabled("%s",stateText());
-        if(scanCancelled.load())
-            ImGui::TextColored(ImVec4(.95f,.67f,.37f,1.f),"Cancelled - partial evidence");
+        const int progress=inspectionDisplayPercent();
+        ImGui::Spacing();
+        const ImVec2 barPos=ImGui::GetCursorScreenPos();
+        const float barWidth=(std::max)(100.f,ImGui::GetContentRegionAvail().x-80.f);
+        const float fraction=(std::max)(0.f,(std::min)(1.f,progress/100.f));
+        ImDrawList* barDraw=ImGui::GetWindowDrawList();
+        barDraw->AddRectFilled(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(34,15,22,255),6.f);
+        if(fraction>0.f)barDraw->AddRectFilled(barPos,
+            ImVec2(barPos.x+barWidth*fraction,barPos.y+22.f),IM_COL32(197,28,57,255),6.f);
+        barDraw->AddRect(barPos,ImVec2(barPos.x+barWidth,barPos.y+22.f),IM_COL32(138,35,55,230),6.f);
+        ImGui::Dummy(ImVec2(barWidth,23.f));
+        ImGui::SameLine(0,12.f);
+        ImGui::TextColored(crimson,"%d%%",progress);
+        ImGui::Spacing();ImGui::Separator();
+        const int stage=(std::max)(0,(std::min)(6,completedStages.load()));
+        static const char* stageLabels[]={
+            "Preparing inspection", "Inspecting processes", "Checking executable files",
+            "Reviewing system evidence", "Checking persistence", "Final verification", "Complete"};
+        ImGui::TextColored(secondary,"CURRENT ACTIVITY");
+        ImGui::Text("%s",inspectionResultsReady()?"Inspection complete":
+            scanning.load()?stageLabels[stage]:scanFailed.load()?"Inspection failed":
+            scanCancelled.load()?"Inspection stopped":"Waiting to start");
         if(scanFailed.load()){
-            ImGui::TextColored(ImVec4(.96f,.35f,.40f,1.f),
-                "Scan failed at stage %d",scanFailureStage.load());
             std::string reason;
             {std::lock_guard<std::mutex> guard(scanFailureMutex);reason=scanFailureReason;}
             if(!reason.empty())ImGui::TextWrapped("%s",reason.c_str());
         }
-        if(scanning.load() || done.load()){
-            const int progress=(std::max)(0,(std::min)(100,inspectionDisplayPercent()));
-            char overlay[24];
-            snprintf(overlay,sizeof(overlay),"%d%%",progress);
-            ImGui::ProgressBar(progress/100.f,ImVec2(-1,19.f),overlay);
-        }else{
-            ImGui::Spacing();
-            ImGui::TextDisabled("No active scan. Start an inspection to populate this panel.");
-        }
-        ImGui::Separator();
-        ImGui::TextDisabled("Findings require manual verification. No scan guarantees a clean PC.");
+        ImGui::TextDisabled("Progress follows verified work. Some stages may take longer.");
         ImGui::EndChild();
         ImGui::PopStyleColor();
     } else if(page==0) {
@@ -41454,7 +41463,7 @@ zula.exe)FIVEMSTR";
                 (unsigned long long)defenderAlerts.load()};
             for(int k=0;k<4;k++){
                 ImGui::PushID(60000+k);
-                ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.115f,.135f,1.f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.105f,.055f,.073f,1.f));
                 if(ImGui::BeginChild("##v6Metric",ImVec2(width,93.f),ImGuiChildFlags_Borders)){
                     ImGui::TextDisabled("%s",labels[k]);
                     ImGui::SetWindowFontScale(1.35f);
@@ -41646,7 +41655,7 @@ zula.exe)FIVEMSTR";
         ImGui::SameLine();
         ImGui::TextDisabled("%zu processes | %zu records",
                             processCount.load(),recordCount.load());
-        ImGui::TextDisabled("6 areas principais | mecanismos de coleta preservados | resultados com evidencias");
+        ImGui::TextDisabled("Six investigation areas  |  Read-only evidence  |  Manual review");
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(15.f,9.f));
         static int syncCategory = 0;
             // Six focused workspaces; legacy collection engines remain intact.
@@ -41664,85 +41673,26 @@ zula.exe)FIVEMSTR";
             static int syncVisibleCategory = 0;
             if(syncVisibleCategory<0 || syncVisibleCategory>=syncVisibleCount)syncVisibleCategory=0;
             syncCategory=syncVisibleIds[syncVisibleCategory];
-            // SYNC workspace v5: responsive navigation and consistent page chrome.
-            const float syncAvailableWidth = ImGui::GetContentRegionAvail().x;
-            const bool syncCompact = syncAvailableWidth < 1000.f;
-            static char syncNavSearch[96] = "";
-            const ImVec4 syncBlue(.30f,.78f,.96f,1.f);
-            const ImVec4 syncMuted(.55f,.60f,.68f,1.f);
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8.f);
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,10.f);
+            // Unified navigation: one row of tabs, no clipped nested sidebar.
+            const ImVec4 syncBlue(.87f,.25f,.36f,1.f);
+            const ImVec4 syncMuted(.66f,.55f,.60f,1.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,7.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding,8.f);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(12.f,9.f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(9.f,9.f));
-            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.055f,.075f,.105f,1.f));
-            if(syncCompact) {
-                ImGui::TextColored(syncBlue,"SYNC / WORKSPACE");
-                ImGui::SetNextItemWidth(-1.f);
-                if(ImGui::BeginCombo("##syncSectionSelect",syncLabels[syncVisibleCategory])) {
-                    for(int i=0;i<syncVisibleCount;++i) {
-                        if(ImGui::Selectable(syncLabels[i],syncVisibleCategory==i))syncVisibleCategory=i;
-                        if(syncVisibleCategory==i)ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::Spacing();
-            } else {
-                const float sideWidth = syncAvailableWidth < 1260.f ? 235.f : 270.f;
-                ImGui::BeginChild("##syncSidebar",ImVec2(sideWidth,0),true);
-                ImGui::TextColored(syncBlue,"SYNC / WORKSPACE");
-                ImGui::TextDisabled("SECURITY ANALYSIS");
-                ImGui::Separator();
-                ImGui::SetNextItemWidth(-1.f);
-                ImGui::InputTextWithHint("##syncNavSearch","Search sections...",syncNavSearch,sizeof(syncNavSearch));
-                // V15: avoid rebuilding the search query for every navigation item.
-                std::string syncNavQuery(syncNavSearch);
-                std::transform(syncNavQuery.begin(),syncNavQuery.end(),syncNavQuery.begin(),
-                    [](unsigned char c){return (char)std::tolower(c);});
-                if(!syncNavQuery.empty()) {
-                    ImGui::SameLine();
-                    if(ImGui::SmallButton("Clear##syncNavClear")) {
-                        syncNavSearch[0]='\0';
-                        syncNavQuery.clear();
-                    }
-                }
-                ImGui::Spacing();
-                ImGui::BeginChild("##syncNavScroll",ImVec2(0,-40.f),false);
-                int syncMatchedSections=0;
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2(8.f,9.f));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.073f,.031f,.046f,1.f));
+            ImGui::TextColored(syncBlue,"INVESTIGATION WORKSPACE");
+            ImGui::TextDisabled("Choose a category to review the evidence collected by the scanner.");
+            if(ImGui::BeginTabBar("##syncWorkspaceTabs",ImGuiTabBarFlags_FittingPolicyScroll)) {
                 for(int i=0;i<syncVisibleCount;++i) {
-                    std::string title=syncLabels[i];
-                    std::transform(title.begin(),title.end(),title.begin(),
-                        [](unsigned char c){return (char)std::tolower(c);});
-                    std::string description=syncDescriptions[i];
-                    std::transform(description.begin(),description.end(),description.begin(),
-                        [](unsigned char c){return (char)std::tolower(c);});
-                    if(!syncNavQuery.empty() && title.find(syncNavQuery)==std::string::npos &&
-                       description.find(syncNavQuery)==std::string::npos)continue;
-                    ++syncMatchedSections;
-                    if(syncNavQuery.empty()&&(i==0||i==2)){
-                        ImGui::Spacing();
-                        ImGui::TextColored(syncMuted,"%s",i==0?"INVESTIGATION":"DETECTION & RESULTS");
-                        ImGui::Separator();
+                    if(ImGui::BeginTabItem(syncLabels[i])) {
+                        syncVisibleCategory=i;
+                        ImGui::EndTabItem();
                     }
-                    ImGui::PushID(i);
-                    if(syncVisibleCategory==i) {
-                        ImGui::PushStyleColor(ImGuiCol_Header,ImVec4(.11f,.29f,.40f,1.f));
-                        ImGui::PushStyleColor(ImGuiCol_HeaderHovered,ImVec4(.13f,.34f,.47f,1.f));
-                    }
-                    if(ImGui::Selectable(syncLabels[i],syncVisibleCategory==i,0,ImVec2(-1,34.f)))syncVisibleCategory=i;
-                    if(syncVisibleCategory==i)ImGui::PopStyleColor(2);
-                    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",syncDescriptions[i]);
-                    ImGui::PopID();
                 }
-                if(syncMatchedSections==0) {
-                    ImGui::Spacing();
-                    ImGui::TextDisabled("Nenhuma secao encontrada.");
-                }
-                ImGui::EndChild();
-                ImGui::Separator();
-                ImGui::TextDisabled("Somente leitura  |  Revisar evidencias");
-                ImGui::EndChild();
-                ImGui::SameLine(0,12.f);
+                ImGui::EndTabBar();
             }
+            ImGui::Spacing();
             syncCategory=syncVisibleIds[syncVisibleCategory];
             ImGui::BeginGroup();
             ImGui::BeginChild("##syncCategoryContent",ImVec2(0,0),true);
@@ -41762,7 +41712,7 @@ zula.exe)FIVEMSTR";
 
             {
             if(syncCategory==0) {
-                ImGui::TextColored(accent,"PROCESSOS E ALERTAS");
+                ImGui::TextColored(accent,"PROCESSES & ALERTS");
                 ImGui::TextDisabled("Processos identificados e indicadores que precisam de revisao.");
                 ImGui::Separator();
                 if(!expandedFindingsTable)
@@ -41771,14 +41721,14 @@ zula.exe)FIVEMSTR";
                 /* sidebar section end */
             }
             if(syncCategory==1){
-                ImGui::TextColored(accent,"INSPECAO DE EVIDENCIAS");
+                ImGui::TextColored(accent,"EVIDENCE INSPECTION");
                 ImGui::TextDisabled("Examine evidencias coletadas e seus detalhes.");
                 ImGui::Separator();
                 drawEvidenceInspector();
                 /* sidebar section end */
             }
             if(syncCategory==2) {
-                ImGui::TextColored(accent,"FONTES DE EVIDENCIA");
+                ImGui::TextColored(accent,"EVIDENCE SOURCES");
                 ImGui::TextDisabled("Consulte a origem dos registros e as verificacoes disponiveis.");
                 ImGui::Separator();
                 drawEvidenceSourcesTab();
@@ -41817,7 +41767,7 @@ zula.exe)FIVEMSTR";
                         ImGui::TableSetColumnIndex(1);ImGui::TextWrapped("%s",f.hash.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",f.signature.c_str());
                          ImGui::TableSetColumnIndex(3);ImGui::PushID(&f);
-                         if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails("File Integrity",utf8(f.path),
+                         if(ImGui::Button("DETAILS",ImVec2(105,30)))openEvidenceDetails("File Integrity",utf8(f.path),
                              "SHA-256: "+f.hash+"\nAuthenticode: "+f.signature,f.path);
                          ImGui::PopID();
                     }
@@ -41854,7 +41804,7 @@ zula.exe)FIVEMSTR";
                         ImGui::TableSetColumnIndex(1);ImGui::TextUnformatted(r.name.c_str());
                         ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
                          ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-                         if(ImGui::Button("Show Details",ImVec2(130,32)))openEvidenceDetails("USB Registry",r.name,
+                         if(ImGui::Button("DETAILS",ImVec2(105,30)))openEvidenceDetails("USB Registry",r.name,
                              "Registry inventory: "+r.detail+"\nThis entry does not establish when a device was connected.");
                          ImGui::PopID();
                     }
@@ -41907,7 +41857,7 @@ zula.exe)FIVEMSTR";
                 /* sidebar section end */
             }
             if(syncCategory==10) {
-                ImGui::TextColored(accent,"FILA DE REVISAO");
+                ImGui::TextColored(accent,"REVIEW QUEUE");
                 ImGui::TextDisabled("Organize itens que exigem analise humana antes de concluir.");
                 ImGui::Separator();
                 drawReviewQueueNew();
@@ -41956,7 +41906,7 @@ zula.exe)FIVEMSTR";
             ImGui::TableSetupColumn("Source",ImGuiTableColumnFlags_WidthFixed,160);
             ImGui::TableSetupColumn("Event ID",ImGuiTableColumnFlags_WidthFixed,80);
             ImGui::TableSetupColumn("Event",ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,95);
+            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,125);
             ImGui::TableHeadersRow();
             for(size_t i=0;i<snapshot.size();++i) {
                 const auto& ev=snapshot[i];
@@ -41978,7 +41928,7 @@ zula.exe)FIVEMSTR";
                 ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(ev.description.c_str());
                 ImGui::TableSetColumnIndex(4);
-                if(ImGui::Button("Show Details",ImVec2(130,32))) {
+                if(ImGui::Button("DETAILS",ImVec2(105,30))) {
                     selectedTimeline=(int)i;
                     openTimelineDetails=true;
                 }
@@ -42269,12 +42219,12 @@ zula.exe)FIVEMSTR";
             [](unsigned char c){return (char)std::tolower(c);});
         if(ImGui::BeginTable("##artifactExplorer",4,
             ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|
-            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY,ImVec2(0,-1))){
+            ImGuiTableFlags_Resizable|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,ImVec2(0,-1))){
             ImGui::TableSetupScrollFreeze(0,1);
             ImGui::TableSetupColumn("Type",ImGuiTableColumnFlags_WidthFixed,140);
             ImGui::TableSetupColumn("File / Indicator",ImGuiTableColumnFlags_WidthStretch,1.5f);
             ImGui::TableSetupColumn("Evidence and location",ImGuiTableColumnFlags_WidthStretch,3.f);
-            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,95);
+            ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,125);
             ImGui::TableHeadersRow();
             std::vector<const Record*> visibleArtifacts;
             visibleArtifacts.reserve(snapshot.size());
@@ -42326,7 +42276,7 @@ zula.exe)FIVEMSTR";
                          r.detail.find("NEEDS REVIEW")!=std::string::npos ||
                          r.detail.find("REVIEW:")!=std::string::npos ||
                      r.category=="Batch Script Name Rule");
-                ImGui::TableNextRow(ImGuiTableRowFlags_None,44.f);
+                ImGui::TableNextRow(ImGuiTableRowFlags_None,52.f);
                 if(detected)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                     IM_COL32(85,29,33,130));
                 else if(suspect)ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
@@ -42342,7 +42292,7 @@ zula.exe)FIVEMSTR";
                 ImGui::TextColored(evidenceColor,"%s",r.name.c_str());
                 ImGui::TableSetColumnIndex(2);ImGui::TextWrapped("%s",r.detail.c_str());
                 ImGui::TableSetColumnIndex(3);ImGui::PushID(&r);
-                if(ImGui::Button("Show Details",ImVec2(130,32)))
+                if(ImGui::Button("DETAILS",ImVec2(105,30)))
                     openEvidenceDetails(r.category,r.name,r.detail);
                 ImGui::PopID();
             }
