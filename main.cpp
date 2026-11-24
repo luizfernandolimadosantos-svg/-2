@@ -42349,8 +42349,6 @@ static void drawAtlasProgress(bool compact=false){
         const double elapsed=(std::max)(0.0,
             ImGui::GetTime()-inspectionProgressStart);
         ImGui::TextDisabled("Elapsed: %.0f s",elapsed);
-        if(sequentialTotal.load()==0)
-            ImGui::TextDisabled("Current operation has no measurable item total; percentage may pause.");
         // Diagnose a lack of completed work without pretending to know
         // whether the OS operation is blocked or simply expensive.
         static double lastAdvanceAt=0.0;
@@ -42366,18 +42364,9 @@ static void drawAtlasProgress(bool compact=false){
             observedItems=itemsNow;
             lastAdvanceAt=ImGui::GetTime();
         }
-        const double quietFor=ImGui::GetTime()-lastAdvanceAt;
-        if(quietFor>30.0){
+        if(ImGui::GetTime()-lastAdvanceAt>30.0){
             ImGui::TextColored(ImVec4(.95f,.77f,.35f,1.f),
-                "No completed checks for %.0f seconds; the current operation may be slow.",quietFor);
-        }
-        if(ImGui::CollapsingHeader("SCAN DIAGNOSTICS##v28",ImGuiTreeNodeFlags_None)){
-            ImGui::Text("Verified work: %u / %u",sequentialDone.load(),sequentialTotal.load());
-            ImGui::Text("Processes inspected: %zu",processCount.load());
-            ImGui::Text("Records collected: %zu",recordCount.load());
-            ImGui::Text("Time without completed work: %.1f s",quietFor);
-            ImGui::TextDisabled("Progress holds when the current operation has no known total.");
-            ImGui::TextDisabled("A pause alone is not proof that the scanner has stopped.");
+                "No completed checks for 30+ seconds. The current check may be slow.");
         }
     }else
         ImGui::TextDisabled("%s",state);
@@ -42814,78 +42803,6 @@ static void drawGothicScanProgress(float width,float height,int percent,bool mov
     ImGui::Dummy(ImVec2(w,h));
 }
 
-
-// V26 ornamental UI effects, visual-only and independent from detection state.
-static float syncV26FxStrength=.68f;
-static void syncV26Ornament(ImDrawList* d,ImVec2 a,ImVec2 b,float t,bool motion,float intensity){
-    if(!d || b.x-a.x<110.f || b.y-a.y<65.f)return;
-    const float k=std::clamp(intensity,0.f,1.f);
-    const ImU32 ink=IM_COL32(220,51,84,(int)(110.f*k));
-    const float x=a.x+12.f,y=a.y+12.f,r=b.x-12.f,bottom=b.y-12.f;
-    d->AddLine(ImVec2(x,y),ImVec2(x+23.f,y),ink,1.2f);
-    d->AddLine(ImVec2(x,y),ImVec2(x,y+23.f),ink,1.2f);
-    d->AddLine(ImVec2(r-23.f,bottom),ImVec2(r,bottom),ink,1.2f);
-    d->AddLine(ImVec2(r,bottom-23.f),ImVec2(r,bottom),ink,1.2f);
-    if(motion){
-        const float travel=fmodf(t*36.f,std::max(1.f,r-x));
-        d->AddLine(ImVec2(x+travel,y),ImVec2(std::min(r,x+travel+27.f),y),
-                   IM_COL32(255,92,125,(int)(180.f*k)),2.f);
-        const float vertical=fmodf(t*18.f,std::max(1.f,bottom-y));
-        d->AddCircleFilled(ImVec2(r,y+vertical),1.8f,
-                           IM_COL32(255,109,138,(int)(165.f*k)),12);
-    }
-}
-static void syncV26Moon(ImDrawList* d,ImVec2 c,float radius,float t,bool motion,float intensity){
-    if(!d || radius<8.f)return;
-    const float k=std::clamp(intensity,0.f,1.f);
-    const float pulse=motion?.5f+.5f*sinf(t*.9f):.5f;
-    d->AddCircleFilled(c,radius,IM_COL32(160,28,59,(int)((30.f+25.f*pulse)*k)),64);
-    d->AddCircle(c,radius,IM_COL32(230,68,103,(int)(125.f*k)),64,1.4f);
-    d->AddCircle(c,radius*.76f,IM_COL32(207,45,79,(int)(95.f*k)),64,1.f);
-    for(int i=0;i<9;++i){
-        const float ang=i*.6981317f+(motion?t*.11f:0.f);
-        d->AddCircleFilled(ImVec2(c.x+cosf(ang)*radius*1.12f,
-                                 c.y+sinf(ang)*radius*1.12f),1.f,
-                           IM_COL32(244,90,125,(int)(120.f*k)),8);
-    }
-}
-
-
-// V27: restrained animated ornamentation; all drawing is non-interactive.
-static void syncV27GothicDust(ImDrawList* dl,ImVec2 a,ImVec2 b,
-                              float t,bool motion,float strength,int count){
-    if(!dl || strength<=0.f || b.x-a.x<120.f || b.y-a.y<70.f)return;
-    count=std::clamp(count,0,32);
-    const float w=b.x-a.x,h=b.y-a.y;
-    for(int i=0;i<count;++i){
-        const float seed=(float)i;
-        const float x=motion?fmodf(seed*97.31f+t*(3.f+fmodf(seed,4.f)),w):fmodf(seed*97.31f,w);
-        const float y=motion?fmodf(seed*59.17f-t*(5.f+fmodf(seed,3.f))+h*100.f,h):fmodf(seed*59.17f,h);
-        const float phase=motion?.6f+.4f*sinf(t*.7f+seed):.55f;
-        const int alpha=(int)(std::clamp(strength,0.f,1.f)*phase*70.f);
-        dl->AddCircleFilled(ImVec2(a.x+x,a.y+y),.75f+(i%3)*.30f,
-            IM_COL32(245,69,110,alpha),6);
-    }
-}
-static void syncV27Crest(ImDrawList* dl,ImVec2 c,float radius,
-                         float t,bool motion,float strength){
-    if(!dl || radius<12.f || strength<=0.f)return;
-    const float k=std::clamp(strength,0.f,1.f);
-    const float spin=motion?t*.075f:0.f;
-    const int alpha=(int)(130.f*k);
-    const ImU32 color=IM_COL32(226,56,91,alpha);
-    dl->AddCircle(c,radius,color,48,1.f);
-    dl->AddCircle(c,radius*.84f,IM_COL32(226,56,91,(int)(70.f*k)),48,1.f);
-    for(int i=0;i<8;++i){
-        const float a=spin+i*.78539816f;
-        const ImVec2 inner(c.x+cosf(a)*radius*.88f,c.y+sinf(a)*radius*.88f);
-        const ImVec2 outer(c.x+cosf(a)*radius*1.13f,c.y+sinf(a)*radius*1.13f);
-        dl->AddLine(inner,outer,color,1.f);
-    }
-    const float glow=motion?.5f+.5f*sinf(t*1.2f):.5f;
-    dl->AddCircleFilled(c,2.f+glow,IM_COL32(251,92,123,(int)(140.f*k)),12);
-}
-
 static void renderSyncOpening() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     const ImVec2 p=vp->WorkPos, sz=vp->WorkSize;
@@ -42981,14 +42898,6 @@ static void renderSyncOpening() {
         const float grow=(std::min)(1.f,progress*1.5f);
         drawCrimsonSeal(d,center,baseRadius*(.72f+.28f*grow),!reducedMotion);
         drawOpeningHalo(d,center,baseRadius*(.72f+.28f*grow),(float)now);
-        syncV26Ornament(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
-            (float)now,animate,syncV26FxStrength);
-        syncV27GothicDust(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
-            (float)now,animate,syncV26FxStrength*.7f,24);
-        if(sz.x>500.f)syncV27Crest(d,ImVec2(p.x+sz.x*.82f,p.y+sz.y*.75f),
-            (std::min)(sz.x,sz.y)*.045f,(float)now,animate,syncV26FxStrength*.7f);
-        if(sz.x>850.f)syncV26Moon(d,ImVec2(p.x+sz.x*.83f,p.y+sz.y*.25f),
-            (std::min)(sz.x,sz.y)*.085f,(float)now,animate,syncV26FxStrength*.6f);
         const float barWidth=(std::min)(320.f,sz.x*.65f);
         const float bx=center.x-barWidth*.5f,by=center.y+baseRadius+24.f;
         d->AddRectFilled(ImVec2(bx,by),ImVec2(bx+barWidth,by+5.f),
@@ -43591,20 +43500,11 @@ static void renderUI() {
         const ImVec2 b(a.x+imageW,a.y+imageH);
         bg->AddImage((ImTextureID)alucardBannerTexture,a,b,
             ImVec2(.35f,0.f),ImVec2(1.f,1.f),IM_COL32(255,255,255,22));
-        syncV26Ornament(bg,a,b,(float)ImGui::GetTime(),
-            !reducedMotion,syncV26FxStrength*.7f);
         drawCrimsonWind(bg,ImVec2(wp.x+ws.x*.58f,wp.y+55.f),
             ImVec2(wp.x+ws.x-8.f,wp.y+ws.y-10.f),
             (float)ImGui::GetTime(),.30f);
     }
-    if(brandAnimation){
-        ImDrawList* d=ImGui::GetWindowDrawList();
-        const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
-        syncV26Ornament(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
-            (float)ImGui::GetTime(),!reducedMotion,syncV26FxStrength*.6f);
-        syncV27GothicDust(d,p,ImVec2(p.x+sz.x,p.y+sz.y),
-            (float)ImGui::GetTime(),!reducedMotion,syncV26FxStrength*.40f,16);
-    }
+    // SYNC: full-width operations canvas; no left navigation rail.
     if(page==1||page==5)page=0;
     const ImVec4 titleInk(.97f,.89f,.92f,1);
     const ImVec4 subtleInk(.69f,.48f,.55f,1);
@@ -43756,7 +43656,7 @@ static void renderUI() {
 
     // Show incomplete coverage across the entire workspace, not only in Overview.
     // Global alert appears on every main page after a completed scan.
-    if(bypassCorrelatedAlert.load() && inspectionPresentationComplete()){
+    if(bypassCorrelatedAlert.load() && !scanning.load()){
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.29f,.055f,.065f,1.f));
         ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.92f,.20f,.23f,1.f));
         ImGui::BeginChild("##globalBypassAlert",ImVec2(0,66),ImGuiChildFlags_Borders);
@@ -43808,12 +43708,6 @@ static void renderUI() {
         ImGuiChildFlags_Borders,ImGuiWindowFlags_NoScrollbar)){
         ImGui::TextColored(ImVec4(.92f,.24f,.34f,1.f),"SYNC / SECURITY");
         ImGui::TextDisabled(localized("INTEGRITY WORKSPACE"));
-        if(brandAnimation){
-            const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
-            syncV26Moon(ImGui::GetWindowDrawList(),
-                ImVec2(p.x+sz.x-29.f,p.y+37.f),13.f,
-                (float)ImGui::GetTime(),!reducedMotion,syncV26FxStrength);
-        }
         ImGui::TextDisabled(simplifiedInterface?
             "F1: help  |  Ctrl+1..4: tabs":"F1: help  |  Ctrl+1..8: tabs");
         ImGui::Dummy(ImVec2(0,12));
@@ -43922,16 +43816,6 @@ static void renderUI() {
         const float right=origin.x+extent.x-18.f;
         dl->AddLine(ImVec2(right,origin.y+23.f),
                     ImVec2(right,origin.y+156.f),IM_COL32(187,45,72,ink),1.f);
-        if(brandAnimation){
-            syncV26Ornament(dl,origin,ImVec2(origin.x+extent.x,origin.y+extent.y),
-                time,!reducedMotion,syncV26FxStrength*.6f);
-            if(page==2 || page==9 || page==3)
-                syncV26Moon(dl,ImVec2(origin.x+extent.x-66.f,origin.y+82.f),
-                    24.f,time,!reducedMotion,syncV26FxStrength*.48f);
-            if(extent.x>460.f && page!=0)
-                syncV27Crest(dl,ImVec2(origin.x+extent.x-125.f,origin.y+82.f),
-                    18.f,time,!reducedMotion,syncV26FxStrength*.40f);
-        }
         dl->PopClipRect();
     }
     const char* section=page==11?"SCAN VERDICT":page==0?"SCAN OVERVIEW":page==2?"SCAN RESULTS":
@@ -46895,15 +46779,6 @@ zula.exe)FIVEMSTR";
                     IM_COL32(241,68,103,155),1.7f);
             }
         }
-        if(brandAnimation){
-            const ImVec2 p=ImGui::GetWindowPos(),sz=ImGui::GetWindowSize();
-            syncV26Ornament(ImGui::GetWindowDrawList(),p,
-                ImVec2(p.x+sz.x,p.y+sz.y),(float)ImGui::GetTime(),
-                scanning.load()&&!reducedMotion,syncV26FxStrength*.55f);
-            if(sz.x>400.f)syncV27Crest(ImGui::GetWindowDrawList(),
-                ImVec2(p.x+sz.x-34.f,p.y+25.f),12.f,(float)ImGui::GetTime(),
-                scanning.load()&&!reducedMotion,syncV26FxStrength*.55f);
-        }
         ImGui::TextColored(crimson,"SCAN PROGRESS");
         if(ImGui::GetContentRegionAvail().x>250.f)ImGui::SameLine(0,18.f);
         ImGui::TextDisabled("%s",stateText());
@@ -47409,16 +47284,6 @@ zula.exe)FIVEMSTR";
                 const ImVec4 warning(.99f,.72f,.32f,1.f);
                 const ImVec4 quiet(.70f,.68f,.72f,1.f);
                 ImGui::TextColored(critical,"SCAN VERDICT");
-                if(brandAnimation && !reducedMotion){
-                    const ImVec2 cursor=ImGui::GetCursorScreenPos();
-                    const float w=ImGui::GetContentRegionAvail().x;
-                    const float t=(float)ImGui::GetTime();
-                    ImDrawList* dl=ImGui::GetWindowDrawList();
-                    const float x=cursor.x+fmodf(t*44.f,(std::max)(1.f,w));
-                    dl->AddLine(ImVec2(x,cursor.y+1.f),
-                        ImVec2((std::min)(x+40.f,cursor.x+w),cursor.y+1.f),
-                        IM_COL32(231,65,101,(int)(130.f*syncV26FxStrength)),2.f);
-                }
                 ImGui::Separator();
                 if(scanning.load() || (inspectionResultsReady() && !finished)){
                     ImGui::TextColored(warning,"SCAN IN PROGRESS");
@@ -47444,19 +47309,8 @@ zula.exe)FIVEMSTR";
                 ImGui::Text("Total: %zu",findings.size());
                 ImGui::Separator();
                 static char resultSearch[160]{};
-                static int resultSeverityFilter=0;
-                const char* resultFilters[]={"ALL FINDINGS","DETECTED ONLY","SUSPECT ONLY"};
-                const float filterWidth=ImGui::GetContentRegionAvail().x;
-                ImGui::SetNextItemWidth((std::max)(130.f,filterWidth*.60f));
-                ImGui::InputTextWithHint("##resultSearch","Search name, category, evidence...",resultSearch,sizeof(resultSearch));
-                if(filterWidth>430.f)ImGui::SameLine();
-                ImGui::SetNextItemWidth((std::min)(210.f,(std::max)(120.f,filterWidth*.35f)));
-                ImGui::Combo("##resultSeverityFilter",&resultSeverityFilter,resultFilters,3);
-                if(resultSeverityFilter!=0){
-                    findings.erase(std::remove_if(findings.begin(),findings.end(),[&](const Record& r){
-                        return resultSeverityFilter==1?!isDetectedRecord(r):!isSuspectRecord(r);
-                    }),findings.end());
-                }
+                ImGui::SetNextItemWidth((std::min)(410.f,ImGui::GetContentRegionAvail().x));
+                ImGui::InputTextWithHint("##resultSearch","Filter flagged findings...",resultSearch,sizeof(resultSearch));
                 std::string query=resultSearch;
                 std::transform(query.begin(),query.end(),query.begin(),[](unsigned char c){return (char)std::tolower(c);});
                 if(!query.empty()){
@@ -47474,8 +47328,8 @@ zula.exe)FIVEMSTR";
                     ImGuiTableFlags_SizingStretchProp,ImVec2(0,-1.f))){
                     ImGui::TableSetupScrollFreeze(0,1);
                     ImGui::TableSetupColumn("Status",ImGuiTableColumnFlags_WidthFixed,88.f);
-                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthStretch,1.1f);
-                    ImGui::TableSetupColumn("Finding",ImGuiTableColumnFlags_WidthStretch,3.2f);
+                    ImGui::TableSetupColumn("Category",ImGuiTableColumnFlags_WidthStretch,1.3f);
+                    ImGui::TableSetupColumn("Finding",ImGuiTableColumnFlags_WidthStretch,2.5f);
                     ImGui::TableSetupColumn("Details",ImGuiTableColumnFlags_WidthFixed,105.f);
                     ImGui::TableHeadersRow();
                     ImGuiListClipper clipper;
@@ -47512,13 +47366,6 @@ zula.exe)FIVEMSTR";
                     ImGui::Text("Status: %s",isDetectedRecord(selectedFinding)?"DETECTED":"SUSPECT");
                     ImGui::TextWrapped("Category: %s",selectedFinding.category.c_str());
                     ImGui::TextWrapped("Finding: %s",selectedFinding.name.c_str());
-                    ImGui::Spacing();
-                    if(ImGui::SmallButton("COPY FINDING"))
-                        ImGui::SetClipboardText(selectedFinding.name.c_str());
-                    ImGui::SameLine();
-                    if(ImGui::SmallButton("COPY EVIDENCE"))
-                        ImGui::SetClipboardText(selectedFinding.detail.c_str());
-                    ImGui::TextDisabled("Indicators need independent review; names alone do not establish cheating.");
                     ImGui::Spacing();
                     ImGui::TextDisabled("Evidence / source");
                     ImGui::BeginChild("##fullEvidenceText",ImVec2(0,-52.f),true);
@@ -48006,11 +47853,6 @@ zula.exe)FIVEMSTR";
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::TextColored(orange(),localized("INTERFACE DETAILS"));
         ImGui::Checkbox(localized("Animate scanner branding"),&brandAnimation);
-        ImGui::BeginDisabled(!brandAnimation || reducedMotion);
-        ImGui::SetNextItemWidth(240.f);
-        ImGui::SliderFloat("Gothic effects intensity",&syncV26FxStrength,.15f,1.f,"%.2f");
-        ImGui::EndDisabled();
-        ImGui::TextDisabled("Decorative only: does not affect scan results.");
         ImGui::Checkbox(localized("Monochrome rain across the window"),&ambientMotesEnabled);
         ImGui::BeginDisabled(!ambientMotesEnabled);
         ImGui::SetNextItemWidth(200);
