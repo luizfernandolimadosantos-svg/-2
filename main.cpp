@@ -39913,9 +39913,9 @@ static void applyTheme() {
     c[ImGuiCol_MenuBarBg]=panel;
     c[ImGuiCol_PlotLines]=accent;
     c[ImGuiCol_PlotHistogram]=accent;
-    c[ImGuiCol_ResizeGrip]=ImVec4(.5f,.5f,.5f,.24f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(.7f,.7f,.7f,.65f);
-    c[ImGuiCol_ResizeGripActive]=accentHot;
+    c[ImGuiCol_ResizeGrip]=ImVec4(0.f,0.f,0.f,0.f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(0.f,0.f,0.f,0.f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(0.f,0.f,0.f,0.f);
     c[ImGuiCol_ModalWindowDimBg]=ImVec4(.01f,.01f,.01f,.82f);
     // Theme variants remain grayscale but visibly change the entire workspace.
     if(themeIndex==1){ // Graphite: lighter graphite panels and controls
@@ -39976,9 +39976,9 @@ static void applyTheme() {
     c[ImGuiCol_TableRowBgAlt]=ImVec4(0.180f,0.040f,0.080f,0.430f);
     c[ImGuiCol_PlotHistogram]=ImVec4(1.000f,0.132f,0.273f,1.000f);
     c[ImGuiCol_PlotLines]=ImVec4(1.000f,0.187f,0.335f,1.000f);
-    c[ImGuiCol_ResizeGrip]=ImVec4(0.849f,0.132f,0.236f,0.280f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(1.000f,0.176f,0.298f,0.650f);
-    c[ImGuiCol_ResizeGripActive]=ImVec4(1.000f,0.220f,0.372f,1.000f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(0.f,0.f,0.f,0.f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(0.f,0.f,0.f,0.f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(0.f,0.f,0.f,0.f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -42666,8 +42666,13 @@ static void drawSyncCornerAccents(ImDrawList* draw,
 // Alucard-inspired animated sigil, drawn directly with Dear ImGui.
 static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool motion) {
     const float pi=3.14159265358979323846f;
-    const float t=motion?(float)ImGui::GetTime()*.09f:0.f;
-    const ImU32 red=IM_COL32(188,28,52,170), faint=IM_COL32(188,28,52,55);
+    const float t=motion?(float)ImGui::GetTime()*.55f:0.f;
+    const ImVec2 mouse=ImGui::GetIO().MousePos;
+    const float dx=mouse.x-c.x, dy=mouse.y-c.y;
+    const float hover=motion && radius>0.f ? std::clamp(1.f-std::sqrt(dx*dx+dy*dy)/(radius*3.f),0.f,1.f):0.f;
+    const float pulse=motion?0.5f+0.5f*std::sin(t*4.f):0.f;
+    const ImU32 red=IM_COL32(255,48,88,190+(int)(hover*65.f)), faint=IM_COL32(255,48,88,85);
+    for(int i=1;i<=3;++i) draw->AddCircle(c,radius+i*1.5f,IM_COL32(255,25,70,(int)(12+hover*35+pulse*12)),64,1.5f);
     draw->AddCircle(c,radius,red,80,1.7f);
     draw->AddCircle(c,radius*.80f,faint,80,1.3f);
     draw->AddCircle(c,radius*.59f,red,80,1.2f);
@@ -42678,7 +42683,7 @@ static void drawAlucardSigil(ImDrawList* draw, ImVec2 c, float radius, bool moti
     }
     ImVec2 star[5];
     for(int i=0;i<5;i++){
-        const float a=-pi/2.f+i*4.f*pi/5.f+t*.20f;
+        const float a=-pi/2.f+i*4.f*pi/5.f+t*.65f;
         star[i]=ImVec2(c.x+std::cos(a)*radius*.48f,c.y+std::sin(a)*radius*.48f);
     }
     for(int i=0;i<5;i++)draw->AddLine(star[i],star[(i+1)%5],red,1.5f);
@@ -42689,8 +42694,11 @@ static void drawCrimsonSeal(ImDrawList* d,ImVec2 c,float radius,bool motion){
     const float pi=3.14159265358979323846f;
     const float t=motion?(float)ImGui::GetTime():0.f;
     const float pulse=motion?.5f+.5f*sinf(t*2.2f):.45f;
-    const float turn=t*.25f;
-    const int glowAlpha=(int)(25.f+24.f*pulse);
+    const ImVec2 mouse=ImGui::GetIO().MousePos;
+    const float dx=mouse.x-c.x,dy=mouse.y-c.y;
+    const float hover=motion && radius>0.f?std::clamp(1.f-std::sqrt(dx*dx+dy*dy)/(radius*3.f),0.f,1.f):0.f;
+    const float turn=t*.55f;
+    const int glowAlpha=(int)(25.f+24.f*pulse+35.f*hover);
     for(int layer=4;layer>=1;--layer)
         d->AddCircle(c,radius+layer*1.7f,IM_COL32(213,25,65,glowAlpha),
                      72,1.4f);
@@ -43515,7 +43523,7 @@ static void renderUI() {
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
     // Faint right-side character watermark throughout the workspace.
     // Decorative only: never blocks clicks, tables or evidence text.
     if(alucardBannerTexture && brandAnimation){
@@ -46793,7 +46801,7 @@ zula.exe)FIVEMSTR";
         }
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.045f,.061f,1.f));
-        ImGui::BeginChild("##scanStatus",ImVec2(0,ImGui::GetContentRegionAvail().x<490.f?246.f:218.f),ImGuiChildFlags_Borders|
+        ImGui::BeginChild("##scanStatus",ImVec2(0,ImGui::GetContentRegionAvail().x<490.f?340.f:300.f),ImGuiChildFlags_Borders|
             ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoScrollbar);
         // Header ornament is time-driven and never changes the scan result.
         if(brandAnimation && !reducedMotion){
@@ -46814,7 +46822,7 @@ zula.exe)FIVEMSTR";
             inspectionResultsReady() || done.load();
         const int progress=scanEverStarted ? (std::max)(0,(std::min)(100,inspectionDisplayPercent())) : 0;
         ImGui::Spacing();
-        const float barWidth=(std::max)(110.f,ImGui::GetContentRegionAvail().x-72.f);
+        const float barWidth=(std::max)(110.f,ImGui::GetContentRegionAvail().x);
         drawGothicScanProgress(barWidth,25.f,progress,scanning.load() && !reducedMotion);
         ImGui::TextColored(crimson,"%d%%",progress);
         if(scanning.load()){
@@ -46845,7 +46853,10 @@ zula.exe)FIVEMSTR";
             ImGui::TextDisabled("Process counters appear when inspection begins.");
         }
         if(scanning.load() && progress<100)
-            ImGui::TextDisabled("Progress reflects completed inspection work.");
+            {
+            ImGui::TextDisabled("Verified stages: %d / 6", completedStages.load());
+            ImGui::TextDisabled("Current checks: %u / %u", sequentialDone.load(), sequentialTotal.load());
+        }
         ImGui::EndChild();
         ImGui::PopStyleColor();
     } else if(page==0) {
