@@ -39943,42 +39943,42 @@ static void applyTheme() {
         c[ImGuiCol_Border]=ImVec4(.39f,.39f,.39f,.8f);
     }
     // HELLSING / ALUCARD EDITION: deep oxblood and restrained crimson accents.
-    c[ImGuiCol_WindowBg]=ImVec4(.035f,.018f,.025f,1.f);
-    c[ImGuiCol_ChildBg]=ImVec4(.075f,.030f,.040f,1.f);
-    c[ImGuiCol_PopupBg]=ImVec4(.095f,.037f,.052f,1.f);
-    c[ImGuiCol_Border]=ImVec4(.48f,.12f,.19f,.80f);
-    c[ImGuiCol_FrameBg]=ImVec4(.13f,.050f,.067f,1.f);
-    c[ImGuiCol_FrameBgHovered]=ImVec4(.22f,.067f,.094f,1.f);
-    c[ImGuiCol_FrameBgActive]=ImVec4(.32f,.075f,.11f,1.f);
-    c[ImGuiCol_Button]=ImVec4(.28f,.060f,.088f,1.f);
-    c[ImGuiCol_ButtonHovered]=ImVec4(.47f,.085f,.13f,1.f);
-    c[ImGuiCol_ButtonActive]=ImVec4(.60f,.10f,.16f,1.f);
-    c[ImGuiCol_Header]=ImVec4(.23f,.065f,.09f,1.f);
-    c[ImGuiCol_HeaderHovered]=ImVec4(.38f,.085f,.12f,1.f);
-    c[ImGuiCol_HeaderActive]=ImVec4(.48f,.09f,.14f,1.f);
-    c[ImGuiCol_CheckMark]=ImVec4(.98f,.32f,.38f,1.f);
-    c[ImGuiCol_SliderGrab]=ImVec4(.70f,.15f,.23f,1.f);
-    c[ImGuiCol_SliderGrabActive]=ImVec4(.90f,.21f,.28f,1.f);
-    c[ImGuiCol_Tab]=ImVec4(.13f,.04f,.06f,1.f);
-    c[ImGuiCol_TabHovered]=ImVec4(.39f,.07f,.11f,1.f);
-    c[ImGuiCol_TabSelected]=ImVec4(.44f,.08f,.13f,1.f);
-    c[ImGuiCol_TableHeaderBg]=ImVec4(.19f,.05f,.075f,1.f);
-    c[ImGuiCol_TextSelectedBg]=ImVec4(.70f,.12f,.20f,.40f);
-    c[ImGuiCol_NavHighlight]=ImVec4(.92f,.19f,.27f,1.f);
-    c[ImGuiCol_Text]=ImVec4(.95f,.90f,.92f,1.f);
-    c[ImGuiCol_TextDisabled]=ImVec4(.65f,.52f,.57f,1.f);
-    c[ImGuiCol_Separator]=ImVec4(.41f,.11f,.17f,1.f);
-    c[ImGuiCol_ScrollbarBg]=ImVec4(.06f,.02f,.035f,1.f);
-    c[ImGuiCol_ScrollbarGrab]=ImVec4(.34f,.075f,.13f,1.f);
-    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(.55f,.11f,.19f,1.f);
-    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(.73f,.14f,.24f,1.f);
-    c[ImGuiCol_TableRowBg]=ImVec4(.10f,.03f,.05f,.45f);
-    c[ImGuiCol_TableRowBgAlt]=ImVec4(.18f,.04f,.08f,.43f);
-    c[ImGuiCol_PlotHistogram]=ImVec4(.78f,.12f,.22f,1.f);
-    c[ImGuiCol_PlotLines]=ImVec4(.85f,.17f,.27f,1.f);
-    c[ImGuiCol_ResizeGrip]=ImVec4(.55f,.12f,.19f,.28f);
-    c[ImGuiCol_ResizeGripHovered]=ImVec4(.7f,.16f,.24f,.65f);
-    c[ImGuiCol_ResizeGripActive]=ImVec4(.83f,.2f,.3f,1.f);
+    c[ImGuiCol_WindowBg]=ImVec4(0.035f,0.018f,0.025f,1.000f);
+    c[ImGuiCol_ChildBg]=ImVec4(0.075f,0.030f,0.040f,1.000f);
+    c[ImGuiCol_PopupBg]=ImVec4(0.095f,0.037f,0.052f,1.000f);
+    c[ImGuiCol_Border]=ImVec4(0.745f,0.132f,0.236f,0.800f);
+    c[ImGuiCol_FrameBg]=ImVec4(0.130f,0.050f,0.067f,1.000f);
+    c[ImGuiCol_FrameBgHovered]=ImVec4(0.361f,0.074f,0.117f,1.000f);
+    c[ImGuiCol_FrameBgActive]=ImVec4(0.509f,0.083f,0.136f,1.000f);
+    c[ImGuiCol_Button]=ImVec4(0.449f,0.066f,0.109f,1.000f);
+    c[ImGuiCol_ButtonHovered]=ImVec4(0.731f,0.094f,0.161f,1.000f);
+    c[ImGuiCol_ButtonActive]=ImVec4(0.923f,0.110f,0.198f,1.000f);
+    c[ImGuiCol_Header]=ImVec4(0.375f,0.072f,0.112f,1.000f);
+    c[ImGuiCol_HeaderHovered]=ImVec4(0.597f,0.094f,0.149f,1.000f);
+    c[ImGuiCol_HeaderActive]=ImVec4(0.745f,0.099f,0.174f,1.000f);
+    c[ImGuiCol_CheckMark]=ImVec4(1.000f,0.352f,0.471f,1.000f);
+    c[ImGuiCol_SliderGrab]=ImVec4(1.000f,0.165f,0.285f,1.000f);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(1.000f,0.231f,0.347f,1.000f);
+    c[ImGuiCol_Tab]=ImVec4(0.130f,0.040f,0.060f,1.000f);
+    c[ImGuiCol_TabHovered]=ImVec4(0.612f,0.077f,0.136f,1.000f);
+    c[ImGuiCol_TabSelected]=ImVec4(0.686f,0.088f,0.161f,1.000f);
+    c[ImGuiCol_TableHeaderBg]=ImVec4(0.316f,0.055f,0.093f,1.000f);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(1.000f,0.132f,0.248f,0.400f);
+    c[ImGuiCol_NavHighlight]=ImVec4(1.000f,0.209f,0.335f,1.000f);
+    c[ImGuiCol_Text]=ImVec4(0.950f,0.900f,0.920f,1.000f);
+    c[ImGuiCol_TextDisabled]=ImVec4(0.650f,0.520f,0.570f,1.000f);
+    c[ImGuiCol_Separator]=ImVec4(0.642f,0.121f,0.211f,1.000f);
+    c[ImGuiCol_ScrollbarBg]=ImVec4(0.060f,0.020f,0.035f,1.000f);
+    c[ImGuiCol_ScrollbarGrab]=ImVec4(0.538f,0.083f,0.161f,1.000f);
+    c[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.849f,0.121f,0.236f,1.000f);
+    c[ImGuiCol_ScrollbarGrabActive]=ImVec4(1.000f,0.154f,0.298f,1.000f);
+    c[ImGuiCol_TableRowBg]=ImVec4(0.100f,0.030f,0.050f,0.450f);
+    c[ImGuiCol_TableRowBgAlt]=ImVec4(0.180f,0.040f,0.080f,0.430f);
+    c[ImGuiCol_PlotHistogram]=ImVec4(1.000f,0.132f,0.273f,1.000f);
+    c[ImGuiCol_PlotLines]=ImVec4(1.000f,0.187f,0.335f,1.000f);
+    c[ImGuiCol_ResizeGrip]=ImVec4(0.849f,0.132f,0.236f,0.280f);
+    c[ImGuiCol_ResizeGripHovered]=ImVec4(1.000f,0.176f,0.298f,0.650f);
+    c[ImGuiCol_ResizeGripActive]=ImVec4(1.000f,0.220f,0.372f,1.000f);
 }
 
 static void sectionTitle(const char* title,const char* description=nullptr) {
@@ -42236,7 +42236,7 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
         const float d=2.f+j*2.f;
         draw->AddRect(ImVec2(origin.x+d,origin.y+d),
             ImVec2(origin.x+size.x-d,origin.y+size.y-d),
-            IM_COL32(175,24,52,(int)((12.f+8.f*pulse)/(j+1))),8.f);
+            IM_COL32(255,35,72,(int)((30.f+16.f*pulse)/(j+1))),8.f);
     }
     for(int i=0;i<36;++i){
         const float k=(float)(i+1);
@@ -42244,15 +42244,15 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
         const float y=origin.y+size.y*(1.f-std::fmod(k*.381966f+t*(.012f+.003f*(i%5)),1.f));
         const float dx=x-mouse.x,dy=y-mouse.y;
         const float proximity=1.f/(1.f+(dx*dx+dy*dy)/10000.f);
-        const int a=(int)(14.f+26.f*proximity+8.f*(.5f+.5f*std::sin(t+k)));
-        draw->AddCircleFilled(ImVec2(x,y),1.f+float(i%3)*.45f,IM_COL32(235,55,82,a),8);
+        const int a=(int)(24.f+48.f*proximity+14.f*(.5f+.5f*std::sin(t+k)));
+        draw->AddCircleFilled(ImVec2(x,y),1.f+float(i%3)*.45f,IM_COL32(255,65,105,a),8);
     }
     // Corner filigree leaves the central content unobstructed.
     for(int i=0;i<4;++i){
         const float sx=(i%2)?-1.f:1.f,sy=(i/2)?-1.f:1.f;
         const float x=origin.x+((i%2)?size.x-9.f:9.f);
         const float y=origin.y+((i/2)?size.y-9.f:9.f);
-        const ImU32 col=IM_COL32(200,44,68,(int)(65.f+25.f*pulse));
+        const ImU32 col=IM_COL32(255,55,85,(int)(100.f+40.f*pulse));
         draw->AddLine(ImVec2(x,y),ImVec2(x+sx*34.f,y),col,1.5f);
         draw->AddLine(ImVec2(x,y),ImVec2(x,y+sy*34.f),col,1.5f);
         draw->AddLine(ImVec2(x+sx*7.f,y),ImVec2(x,y+sy*7.f),col,1.f);
@@ -47330,12 +47330,13 @@ zula.exe)FIVEMSTR";
                     ImGui::TextWrapped("No suspicious or detected records from the completed checks. This is not proof of a clean system.");
                 }
                 ImGui::Spacing();
-                ImGui::Text("Detected: %zu",detectedCount);
+                ImGui::TextColored(ImVec4(1.f,.30f,.39f,1.f),"Detected: %zu",detectedCount);
                 ImGui::SameLine(0,24.f);
-                ImGui::Text("Suspect: %zu",suspectCount);
+                ImGui::TextColored(ImVec4(1.f,.72f,.30f,1.f),"Suspect: %zu",suspectCount);
                 ImGui::SameLine(0,24.f);
                 ImGui::Text("Total: %zu",findings.size());
                 ImGui::Separator();
+                ImGui::TextWrapped("Review evidence before making a decision. A flagged record alone is not proof of cheating.");
                 static char resultSearch[160]{};
                 ImGui::SetNextItemWidth((std::min)(410.f,ImGui::GetContentRegionAvail().x));
                 ImGui::InputTextWithHint("##resultSearch","Filter flagged findings...",resultSearch,sizeof(resultSearch));
