@@ -42229,6 +42229,34 @@ static void drawAmbientMotes(const ImVec2& origin,const ImVec2& size) {
                 IM_COL32(245,57,87,20),1.2f);
         }
     }
+    // Hellsing FX: bounded, decorative edge lighting and drifting embers.
+    const ImVec2 mouse=ImGui::GetIO().MousePos;
+    const float pulse=.5f+.5f*std::sin(t*.85f);
+    for(int j=0;j<6;++j){
+        const float d=2.f+j*2.f;
+        draw->AddRect(ImVec2(origin.x+d,origin.y+d),
+            ImVec2(origin.x+size.x-d,origin.y+size.y-d),
+            IM_COL32(175,24,52,(int)((12.f+8.f*pulse)/(j+1))),8.f);
+    }
+    for(int i=0;i<36;++i){
+        const float k=(float)(i+1);
+        const float x=origin.x+size.x*std::fmod(k*.618034f,1.f)+8.f*std::sin(t*.45f+k);
+        const float y=origin.y+size.y*(1.f-std::fmod(k*.381966f+t*(.012f+.003f*(i%5)),1.f));
+        const float dx=x-mouse.x,dy=y-mouse.y;
+        const float proximity=1.f/(1.f+(dx*dx+dy*dy)/10000.f);
+        const int a=(int)(14.f+26.f*proximity+8.f*(.5f+.5f*std::sin(t+k)));
+        draw->AddCircleFilled(ImVec2(x,y),1.f+float(i%3)*.45f,IM_COL32(235,55,82,a),8);
+    }
+    // Corner filigree leaves the central content unobstructed.
+    for(int i=0;i<4;++i){
+        const float sx=(i%2)?-1.f:1.f,sy=(i/2)?-1.f:1.f;
+        const float x=origin.x+((i%2)?size.x-9.f:9.f);
+        const float y=origin.y+((i/2)?size.y-9.f:9.f);
+        const ImU32 col=IM_COL32(200,44,68,(int)(65.f+25.f*pulse));
+        draw->AddLine(ImVec2(x,y),ImVec2(x+sx*34.f,y),col,1.5f);
+        draw->AddLine(ImVec2(x,y),ImVec2(x,y+sy*34.f),col,1.5f);
+        draw->AddLine(ImVec2(x+sx*7.f,y),ImVec2(x,y+sy*7.f),col,1.f);
+    }
     draw->PopClipRect();
 }
 
