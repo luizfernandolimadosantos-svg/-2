@@ -26,6 +26,7 @@
 #pragma comment(lib,"shell32.lib")
 #include <map>
 #include <set>
+#include <tuple>
 #pragma comment(lib,"winhttp.lib")
 #include <tlhelp32.h>
 #include <psapi.h>
@@ -7653,6 +7654,217 @@ static const SyncDetectString syncDetectStrings[] = {
 {"wmi","ROOT\\\\subscription"},
 {"wmi","ROOT\\\\default"},
 {"wmi","../../pch.h"},
+
+// User-submitted, de-duplicated local file indicators. Review matches in context.
+{"eventlog_ioc","api.monesy.dev"},
+{"eventlog_ioc","mhyprot.sys"},
+{"eventlog_ioc","fivem-premium.dll"},
+{"eventlog_ioc","https://cdn.gosth.ltd/launcher.exe"},
+{"eventlog_ioc","FS Update.exe"},
+{"eventlog_ioc","Toolswindows.exe"},
+{"eventlog_ioc","iwr -useb https://txix777.netlify.app/"},
+{"eventlog_ioc","https://projectdow.com/data/bypass/setupSize"},
+{"eventlog_ioc","https://projectdow.com/data/Setup.dll"},
+{"browser_history_ioc","https://www.degeoacademy.com/login?callbackUrl=https%3A%2F%2Fwww.degeoacademy.com%2Fbaixar-softwares&error=SessionRequired"},
+{"browser_history_ioc","https://gosth.gg/user-profile.php"},
+{"browser_history_ioc","password_is_eulen.rar"},
+{"browser_history_ioc","/ui/download/ProjectLoader.zip"},
+{"browser_history_ioc","redengine.eu/clientarea/download?"},
+{"browser_history_ioc","kekhack_fivem_premium.asi"},
+{"browser_history_ioc","WinApi99.dll"},
+{"browser_history_ioc","RedEngine.dll"},
+{"browser_history_ioc","free_fivem_cheat.dll"},
+{"browser_history_ioc","KEK_HACK_ESP.asi"},
+{"browser_history_ioc","RaffattMenuV2.dll"},
+{"browser_history_ioc","sensy.bat"},
+{"browser_history_ioc","NEM_DEUS_PEGA.bat"},
+{"browser_history_ioc","bek.bat"},
+{"browser_history_ioc","Bypass_Ghost_Cleaner.bat"},
+{"browser_history_ioc","senhas.bat"},
+{"browser_history_ioc","a8a953c01e2d3139.bat"},
+{"browser_history_ioc","Win.zip.bat"},
+{"browser_history_ioc","dollynscott.bat"},
+{"browser_history_ioc","ghost.bat_1.bat"},
+{"browser_history_ioc","SpacialoBACKUP.bat"},
+{"browser_history_ioc","SconzaFps.bat"},
+{"browser_history_ioc","https://eulen.cc/tutorial/FiveM/"},
+{"browser_history_ioc","https://skript.gg/panel/download_launcher"},
+{"browser_history_ioc","https://monstermenu.cc/tutorial-de-instalacao/"},
+{"browser_history_ioc","https://www.projectcheats.com/cheat/fivemmodvip"},
+{"browser_history_ioc","https://www.projectcheats.com/cheat/fivempvpvip"},
+{"browser_history_ioc","https://www.projectcheats.com/cheat/fivemfree"},
+{"browser_history_ioc","https://stoppedbypass.com/"},
+{"browser_history_ioc","https://felipe-menu.xyz/"},
+{"browser_history_ioc","https://avelinomenu.com.br/"},
+{"browser_history_ioc","https://www.lairamenu.com.br/"},
+{"browser_history_ioc","https://www.magnattamenu.com.br/loja?c=FiveM"},
+{"browser_history_ioc","https://redengine.net/"},
+{"browser_history_ioc","https://www.degeoacademy.com/"},
+{"browser_history_ioc","https://www.projectcheats.com/"},
+{"browser_history_ioc","https://monesy.dev/"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1132123772783185940/1156391539069698118/RoyalExecutor.rar?ex=652f2b0b&is=651cb60b&hm=5e9cc3844d02ff3d6ea37b545059e9a437623ba9185b684c798b2138b4a2ca92&"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1132123772783185940/1156391539069698118/RoyalExecutor.rar"},
+{"browser_history_ioc","https://www.skript.gg/panel/download_launcher"},
+{"browser_history_ioc","https://tzproject.com"},
+{"browser_history_ioc","https://royalcommunity.store/produtos/royalspoofer.rar"},
+{"browser_history_ioc","https://tgmodz.com/product-category/fivem-mod-menus/"},
+{"browser_history_ioc","https://www.degeoacademy.com/product/fivem-premium"},
+{"browser_history_ioc","https://www.degeoacademy.com/product/fivem-simple"},
+{"browser_history_ioc","https://www.degeoacademy.com/baixar-softwares"},
+{"browser_history_ioc","https://skript.gg"},
+{"browser_history_ioc","https://skript.gg/support"},
+{"browser_history_ioc","https://skript.gg/logo512.png"},
+{"browser_history_ioc","Nosso Site: https://gosth.gg/"},
+{"browser_history_ioc","Our site: https://gosth.gg/"},
+{"browser_history_ioc","Nasza strona: https://gosth.gg/"},
+{"browser_history_ioc","https://keyauth.cc/"},
+{"browser_history_ioc","https://github.com/keyauth"},
+{"browser_history_ioc","https://www.projectcheats.com/ui"},
+{"browser_history_ioc","https://skript.gg/panel/dashboard"},
+{"browser_history_ioc","https://www.magnattamenu.com.br/loja/checkout"},
+{"browser_history_ioc","https://www.magnattamenu.com.br/politica/termos"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/laira-menu-semanal-sem-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/laira-menu-mensal-sem-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/laira-menu-lifetime-sem-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/laira-menu-semanal"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/copia-de-laira-menu-e-redengine-mensal"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/laira-menu-e-redengine-lifetime"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/sp00fer-semanal-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/sp00fer-mensal-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/executor-semanal-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/executor-mensal-redengine"},
+{"browser_history_ioc","https://www.lairamenu.com.br/product-page/executor-lifetime-redengine"},
+{"browser_history_ioc","https://felipe-menu.xyz/produto/mod-menu-lifetime/"},
+{"browser_history_ioc","https://felipe-menu.xyz/produto/mod-menu-mensal/"},
+{"browser_history_ioc","https://felipe-menu.xyz/produto/mod-menu-semanal/"},
+{"browser_history_ioc","https://felipe-menu.xyz/finalizar-compra/"},
+{"browser_history_ioc","https://felipe-menu.xyz/produto/woofer-mensal/"},
+{"browser_history_ioc","https://felipe-menu.xyz/produto/woofer-semanal/"},
+{"browser_history_ioc","https://monesy.dev/ToS"},
+{"browser_history_ioc","https://susano.re/m"},
+{"browser_history_ioc","https://susano.re"},
+{"browser_history_ioc","https://susano.re/"},
+{"file_artifact_ioc","loader_prod.exe"},
+{"file_artifact_ioc","loader.vmp"},
+{"file_artifact_ioc","settings.cock // public.zip"},
+{"file_artifact_ioc","Launcher.exe"},
+{"file_artifact_ioc","rage-graphics-five.dll"},
+{"file_artifact_ioc","RamonLoader.2.2.exe"},
+{"file_artifact_ioc","EpicGamesOnline.exe"},
+{"file_artifact_ioc","vgtray.exe"},
+{"file_artifact_ioc","plutolauncher.exe"},
+{"file_artifact_ioc","projectLoader.exe"},
+{"file_artifact_ioc","java64.dll"},
+{"file_artifact_ioc","gdx-freetype64.dll"},
+{"file_artifact_ioc","FXSEXT.exe"},
+{"file_artifact_ioc","favorites.cfg"},
+{"file_artifact_ioc","IMJJPUEX.EXE"},
+{"file_artifact_ioc","wvpci.exe"},
+{"file_artifact_ioc","purity.exe"},
+{"file_artifact_ioc","Jsvchost.exe"},
+{"file_artifact_ioc","appmgts.exe"},
+{"file_artifact_ioc","ProjectLoader.zip"},
+{"file_artifact_ioc","loader.html.exe"},
+{"file_artifact_ioc","LAIRA.lua"},
+{"file_artifact_ioc","FELIPE_MENU_V100_14.lua"},
+{"file_artifact_ioc","FelipeMenu_ATUALIZADO.lua"},
+{"file_artifact_ioc","Felipe_MenuV4_1_1.lua"},
+{"file_artifact_ioc","magnattamenuATT.lua"},
+{"file_artifact_ioc","MENU_MAGNATA_1.lua"},
+{"file_artifact_ioc","avelinoMenu.lua"},
+{"file_artifact_ioc","avelinoMenu_1.lua"},
+{"file_artifact_ioc","Avelino_Menu.lua"},
+{"file_artifact_ioc","J:\\svchost.exe"},
+{"file_artifact_ioc","Ac:\\windows\\microsoft.net\\framework64\\v4.0.30319\\comsvcconfiig.exe"},
+{"file_artifact_ioc","SnippingTool.dll"},
+{"file_artifact_ioc","calc.dll"},
+{"file_artifact_ioc","mspaint.dll"},
+{"file_artifact_ioc","dvdplay.dll"},
+{"file_artifact_ioc","monesy.dev"},
+{"file_artifact_ioc","FSUpdate.zip"},
+{"file_artifact_ioc","royalmenu.rar"},
+{"file_artifact_ioc","visior.exe"},
+{"browser_history_ioc","https://github.com/abbodi1406/vcredist/releases/download/v0.76.0/VisualCppRedist_AIO_x86_x64.exe"},
+{"browser_history_ioc","https://gosth.gg/buypage"},
+{"browser_history_ioc","https://skript.gg/panel/activate_code"},
+{"browser_history_ioc","https://gosth.gg/approved"},
+{"browser_history_ioc","https://eternity-cheats.com"},
+{"browser_history_ioc","https://eternity-cheats.com/payment/index.php"},
+{"browser_history_ioc","https://www.stoppedbypass.com/dashboard/profile?query=activekey"},
+{"browser_history_ioc","https://www.stoppedbypass.com/dashboard/profile?query=changepassword"},
+{"browser_history_ioc","https://www.stoppedbypass.com/dashboard/profile?query=profile"},
+{"browser_history_ioc","https://www.stoppedbypass.com/dashboard"},
+{"browser_history_ioc","https://www.stoppedbypass.com/dashboard/profile?query=download"},
+{"browser_history_ioc","https://hydragg.xyz/"},
+{"browser_history_ioc","https://hydragg.xyz/login"},
+{"browser_history_ioc","https://hydragg.xyz/register"},
+{"browser_history_ioc","https://hydragg.xyz/user-area/dashboard/"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1121208395312144414/1170156839468552293/EXECUTO_DE_MENU_2023_FARINHA.zip?ex=66b8adba&is=66b75c3a&hm=940604db34c2f8e56601c9d0092544ec94e5966942424914bf861cfb3feacfe3&"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1121208395312144414/1188546387273601085/EXECUTO_DE_MENU_2023_FARINHA.zip?ex=66b857d4&is=66b70654&hm=4314bedb87e4c7f3039c7be03c9ab6efa6632d006d36c14b35182bb274da9895&"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1121208395312144414/1218413622158557244/EXECUTO_DE_MENU_2023_FARINHA.zip?ex=66b83c1c&is=66b6ea9c&hm=bb53ba068ed0d1d125689fffd05caad3bfb1b2c8e0936b5aad69fc5b7162c17f&"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1121208395312144414/1261073948364509244/FARINHA_MENU_.zip?ex=66b88662&is=66b734e2&hm=b4b2062356efb9d24370accae7c25cd7c7cc0bf9ef0d46fc31f3a53a0a76d528&"},
+{"browser_history_ioc","https://4br.me/cheat_fivem-v2"},
+{"browser_history_ioc","https://5br.me/cheat_fivem-v3"},
+{"browser_history_ioc","https://5br.me/CHEAT_FIVEM_FREE"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1270612139454894101/1270612245847740456/leaksggbypass.bat?ex=66bf8a1e&is=66be389e&hm=fcc008b0d0d3fa84c1f7e164bd67d84e0361518b3fb3a885d3db2d130512d39d&"},
+{"network_artifact_ioc","public.zip"},
+{"network_artifact_ioc","191.96.81.227/gosth/api/version.php"},
+{"network_artifact_ioc","/gosth/api/version.php"},
+{"network_artifact_ioc",".skript.gg0!"},
+{"network_artifact_ioc","skript.gg0*"},
+{"network_artifact_ioc","projectcheats.com"},
+{"network_artifact_ioc","api.projectcheats"},
+{"network_artifact_ioc","api.projectcheats.com"},
+{"browser_history_ioc","cdn.gosth.ltd/launcher.exe"},
+{"browser_history_ioc","https://hxcheats.com/usercp/loader.exe"},
+{"browser_history_ioc","https://projectcheats.com"},
+{"eventlog_ioc","degeo_unprotected.pdb"},
+{"eventlog_ioc","ProjectLoader.pdb"},
+{"eventlog_ioc","keyauth.com/api/v3/"},
+{"eventlog_ioc","skript.gg0"},
+{"browser_history_ioc","https://skript.gg/logo192.png"},
+{"browser_history_ioc","https://skript.gg/favicon.png"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1062186069665267793/1073473363084849182/loader.rar"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/923950108918312980/1048679295238807632/d3d10.dll"},
+{"browser_history_ioc","https://cdn.discordapp.com/attachments/1090775912104071188/1186838886098415697/Xrc19-12att.dll"},
+{"browser_history_ioc","skript.dll"},
+{"eventlog_ioc","\\device\\harddiskvolume3\\windows\\microsoft.net\\framework64\\v4.0.30319\\comsvcconfiig.exe"},
+{"network_artifact_ioc","wsauth.redengine.eu"},
+{"network_artifact_ioc","api.tzproject.com/tzproject.com"},
+{"network_artifact_ioc","tzproject.com/api.tzproject.com"},
+{"network_artifact_ioc","auth.redengine.eu"},
+{"network_artifact_ioc","cdn.gosth.ltd"},
+{"network_artifact_ioc","www.degeoacademy.xyz"},
+{"network_artifact_ioc","api.gosth.xyz"},
+{"network_artifact_ioc",":www.degeoacademy.xyz"},
+{"network_artifact_ioc","falcon.redengine.eu"},
+{"network_artifact_ioc",":wsauth.redengine.eu"},
+{"network_artifact_ioc","kzoem.hxcheats.com"},
+{"network_artifact_ioc","www.stoppedbypass"},
+{"network_artifact_ioc","www.stoppedbypass.com"},
+{"network_artifact_ioc","api.hydragg.xyz"},
+{"network_artifact_ioc","hydragg.xyz"},
+{"network_artifact_ioc","eternitycheats.net"},
+{"network_artifact_ioc","*.skript.gg"},
+{"network_artifact_ioc","skript.gg0!"},
+{"network_artifact_ioc",".projectcheats.com0"},
+{"network_artifact_ioc","*.keyauth.win"},
+{"network_artifact_ioc","skript.gg/.gg"},
+{"network_artifact_ioc","stoppedbypass.com0Y0"},
+{"network_artifact_ioc","stoppedbypass.com"},
+{"network_artifact_ioc","*.stoppedbypass.com0"},
+{"network_artifact_ioc","*.hydragg.xyz0"},
+{"network_artifact_ioc","eternitycheats.net0"},
+{"browser_history_ioc","https://aka.ms/vs/16/release/VC_redist.x64.exe"},
+{"registry_artifact_ioc","\\Device\\HarddiskVolume3\\Windows\\NordVpn\\MicrosoftNordVpn.ServiceHub.Controller.ni.exe"},
+{"usn_journal_ioc","edg9F6C.tmp"},
+{"usn_journal_ioc","023e3e2f-20ee-475d-9d45-5188c5de46cc.tmp.node"},
+{"usn_journal_ioc","S340p.node"},
+{"usn_journal_ioc","1kAlMiG2Kb7.tmp"},
+{"usn_journal_ioc","edg9c68.tmp"},
+{"usn_journal_ioc","scope_v4.json"},
+{"usn_journal_ioc","f624bscxb-hw1x-4b33-b374-7961740b8225.tmp"},
+{"usn_journal_ioc","63180029-de99-4f60.tmp"},
 };
 static constexpr size_t syncDetectStringCount=sizeof(syncDetectStrings)/sizeof(syncDetectStrings[0]);
 // END embedded sync_detect_strings.h
@@ -7690,12 +7902,12 @@ static const char* labels[] = {
 static int classify(const std::string& m) {
     if(m.find("injected")!=std::string::npos || m.find("injection")!=std::string::npos || m.find("dll_hijack")!=std::string::npos || m.find("suspended")!=std::string::npos || m.find("terminated")!=std::string::npos || m.find("pe_injection")!=std::string::npos || m.find("game_instance")!=std::string::npos || m.find("client_checks")!=std::string::npos) return 0;
     if(m.find("ahk")!=std::string::npos || m.find("powershell")!=std::string::npos || m.find("cmd_and_bat")!=std::string::npos || m.find("vbs")!=std::string::npos || m.find("lua")!=std::string::npos || m.find("python")!=std::string::npos || m.find("executed")!=std::string::npos || m.find("files_ran")!=std::string::npos || m.find("modified_extension")!=std::string::npos) return 1;
-    if(m.find("prefetch")!=std::string::npos || m.find("fileinfo")!=std::string::npos || m.find("saved_files")!=std::string::npos || m.find("recycle")!=std::string::npos || m.find("asar")!=std::string::npos || m.find("hosts_and")!=std::string::npos || m.find("deleted_exe")!=std::string::npos) return 2;
+    if(m.find("prefetch")!=std::string::npos || m.find("fileinfo")!=std::string::npos || m.find("saved_files")!=std::string::npos || m.find("recycle")!=std::string::npos || m.find("asar")!=std::string::npos || m.find("hosts_and")!=std::string::npos || m.find("deleted_exe")!=std::string::npos || m.find("file_artifact_ioc")!=std::string::npos) return 2;
     if(m.find("registry")!=std::string::npos || m.find("bam")!=std::string::npos || m.find("autoruns")!=std::string::npos || m.find("task_scheduler")!=std::string::npos || m.find("install_time")!=std::string::npos) return 3;
     if(m.find("usb")!=std::string::npos || m.find("disk")!=std::string::npos || m.find("partition")!=std::string::npos || m.find("fat32")!=std::string::npos || m.find("volume")!=std::string::npos || m.find("vhd")!=std::string::npos || m.find("diffdrive")!=std::string::npos) return 4;
     if(m.find("services")!=std::string::npos || m.find("service")!=std::string::npos || m.find("defender")!=std::string::npos || m.find("wmi")!=std::string::npos || m.find("test_signing")!=std::string::npos || m.find("efi")!=std::string::npos || m.find("nvidia")!=std::string::npos || m.find("control_flow")!=std::string::npos || m.find("eventlog")!=std::string::npos) return 5;
     if(m.find("usn")!=std::string::npos || m.find("time_change")!=std::string::npos || m.find("atlas_trace")!=std::string::npos || m.find("crash_dump")!=std::string::npos || m.find("pc_start")!=std::string::npos) return 6;
-    if(m.find("discord")!=std::string::npos || m.find("steam")!=std::string::npos || m.find("epic")!=std::string::npos || m.find("r6_alts")!=std::string::npos || m.find("mc_alts")!=std::string::npos || m.find("browser")!=std::string::npos || m.find("vpn")!=std::string::npos || m.find("anydesk")!=std::string::npos || m.find("onedrive")!=std::string::npos) return 7;
+    if(m.find("discord")!=std::string::npos || m.find("steam")!=std::string::npos || m.find("epic")!=std::string::npos || m.find("r6_alts")!=std::string::npos || m.find("mc_alts")!=std::string::npos || m.find("browser")!=std::string::npos || m.find("vpn")!=std::string::npos || m.find("anydesk")!=std::string::npos || m.find("onedrive")!=std::string::npos || m.find("network_artifact_ioc")!=std::string::npos) return 7;
     return 8;
 }
 
@@ -13316,7 +13528,7 @@ static void assessProcess(Process& process,const std::wstring& winRoot) {
         process.assessment=warnings+"; manual review recommended";
     }
 }
-static std::string sha256Uncached(const std::wstring& path) {
+static std::string sha256Uncached(const std::wstring& path,bool cancellable=false) {
     HANDLE f=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
                          nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr);
     if(f==INVALID_HANDLE_VALUE) return "Unavailable";
@@ -13332,6 +13544,7 @@ static std::string sha256Uncached(const std::wstring& path) {
                 bool ok=true;
                 DWORD read=0;
                 for(;;) {
+                    if(cancellable && cancelRequested.load()) {ok=false;break;}
                     if(!ReadFile(f,buffer.data(),(DWORD)buffer.size(),&read,nullptr)) {
                         ok=false;break;
                     }
@@ -14395,6 +14608,16 @@ static std::string timelineSummary(const std::string& channel,
         if(id=="7036")return "A Windows service changed state";
         if(id=="7000" || id=="7001")return "Service startup failure";
     }
+    if(channel=="Security") {
+        if(id=="1102")return "The Security event log was cleared";
+        if(id=="4616")return "A system clock adjustment was recorded";
+        if(id=="4719")return "The audit policy was changed";
+        if(id=="4697")return "A service was installed";
+        if(id=="4698")return "A scheduled task was created";
+        if(id=="4702")return "A scheduled task was changed";
+    }
+    if(channel=="Windows PowerShell" && id=="403")
+        return "A Windows PowerShell engine session ended";
     if(channel=="Task Scheduler") {
         if(id=="106")return "Scheduled task registered";
         if(id=="140")return "Scheduled task updated";
@@ -14416,6 +14639,10 @@ static std::vector<TimelineEvent> collectWindowsTimeline() {
     const Channel channels[]={
         {L"System","System",
          L"*[System[(EventID=7045 or EventID=7040 or EventID=7036 or EventID=7000 or EventID=7001) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
+        {L"Security","Security",
+         L"*[System[(EventID=1102 or EventID=4616 or EventID=4719 or EventID=4697 or EventID=4698 or EventID=4702) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
+        {L"Windows PowerShell","Windows PowerShell",
+         L"*[System[(EventID=403) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
         {L"Microsoft-Windows-TaskScheduler/Operational","Task Scheduler",
          L"*[System[(EventID=106 or EventID=140 or EventID=141 or EventID=200 or EventID=201) and TimeCreated[timediff(@SystemTime) <= 604800000]]]"},
         {L"Microsoft-Windows-Windows Defender/Operational","Microsoft Defender",
@@ -16629,6 +16856,38 @@ static std::vector<Record> inspectBypassEvidenceIntegrity(){
             "INFO | Script block logging enabled by policy.");
     }else add("PowerShell logging policy",
         "INFO | No readable explicit script block logging policy; default behavior varies.");
+    // Read-only metadata check for a small fixed set of Windows event logs.
+    // A read-only attribute is only a review signal and is not proof of tampering.
+    wchar_t eventLogDir[MAX_PATH]={};
+    UINT eventLogDirLen=GetWindowsDirectoryW(eventLogDir,MAX_PATH);
+    if(eventLogDirLen>0 && eventLogDirLen<MAX_PATH){
+        const fs::path logs=fs::path(eventLogDir)/L"System32"/L"winevt"/L"Logs";
+        const wchar_t* monitoredLogs[]={
+            L"System.evtx",L"Security.evtx",L"Application.evtx",
+            L"Windows PowerShell.evtx",
+            L"Microsoft-Windows-PowerShell%4Operational.evtx",
+            L"Microsoft-Windows-Windows Defender%4Operational.evtx"
+        };
+        unsigned readOnlyLogs=0;
+        for(const wchar_t* name:monitoredLogs){
+            const DWORD attrs=GetFileAttributesW((logs/name).c_str());
+            if(attrs!=INVALID_FILE_ATTRIBUTES && (attrs&FILE_ATTRIBUTE_READONLY))
+                ++readOnlyLogs;
+        }
+        if(readOnlyLogs)
+            add("Event log file attributes",
+                "NEEDS REVIEW | One or more standard Windows event logs have the read-only attribute. This can be administrative or filesystem-related; verify locally.");
+        else
+            add("Event log file attributes",
+                "INFO | No read-only attribute found on the checked standard event logs, or the files were unavailable.");
+    }
+    HKEY miniNtKey=nullptr;
+    if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\MiniNt",0,KEY_QUERY_VALUE,&miniNtKey)==ERROR_SUCCESS){
+        add("Windows MiniNt registry key",
+            "NEEDS REVIEW | The MiniNt registry key exists. This is an unusual configuration signal, not proof of a bypass; check Windows installation context.");
+        RegCloseKey(miniNtKey);
+    }
     SC_HANDLE scm=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
     if(scm){
         for(const wchar_t* serviceName:{L"EventLog",L"WinDefend",L"wuauserv"}){
@@ -16983,6 +17242,77 @@ static std::vector<Record> inspectAuditAndPlatformEvidence(){
                     "INFO | System volume uses NTFS; some artifacts still require elevated access.":
                     "INFO | System volume is not reported as NTFS; NTFS-specific checks may not apply.");
             }
+        }
+    }
+    // Bounded, local-only review of recent Defender MPLog files. A FiveM
+    // taint phrase is historical context, not a verdict; raw log contents
+    // are never copied into the results or sent anywhere.
+    if(!cancelRequested){
+        wchar_t programData[32768]{};
+        const DWORD envSize=GetEnvironmentVariableW(
+            L"ProgramData",programData,(DWORD)std::size(programData));
+        if(envSize>0 && envSize<std::size(programData)){
+            const fs::path support=fs::path(programData)/
+                L"Microsoft"/L"Windows Defender"/L"Support";
+            std::error_code ec;
+            std::vector<std::pair<fs::file_time_type,fs::path>> candidates;
+            if(fs::is_directory(support,ec) && !ec){
+                fs::directory_iterator it(support,ec),end;
+                size_t entries=0;
+                while(!ec && it!=end && entries<256 && !cancelRequested){
+                    ++entries;
+                    const auto path=it->path();
+                    const auto name=path.filename().wstring();
+                    if(name.size()>=6 && name.compare(0,6,L"MPLog-")==0 &&
+                       path.extension()==L".log"){
+                        std::error_code sizeError,timeError;
+                        const auto size=fs::file_size(path,sizeError);
+                        if(!sizeError && size>0 && size<=4u*1024u*1024u){
+                            const auto modified=fs::last_write_time(path,timeError);
+                            if(!timeError)candidates.emplace_back(modified,path);
+                        }
+                    }
+                    it.increment(ec);
+                }
+            }
+            std::sort(candidates.begin(),candidates.end(),
+                [](const auto& a,const auto& b){return a.first>b.first;});
+            size_t filesRead=0,taintLines=0;
+            for(const auto& item:candidates){
+                if(cancelRequested || filesRead>=8)break;
+                std::ifstream input(item.second,std::ios::binary);
+                if(!input)continue;
+                std::string content((std::istreambuf_iterator<char>(input)),
+                                    std::istreambuf_iterator<char>());
+                ++filesRead;
+                std::transform(content.begin(),content.end(),content.begin(),
+                    [](unsigned char c){return (char)std::tolower(c);});
+                std::istringstream lines(content);
+                std::string line;
+                while(std::getline(lines,line) && taintLines<100){
+                    if(line.find("fivem_gtaprocess.exe")!=std::string::npos &&
+                       line.find("is tainted: tainttype:0x2")!=std::string::npos)
+                        ++taintLines;
+                }
+            }
+            if(filesRead){
+                if(taintLines)
+                    add("Defender MPLog FiveM taint review",
+                        "NEEDS REVIEW | A bounded read of up to 8 recent Defender MPLog files found "+
+                        std::to_string(taintLines)+
+                        " line(s) pairing a FiveM process name with a taint marker. "
+                        "This is historical Defender context, not proof of cheating; review the source log locally.");
+                else
+                    add("Defender MPLog FiveM taint review",
+                        "INFO | No matching FiveM taint line found in up to 8 readable recent Defender MPLog files. "
+                        "This does not establish that no other evidence exists.");
+            }else{
+                add("Defender MPLog FiveM taint review",
+                    "UNAVAILABLE | No recent bounded MPLog file could be read; access and log retention may limit coverage.");
+            }
+        }else{
+            add("Defender MPLog FiveM taint review",
+                "UNAVAILABLE | ProgramData location could not be resolved.");
         }
     }
     // Registry source presence is a coverage check, not a full parser.
@@ -38751,9 +39081,12 @@ static std::vector<Record> inspectBrowserExecutableIntegrity(
 // No browser profiles, personal documents, or whole-disk traversal.
 static std::vector<Record> inspectTrackedFileChanges() {
     namespace fs=std::filesystem;
-    struct State {uintmax_t size=0; long long modified=0; uint64_t digest=0; bool hashed=false;};
+    // Use a cryptographic fingerprint for executable/script baselines. The old
+    // 64-bit non-cryptographic digest was too collision-prone for integrity review.
+    struct State {uintmax_t size=0; long long modified=0; std::wstring digest; bool hashed=false;};
     std::vector<Record> findings;
     std::map<std::wstring,State> current,previous;
+    size_t eligibleFilesSeen=0,sha256FilesCompleted=0,legacyBaselineEntries=0;
     auto lower=[](std::wstring x){for(auto& c:x)c=(wchar_t)towlower(c);return x;};
     auto eligible=[&](const fs::path& f) {
         auto e=lower(f.extension().wstring());
@@ -38774,20 +39107,29 @@ static std::vector<Record> inspectTrackedFileChanges() {
     fs::path manifest = local[0]
         ? fs::path(local)/L"sync_file_baseline.tsv"
         : fs::temp_directory_path()/L"sync_file_baseline.tsv";
-    auto digestFile=[](const fs::path& f,uint64_t& hash)->bool {
-        std::ifstream in(f,std::ios::binary);
-        if(!in)return false;
-        hash=14695981039346656037ULL;
-        char buf[32768];
-        while(in && !cancelRequested.load()){
-            in.read(buf,sizeof(buf));
-            const auto count=in.gcount();
-            for(std::streamsize i=0;i<count;++i){
-                hash^=(unsigned char)buf[i];
-                hash*=1099511628211ULL;
-            }
-        }
-        return in.eof() && !cancelRequested.load();
+    auto digestFile=[](const fs::path& f,std::wstring& digest)->bool {
+        const std::wstring path=f.wstring();
+        WIN32_FILE_ATTRIBUTE_DATA before{},after{};
+        BY_HANDLE_FILE_INFORMATION identityBefore{},identityAfter{};
+        if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&before) ||
+           !syncFileIdentity(path,identityBefore))return false;
+        // Recompute instead of using the UI hash cache: this baseline must still
+        // notice a content change when size and timestamp were preserved.
+        const std::string hex=sha256Uncached(path,true);
+        if(cancelRequested.load() || hex.size()!=64 ||
+           !std::all_of(hex.begin(),hex.end(),[](unsigned char c){
+               return std::isxdigit(c)!=0;
+           }))return false;
+        if(!GetFileAttributesExW(path.c_str(),GetFileExInfoStandard,&after) ||
+           !syncFileIdentity(path,identityAfter) ||
+           before.nFileSizeHigh!=after.nFileSizeHigh ||
+           before.nFileSizeLow!=after.nFileSizeLow ||
+           CompareFileTime(&before.ftLastWriteTime,&after.ftLastWriteTime)!=0 ||
+           identityBefore.dwVolumeSerialNumber!=identityAfter.dwVolumeSerialNumber ||
+           identityBefore.nFileIndexHigh!=identityAfter.nFileIndexHigh ||
+           identityBefore.nFileIndexLow!=identityAfter.nFileIndexLow)return false;
+        digest.assign(hex.begin(),hex.end());
+        return true;
     };
     // Recursive scan; no arbitrary file-count or size cap. Excludes directory symlinks.
     bool completeSnapshot=true;
@@ -38797,15 +39139,21 @@ static std::vector<Record> inspectTrackedFileChanges() {
         if(!fs::is_directory(root,ec)){completeSnapshot=false;continue;}
         for(fs::recursive_directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;
             !ec&&it!=end&& !cancelRequested.load();it.increment(ec)){
-            if(!it->is_regular_file(ec)||!eligible(it->path()))continue;
+            const bool regular=it->is_regular_file(ec);
+            if(ec){completeSnapshot=false;ec.clear();continue;}
+            if(!regular||!eligible(it->path()))continue;
+            ++eligibleFilesSeen;
             auto path=it->path();
-            auto size=it->file_size(ec);if(ec)continue;
-            auto stamp=it->last_write_time(ec);if(ec)continue;
+            auto size=it->file_size(ec);
+            if(ec){completeSnapshot=false;ec.clear();continue;}
+            auto stamp=it->last_write_time(ec);
+            if(ec){completeSnapshot=false;ec.clear();continue;}
             State st;st.size=size;
             st.modified=std::chrono::duration_cast<std::chrono::seconds>(
                 stamp.time_since_epoch()).count();
             st.hashed=digestFile(path,st.digest);
             if(!st.hashed){completeSnapshot=false;continue;}
+            ++sha256FilesCompleted;
             current[lower(path.wstring())]=st;
         }
         if(ec||cancelRequested.load())completeSnapshot=false;
@@ -38813,9 +39161,18 @@ static std::vector<Record> inspectTrackedFileChanges() {
     {
         std::wifstream in(manifest);
         // Paths are quoted to preserve spaces and tabs in names.
-        std::wstring path;State st;int hashed;
-        while(in>>std::quoted(path)>>st.size>>st.modified>>st.digest>>hashed){
-            st.hashed=(hashed!=0);previous[path]=st;
+        std::wstring path,digest;State st;int hashed;
+        while(in>>std::quoted(path)>>st.size>>st.modified>>std::quoted(digest)>>hashed){
+            st.digest=std::move(digest);
+            // Older manifests used a 64-bit FNV value. Keep their size/time
+            // observations, but do not compare them as if they were SHA-256.
+            st.hashed=(hashed!=0 && st.digest.size()==64 &&
+                std::all_of(st.digest.begin(),st.digest.end(),[](wchar_t c){
+                    return (c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'f')||
+                           (c>=L'A'&&c<=L'F');
+                }));
+            if(hashed!=0&&!st.hashed)++legacyBaselineEntries;
+            previous[path]=st;
         }
     }
     if(!previous.empty()&&completeSnapshot&&!cancelRequested.load()){
@@ -38826,7 +39183,7 @@ static std::vector<Record> inspectTrackedFileChanges() {
             if(!previous.count(path))created.insert(path);
         // Indexed matching avoids O(deleted * created) comparisons on large scans.
         // Only a unique matching fingerprint is considered a possible rename.
-        using Fingerprint=std::pair<uintmax_t,uint64_t>;
+        using Fingerprint=std::pair<uintmax_t,std::wstring>;
         std::map<Fingerprint,std::vector<std::wstring>> createdByFingerprint;
         for(const auto& now:created){
             const auto& b=current.at(now);
@@ -38843,7 +39200,7 @@ static std::vector<Record> inspectTrackedFileChanges() {
             renamedOld.insert(old);
             findings.push_back({"File Change Review",utf8(old),
                 "SUSPECT - REVIEW ONLY | Possible rename/move to "+utf8(match)+
-                " | Matching size and fingerprint; not proof of cheating."});
+                " | Matching size and SHA-256 fingerprint; not proof of cheating."});
         }
         for(const auto& old:deleted){
             if(!renamedOld.count(old))
@@ -38871,7 +39228,7 @@ static std::vector<Record> inspectTrackedFileChanges() {
             }else if(a.hashed&&b.hashed&&a.digest!=b.digest){
                 findings.push_back({"File Change Review",utf8(path),
                     "SUSPECT - REVIEW ONLY | Content modified without size change. "
-                    "Fingerprint differs; not proof of cheating."});
+                    "SHA-256 fingerprint differs; not proof of cheating."});
             }else if(a.modified!=b.modified){
                 findings.push_back({"File Change Review",utf8(path),
                     "SUSPECT - REVIEW ONLY | Modification timestamp changed. "
@@ -38885,7 +39242,7 @@ static std::vector<Record> inspectTrackedFileChanges() {
         if(out){
             for(const auto& [path,st]:current)
                 out<<std::quoted(path)<<L' '<<st.size<<L' '<<st.modified<<L' '
-                   <<st.digest<<L' '<<(st.hashed?1:0)<<L'\n';
+                   <<std::quoted(st.digest)<<L' '<<(st.hashed?1:0)<<L'\n';
             out.flush();
             const bool saved=out.good();
             out.close();
@@ -38910,6 +39267,22 @@ static std::vector<Record> inspectTrackedFileChanges() {
             if(ec||!saved){std::error_code cleanup;fs::remove(tmp,cleanup);}
         }
     }
+    std::string coverage="INFO | Eligible executable/script files observed: "+
+        std::to_string(eligibleFilesSeen)+" | SHA-256 completed: "+
+        std::to_string(sha256FilesCompleted)+" | Previous baseline entries: "+
+        std::to_string(previous.size())+" | ";
+    if(cancelRequested.load())
+        coverage+="INCOMPLETE: scan was cancelled; no baseline was saved.";
+    else if(!completeSnapshot)
+        coverage+="INCOMPLETE: at least one path could not be read consistently; no baseline was saved.";
+    else if(previous.empty())
+        coverage+="FIRST BASELINE: this scan establishes a baseline and cannot report earlier file changes.";
+    else
+        coverage+="COMPLETE: comparisons use file size, timestamps, and SHA-256 where the previous baseline supports it.";
+    if(legacyBaselineEntries)
+        coverage+=" Legacy non-SHA-256 entries ignored for content comparison: "+
+            std::to_string(legacyBaselineEntries)+".";
+    findings.push_back({"File Integrity Coverage","Selected user folders",coverage});
     return findings;
 }
 static void scanWorker() {
@@ -39656,6 +40029,59 @@ static std::string jsonEscape(const std::string& value) {
     }
     return result+"\"";
 }
+static std::string makeAdminSummaryReport(){
+    std::vector<std::tuple<std::string,std::string,std::string>> findings;
+    size_t processTotal=0,fileTotal=0,recordTotal=0;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        processTotal=processes.size();
+        fileTotal=files.size();
+        recordTotal=records.size();
+        auto cleanLabel=[](std::string value,const std::string& fallback,size_t limit){
+            if(value.find("\\")!=std::string::npos||value.find('/')!=std::string::npos||
+               value.find(":\\")!=std::string::npos)return fallback;
+            std::string out;out.reserve(value.size());
+            for(unsigned char c:value){
+                if(c>=32&&c<127&&(std::isalnum(c)||c==' '||c=='_'||c=='-'||c=='.'))out.push_back((char)c);
+                else if(c>=128)out.push_back(' ');
+            }
+            while(!out.empty()&&out.front()==' ')out.erase(out.begin());
+            while(!out.empty()&&out.back()==' ')out.pop_back();
+            if(out.empty())out=fallback;
+            if(out.size()>limit)out.resize(limit);
+            return out;
+        };
+        for(const auto& item:records){
+            if(findings.size()>=100)break;
+            std::string detail=item.detail;
+            std::transform(detail.begin(),detail.end(),detail.begin(),[](unsigned char c){return (char)std::toupper(c);});
+            std::string severity;
+            if(detail.find("DETECTED")!=std::string::npos||detail.find("CONFIRMED")!=std::string::npos)severity="detected";
+            else if(detail.find("SUSPECT")!=std::string::npos||detail.find("SUSPICIOUS")!=std::string::npos||
+                    detail.find("NEEDS REVIEW")!=std::string::npos||detail.find("WARNING")!=std::string::npos)severity="suspicious";
+            else continue;
+            const std::string category=cleanLabel(item.category,"Scanner evidence",64);
+            const std::string rule=cleanLabel(item.name,category+" review",120);
+            findings.emplace_back(category,rule,severity);
+        }
+    }
+    const bool hasDetected=std::any_of(findings.begin(),findings.end(),[](const auto& f){return std::get<2>(f)=="detected";});
+    const bool hasSuspicious=!findings.empty();
+    const std::string verdict=hasDetected?"detected":hasSuspicious?"suspicious":"clean";
+    std::string out="{\"verdict\":"+jsonEscape(verdict)+
+        ",\"summary\":"+jsonEscape("Relatorio resumido; caminhos, detalhes brutos e historico pessoal foram omitidos.")+
+        ",\"counts\":{\"processes\":"+std::to_string(processTotal)+
+        ",\"files\":"+std::to_string(fileTotal)+
+        ",\"rules\":"+std::to_string(recordTotal)+
+        ",\"findings\":"+std::to_string(findings.size())+"},\"findings\":[";
+    for(size_t i=0;i<findings.size();++i){
+        if(i)out+=",";
+        out+="{\"category\":"+jsonEscape(std::get<0>(findings[i]))+
+            ",\"rule\":"+jsonEscape(std::get<1>(findings[i]))+
+            ",\"severity\":"+jsonEscape(std::get<2>(findings[i]))+"}";
+    }
+    return out+"]}";
+}
 static void exportHtml() {
     std::lock_guard<std::mutex> lock(dataMutex);
     std::ofstream out("SyncPCChecker_Report.html",std::ios::binary);
@@ -39984,24 +40410,35 @@ static void applyTheme() {
 static void sectionTitle(const char* title,const char* description=nullptr) {
     ImGui::PushID(title);
     ImGui::Dummy(ImVec2(0,6.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.107f,.143f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.20f,.35f,.44f,.75f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.080f,.030f,.045f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.42f,.075f,.145f,.82f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(22.f,17.f));
-    ImGui::BeginChild("##obsidian_section",ImVec2(0,description?86.f:66.f),
+    const float availableWidth=ImGui::GetContentRegionAvail().x;
+    const float wrapWidth=(std::max)(180.f,availableWidth-44.f);
+    const float descriptionHeight=description && description[0]
+        ? ImGui::CalcTextSize(description,nullptr,false,wrapWidth).y : 0.f;
+    const float titleHeight=ImGui::GetTextLineHeight()*1.2f;
+    const float cardHeight=description && description[0]
+        ? (std::max)(86.f,(std::min)(132.f,titleHeight+descriptionHeight+40.f))
+        : 66.f;
+    ImGui::BeginChild("##obsidian_section",ImVec2(0,cardHeight),
                       ImGuiChildFlags_Borders|ImGuiChildFlags_AlwaysUseWindowPadding);
     const ImVec2 pos=ImGui::GetWindowPos(), size=ImGui::GetWindowSize();
     ImDrawList* dl=ImGui::GetWindowDrawList();
     dl->AddRectFilled(ImVec2(pos.x,pos.y+12.f),
                       ImVec2(pos.x+4.f,pos.y+size.y-12.f),
-                      IM_COL32(87,194,226,230),2.f);
+                      IM_COL32(228,45,79,235),2.f);
     dl->AddLine(ImVec2(pos.x+20.f,pos.y+size.y-1.f),
                 ImVec2(pos.x+size.x-20.f,pos.y+size.y-1.f),
-                IM_COL32(63,116,143,80),1.f);
+                IM_COL32(166,42,68,105),1.f);
     ImGui::SetWindowFontScale(1.19f);
-    ImGui::TextColored(ImVec4(.95f,.98f,1.f,1.f),"%s",title);
+    ImGui::TextColored(ImVec4(.98f,.91f,.93f,1.f),"%s",title);
     ImGui::SetWindowFontScale(1.f);
-    if(description && description[0])
-        ImGui::TextColored(ImVec4(.62f,.75f,.83f,1.f),"%s",description);
+    if(description && description[0]){
+        ImGui::PushStyleColor(ImGuiCol_Text,ImVec4(.74f,.59f,.64f,1.f));
+        ImGui::TextWrapped("%s",description);
+        ImGui::PopStyleColor();
+    }
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
@@ -41412,6 +41849,50 @@ static double entropy(const std::vector<unsigned char>& b,size_t off,size_t n){
     for(auto f:freq)if(f){double p=(double)f/n;h-=p*std::log2(p);}
     return h;
 }
+struct BuiltInGameAssetHash {
+    const char* ruleId;const char* category;const char* severity;int score;
+    const char* pathRegex;const char* sha256;
+};
+struct RemoteDetectionRule {
+    std::string id,name,category,filename,sha256,severity;
+};
+static std::vector<RemoteDetectionRule> siteDetectionRules;
+static std::mutex siteDetectionRulesMutex;
+static unsigned long long siteDetectionRulesVersion=0;
+static const BuiltInGameAssetHash builtInGameAssetHashes[]={
+    {"gtav_known_italo22_rage_targeting","aimbot","severe",100,"(^|/)playertargetting\\.ymt$","a21eaa9f08ed90cae4fa1fe2f39d9ae6eca276d4453918a46b991690ced93914"},
+    {"gtav_known_italo22_silent_targeting","aimbot","severe",100,"(^|/)playertargetting\\.ymt$","c9c8bba235e3181ea85bacd04c293ae862b63e30fbfbe9e0be0dc543dd83cdf4"},
+    {"gtav_known_fast_run_motiontasks","fast-run","warning",25,"(^|/)motiontasks\\.ymt$","191bae139a7e211c821acfb74945619e6819af4456b27cadcff8b275696642f3"},
+    {"gtav_known_fast_run_motiontasks","fast-run","warning",25,"(^|/)motiontasks\\.ymt$","c298c9a3b7d87cad316838c2552108fc2e286e14f7dfb55a097324f32e1915f1"},
+    {"gtav_known_fast_run_motiontasks","fast-run","warning",25,"(^|/)motiontasks\\.ymt$","b5934cc320b8613567c4db241d25c426589e735e686f83d32172dc8b2a7350a7"},
+    {"gtav_known_better_movement_motiontasks","fast-run","warning",25,"(^|/)motiontasks\\.ymt$","261a968c0bd5a665c7660f04913a8d532a97e22caf7a12da717accc3ca73cce1"},
+    {"gtav_remove_roll_animation_known","movement-override","suspicious",70,"(^|/)move_strafe@roll\\.ycd$","aeb46c0e264231a758506003a562c9787e734b9f72b9db7b1ed786831d1c2aaa"},
+    {"gtav_known_hitbox_fragment_variants","hitbox-modification","severe",100,"(^|/)z_z_(alien|fred|fred_large|wilma|wilma_large)\\.yft$","fadc4db6d21d0beb7775a33abd0202f24ea2f2b0ac7f1d663c236daa66986de4"},
+    {"gtav_known_hitbox_fragment_variants","hitbox-modification","severe",100,"(^|/)z_z_(alien|fred|fred_large|wilma|wilma_large)\\.yft$","8726de3c6f01f2de76cc4deb3ad1549c89fca35bbcd04b415e6eed44982984d3"},
+    {"gtav_known_hitbox_fragment_variants","hitbox-modification","severe",100,"(^|/)z_z_(alien|fred|fred_large|wilma|wilma_large)\\.yft$","28c2e7404ed86a05bc62c4d7c6d71834aac8b01cf91bebe8855f8a3bec4b9501"},
+    {"gtav_known_increased_range_weapons","weapon-range","warning",40,"(^|/)weapons\\.meta$","b0bf9aad2b0347ec2ccd733be3481d0c3fdc26c3a7b7f3e10f03563e214eacc2"},
+    {"gtav_removed_steps_blank_fragments","collision-removal","suspicious",70,"(^|/)sc1_33_apt0[12]\\.ydr$","bc8fc7f3a420c46016c33e126fe565006c3b1b689e85b450ef38ee792357c647"},
+    {"gtav_removed_rock_fragment_variants","collision-visual-removal","suspicious",80,"(^|/)cs4_14_rock_.*\\.ydr$","bc8fc7f3a420c46016c33e126fe565006c3b1b689e85b450ef38ee792357c647"},
+    {"gtav_removed_rock_fragment_variants","collision-visual-removal","suspicious",80,"(^|/)cs4_14_rock_.*\\.ydr$","178f75ea60e667c9652123150178c9976273b1afe13b82cb3118391893ad6292"},
+    {"gtav_removed_rock_fragment_variants","collision-visual-removal","suspicious",80,"(^|/)cs4_14_rock_.*\\.ydr$","8e1ede3da67e8d30c0c2f2e28160a24990a2173bd06daad2ca5c2c9c4b726f3c"},
+    {"gtav_known_fast_roll_candidate","fast-roll-candidate","warning",25,"(^|/)move_strafe@roll\\.ycd$","b80410f018e7001cb14647be13c63fe5e0720e8b2443c898b7fd8ab08388e85d"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","074ad7650f9c0778582fd3c45a94c948f34067d07f9109da812fc8218a0bcbf3"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","b4a88b91f373e53d3bb19fa89779b1adf5d27f63b068d37a1ff877990b60011b"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","343d9f388388f1fef91d1ba80f9d82a96df2baee38abdcbc0cb304365bd29dd7"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","c5756fd9784ebd644391865bc85aed2a23f7c3a09fd6fd61ec2b3a208460cd54"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","1fa7c4355f30182cc759bb9a4034348cda07ee563d8c6f5a17ae7f677c106cad"},
+    {"gtav_known_hidden_weapon_attachment_assets","weapon-attachment-hiding","warning",25,"(^|/)(w_at_afgrip_2(_hi)?|w_at_ar_afgrip(_hi)?|w_at_ar_flsh(_2)?(_hi)?|w_at_scope_medium(_2)?(_hi)?)\\.(ydr|ytd)$","c113998f58a61df11dc9d78f0fe0d50f915f37c47454906ebbeda54ebb542a6f"},
+};
+static std::string normalizedAssetPath(const std::wstring& path){
+    std::string value=utf8(path);
+    std::replace(value.begin(),value.end(),'\\','/');
+    std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return (char)std::tolower(c);});
+    return value;
+}
+static bool matchesAssetPath(const char* expression,const std::string& path){
+    try{return std::regex_search(path,std::regex(expression,std::regex_constants::icase));}
+    catch(const std::regex_error&){return false;}
+}
 static bool validSha256(const std::string& h){
     return h.size()==64 && std::all_of(h.begin(),h.end(),[](unsigned char c){
         return std::isxdigit(c)!=0;
@@ -41455,6 +41936,39 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
             "Large file: PE data and strings are analyzed from the first "
             "256 MiB; SHA-256 covers the full file.");
     r.sha256=sha256(path);
+    const std::string assetPath=normalizedAssetPath(path);
+    bool assetScopeChecked=false,corpusAssetMatch=false;
+    for(const auto& indicator:builtInGameAssetHashes){
+        if(!matchesAssetPath(indicator.pathRegex,assetPath))continue;
+        assetScopeChecked=true;
+        if(validSha256(r.sha256) && r.sha256==indicator.sha256){
+            corpusAssetMatch=true;
+            r.notes.push_back("NEEDS REVIEW | Supplied game-asset SHA-256 rule matched: "+
+                std::string(indicator.ruleId)+" ("+indicator.category+", "+
+                indicator.severity+", score "+std::to_string(indicator.score)+"). "+
+                "Compare with an approved baseline for the same game build; a corpus match alone is not a final verdict.");
+        }
+    }
+    const size_t assetSlash=assetPath.find_last_of('/');
+    const std::string assetFilename=assetSlash==std::string::npos?assetPath:assetPath.substr(assetSlash+1);
+    std::vector<RemoteDetectionRule> siteRulesSnapshot;
+    {std::lock_guard<std::mutex> lock(siteDetectionRulesMutex);siteRulesSnapshot=siteDetectionRules;}
+    for(const auto& rule:siteRulesSnapshot){
+        std::string ruleFilename=rule.filename;
+        std::transform(ruleFilename.begin(),ruleFilename.end(),ruleFilename.begin(),
+            [](unsigned char c){return (char)std::tolower(c);});
+        if(assetFilename!=ruleFilename)continue;
+        assetScopeChecked=true;
+        if(validSha256(r.sha256)&&r.sha256==rule.sha256){
+            corpusAssetMatch=true;
+            r.notes.push_back("NEEDS REVIEW | Site-managed exact-hash rule matched: "+
+                rule.id+" ("+rule.category+", "+rule.severity+"). Compare with an approved baseline for the same build.");
+        }
+    }
+    if(assetScopeChecked)
+        r.notes.push_back("INFO | This selected game-asset filename was checked against "+
+            std::to_string(sizeof(builtInGameAssetHashes)/sizeof(builtInGameAssetHashes[0]))+
+            " scoped exact-hash indicators from the supplied rules. Missing matches do not prove the file is clean.");
     if(!baselinePath.empty() && r.baselineVerdict.empty()){
         r.baselineSha256=sha256(baselinePath);
         if(!validSha256(r.sha256)||!validSha256(r.baselineSha256))
@@ -41832,7 +42346,7 @@ static Report analyze(const std::wstring& path,const std::wstring& baselinePath)
     // No automatic "Detected" is issued without a verified high-confidence rule.
     if(r.coverage.find("Partial")!=std::string::npos)r.inspectionIncomplete=true;
     if(!validSha256(r.sha256))r.inspectionIncomplete=true;
-    if(r.structuralIssues>0 || r.reviewIndicators>=2 || r.inspectionIncomplete)
+    if(corpusAssetMatch || r.structuralIssues>0 || r.reviewIndicators>=2 || r.inspectionIncomplete)
         r.verdict="Suspect";
     else
         r.verdict="Clean"; // Limited to checks completed, not a safety guarantee.
@@ -41846,7 +42360,7 @@ static void select(){
     ofn.hwndOwner=hwnd;
     ofn.lpstrFile=path;
     ofn.nMaxFile=32768;
-    ofn.lpstrFilter=L"Executables and libraries\0*.exe;*.dll;*.sys;*.ocx\0All files\0*.*\0";
+    ofn.lpstrFilter=L"Game asset files\0*.ymt;*.meta;*.yft;*.ydr;*.ycd;*.ytd;*.dat;*.xml\0Executables and libraries\0*.exe;*.dll;*.sys;*.ocx\0All files\0*.*\0";
     ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
     if(GetOpenFileNameW(&ofn)){
         strncpy_s(selected,sizeof(selected),utf8(path).c_str(),_TRUNCATE);
@@ -43200,44 +43714,34 @@ static void drawStreamproofReview(){
 }
 
 
-// V79: opt-in server-authorized PIN gate. Set SYNC_PIN_SERVER to your
-// HTTPS portal URL. The request token is never displayed to the operator.
-
-// V81: Offline, administrator-signed access. No PIN server, website, or
-// shared secret embedded in the executable. The administrator's private
-// signing key must NEVER be distributed with the scanner.
-
-// V82 LAN live control. Start sync_admin.py on admin computer.
-// This is a LAN prototype, NOT an Internet-safe licensing service.
+// V83: visible, consent-based online authorization. A fresh one-time PIN is
+// issued per run; the scanner stays on this screen until the site approves it.
 namespace syncLive {
     static std::string deviceId(){
-        wchar_t guid[256]{};
-        DWORD bytes=sizeof(guid);
-        if(RegGetValueW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Cryptography",
-            L"MachineGuid",RRF_RT_REG_SZ,nullptr,guid,&bytes)!=ERROR_SUCCESS)
-            return {};
-        BCRYPT_ALG_HANDLE alg=nullptr;
-        BCRYPT_HASH_HANDLE hash=nullptr;
-        UCHAR digest[32]{};
-        std::string result;
-        if(BCryptOpenAlgorithmProvider(&alg,BCRYPT_SHA256_ALGORITHM,nullptr,0)>=0){
-            if(BCryptCreateHash(alg,&hash,nullptr,0,nullptr,0,0)>=0){
-                const std::wstring material=std::wstring(L"SYNC-PC-V81|")+guid;
-                if(BCryptHashData(hash,(PUCHAR)material.data(),
-                    (ULONG)(material.size()*sizeof(wchar_t)),0)>=0 &&
-                    BCryptFinishHash(hash,digest,sizeof(digest),0)>=0){
-                    const char* hex="0123456789abcdef";
-                    for(const auto value:digest){
-                        result.push_back(hex[value>>4]);
-                        result.push_back(hex[value&15]);
-                    }
-                }
-                BCryptDestroyHash(hash);
-            }
-            BCryptCloseAlgorithmProvider(alg,0);
+        static std::string cached;
+        if(!cached.empty())return cached;
+        wchar_t appdata[MAX_PATH]{};
+        DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",appdata,MAX_PATH);
+        if(n==0||n>=MAX_PATH)return {};
+        const std::wstring dir=std::wstring(appdata)+L"\\SYNC_PC_CHECKER";
+        CreateDirectoryW(dir.c_str(),nullptr);
+        const std::wstring path=dir+L"\\device_id.txt";
+        {
+            std::ifstream in(std::filesystem::path(path),std::ios::binary);
+            std::string value;
+            if(in>>value && value.size()==64 && std::all_of(value.begin(),value.end(),[](char c){
+                return (c>='0'&&c<='9')||(c>='a'&&c<='f');
+            })){cached=value;return cached;}
         }
-        SecureZeroMemory(guid,sizeof(guid));
-        return result;
+        UCHAR random[32]{};
+        if(BCryptGenRandom(nullptr,random,sizeof(random),BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0)return {};
+        const char* hex="0123456789abcdef";
+        for(UCHAR c:random){cached.push_back(hex[c>>4]);cached.push_back(hex[c&15]);}
+        SecureZeroMemory(random,sizeof(random));
+        std::ofstream out(std::filesystem::path(path),std::ios::binary|std::ios::trunc);
+        if(!out){cached.clear();return {};}
+        out<<cached;
+        return cached;
     }
 
     // Local-only pairing: no environment variable required.
@@ -43271,8 +43775,16 @@ namespace syncLive {
         out<<cached;
         return cached;
     }
-    static std::string status="pending",message;
-    static bool send(const std::string& route,const std::string& report=""){
+    static std::string status="not_requested",message,sessionId,pin;
+    static std::string remoteTheme="hellsing-red",remoteBanner;
+    static bool rulesLoaded=false;
+    static ImVec4 paletteAccent(){
+        if(remoteTheme=="midnight-blue")return ImVec4(.25f,.56f,.96f,1.f);
+        if(remoteTheme=="void-violet")return ImVec4(.69f,.42f,.93f,1.f);
+        if(remoteTheme=="emerald")return ImVec4(.18f,.72f,.52f,1.f);
+        return ImVec4(.88f,.20f,.32f,1.f);
+    }
+    static bool send(const std::string& route,const std::string& reportJson=""){
         // Configure once in your build; users do not configure anything.
         // Replace this with your published Netlify HTTPS URL.
         const std::string base="https://bucolic-rolypoly-f4eb1b.netlify.app";
@@ -43281,15 +43793,14 @@ namespace syncLive {
         const std::string token=clientToken();
         if(id.empty()||token.empty()){message="Device credentials unavailable.";return false;}
         std::string body="{\"device\":\""+id+"\",\"token\":\""+token+"\"";
+        if(route=="/request")body+=",\"consent\":true";
+        if(route=="/status"||route=="/report"||route=="/scanner-rules"){
+            if(sessionId.empty()){message="No active authorization session.";return false;}
+            body+=",\"sessionId\":\""+sessionId+"\"";
+        }
         if(route=="/report"){
-            std::string escaped;
-            for(unsigned char c:report){
-                if(c=='"'||c=='\\'){escaped.push_back('\\');escaped.push_back((char)c);}
-                else if(c=='\n')escaped+="\\n";
-                else if(c=='\r')escaped+="\\r";
-                else if(c>=32)escaped.push_back((char)c);
-            }
-            body+=",\"consent\":true,\"report\":\""+escaped+"\"";
+            if(reportJson.empty()){message="No report summary is available.";return false;}
+            body+=",\"consent\":true,\"report\":"+reportJson;
         }
         body+="}";
         std::wstring wurl(base.begin(),base.end());
@@ -43301,7 +43812,7 @@ namespace syncLive {
         wurl+=L"/api";
         wurl+=target;
         if(!WinHttpCrackUrl(wurl.c_str(),0,0,&url))return false;
-        HINTERNET session=WinHttpOpen(L"SYNC PC Checker/82",
+        HINTERNET session=WinHttpOpen(L"SYNC PC Checker/83",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
             WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
         if(!session)return false;
@@ -43311,6 +43822,7 @@ namespace syncLive {
             nullptr,WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,
             url.nScheme==INTERNET_SCHEME_HTTPS?WINHTTP_FLAG_SECURE:0):nullptr;
         bool ok=false;
+        std::string reply;
         if(request){
             const wchar_t* headers=L"Content-Type: application/json\r\n";
             if(WinHttpSendRequest(request,headers,(DWORD)-1L,
@@ -43320,14 +43832,44 @@ namespace syncLive {
                 if(WinHttpQueryHeaders(request,WINHTTP_QUERY_STATUS_CODE|
                     WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,
                     &code,&size,WINHTTP_NO_HEADER_INDEX)&&code==200){
-                    char buf[1024]{};
+                    char buf[4096]{};
                     DWORD got=0;
-                    if(WinHttpReadData(request,buf,1023,&got)&&got){
-                        std::string reply(buf,got);
-                        if(reply.find("\"unlocked\"")!=std::string::npos)status="unlocked";
-                        else if(reply.find("\"locked\"")!=std::string::npos)status="locked";
-                        else status="pending";
-                        ok=true;
+                    do{
+                        got=0;
+                        if(!WinHttpReadData(request,buf,sizeof(buf)-1,&got)||!got)break;
+                        if(reply.size()+got>256*1024){reply.clear();break;}
+                        reply.append(buf,got);
+                    }while(got>0);
+                    if(!reply.empty()){
+                        std::smatch match;
+                        if(route=="/request"){
+                            if(std::regex_search(reply,match,std::regex(R"rx("sessionId"\s*:\s*"([a-f0-9]{32})")rx")))sessionId=match[1].str();
+                            if(std::regex_search(reply,match,std::regex(R"rx("pin"\s*:\s*"([0-9]{6})")rx")))pin=match[1].str();
+                            if(!sessionId.empty()&&!pin.empty()){status="pending";rulesLoaded=false;{std::lock_guard<std::mutex> lock(siteDetectionRulesMutex);siteDetectionRules.clear();}ok=true;}
+                        }else if(route=="/status"){
+                            std::string sessionState;
+                            if(std::regex_search(reply,match,std::regex(R"rx("status"\s*:\s*"([a-z]+)")rx")))sessionState=match[1].str();
+                            if(sessionState=="approved"||sessionState=="complete")status="unlocked";
+                            else if(sessionState=="denied"||sessionState=="expired")status="locked";
+                            else status="pending";
+                            if(std::regex_search(reply,match,std::regex(R"rx("theme"\s*:\s*"(hellsing-red|midnight-blue|void-violet|emerald)")rx")))remoteTheme=match[1].str();
+                            if(std::regex_search(reply,match,std::regex(R"rx("banner"\s*:\s*"([A-Za-z0-9 .,!?_-]{0,100})")rx")))remoteBanner=match[1].str();
+                            ok=true;
+                        }else if(route=="/scanner-rules"){
+                            std::vector<RemoteDetectionRule> loaded;
+                            const std::regex rulePattern(R"rx(\{\s*"id"\s*:\s*"([a-f0-9]{16})"\s*,\s*"name"\s*:\s*"([A-Za-z0-9 _.-]{1,80})"\s*,\s*"category"\s*:\s*"([A-Za-z0-9 _.-]{1,48})"\s*,\s*"filename"\s*:\s*"([A-Za-z0-9][A-Za-z0-9._-]{0,79})"\s*,\s*"sha256"\s*:\s*"([a-f0-9]{64})"\s*,\s*"severity"\s*:\s*"(suspicious|detected)"\s*\})rx");
+                            for(std::sregex_iterator it(reply.begin(),reply.end(),rulePattern),end;it!=end;++it){
+                                RemoteDetectionRule rule;rule.id=(*it)[1].str();rule.name=(*it)[2].str();
+                                rule.category=(*it)[3].str();rule.filename=(*it)[4].str();
+                                rule.sha256=(*it)[5].str();rule.severity=(*it)[6].str();
+                                loaded.push_back(std::move(rule));
+                            }
+                            std::regex_search(reply,match,std::regex(R"rx("version"\s*:\s*([0-9]+))rx"));
+                            siteDetectionRulesVersion=match.empty()?0ULL:std::strtoull(match[1].str().c_str(),nullptr,10);
+                            {std::lock_guard<std::mutex> lock(siteDetectionRulesMutex);siteDetectionRules=std::move(loaded);}rulesLoaded=true;ok=true;
+                        }else if(route=="/report"){
+                            status="unlocked";ok=true;
+                        }
                     }
                 }
             }
@@ -43335,10 +43877,19 @@ namespace syncLive {
         if(request)WinHttpCloseHandle(request);
         if(connection)WinHttpCloseHandle(connection);
         WinHttpCloseHandle(session);
-        message=ok?"":"Admin service unavailable. Check network settings.";
+        if(ok){
+            if(route=="/request")message="Enter the six-digit PIN in the admin panel.";
+            else if(route=="/status"&&status=="pending")message="Waiting for administrator approval.";
+            else if(route=="/status"&&status=="unlocked")message="This scan session was approved.";
+            else if(route=="/status"&&status=="locked")message="This scan session was denied or expired.";
+            else if(route=="/report")message="Report summary sent with your confirmation.";
+            else message.clear();
+        }else message="Could not reach the authorization service. Check the network and try again.";
         return ok;
     }
     static void render(){
+        static bool consentToAccess=false;
+        const ImVec4 accent=paletteAccent();
         ImGuiViewport* vp=ImGui::GetMainViewport();
         const ImVec2 pos=vp->WorkPos, size=vp->WorkSize;
         ImGui::SetNextWindowPos(pos);ImGui::SetNextWindowSize(size);
@@ -43360,26 +43911,43 @@ namespace syncLive {
                 IM_COL32(9,4,9,130),IM_COL32(9,4,9,230));
         }
         const float w=(std::min)(520.f,(std::max)(280.f,size.x-36.f));
-        const float h=292.f;
+        const float h=392.f;
         ImGui::SetCursorScreenPos(ImVec2(pos.x+(size.x-w)*.5f,pos.y+(size.y-h)*.5f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.075f,.032f,.051f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.44f,.085f,.16f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(accent.x*.56f,accent.y*.56f,accent.z*.56f,1.f));
         ImGui::BeginChild("##authorizationCard",ImVec2(w,h),ImGuiChildFlags_Borders|
             ImGuiChildFlags_AlwaysUseWindowPadding);
-        ImGui::TextColored(ImVec4(.85f,.20f,.31f,1.f),"SYNC / ACCESS");
+        ImGui::TextColored(accent,"SYNC / ACCESS");
         ImGui::Separator();ImGui::Spacing();
         ImGui::SetWindowFontScale(1.4f);
         ImGui::TextUnformatted("SECURE ACCESS");
         ImGui::SetWindowFontScale(1.f);
-        ImGui::TextDisabled("Checking administrator approval for this device.");
+        ImGui::TextDisabled("Each scan requires a new administrator PIN.");
         ImGui::Spacing();ImGui::Spacing();
-        ImGui::TextColored(ImVec4(.88f,.28f,.38f,1.f),"STATUS");
+        ImGui::TextColored(accent,"STATUS");
         ImGui::SameLine();ImGui::TextUnformatted(status.c_str());
         if(!message.empty())ImGui::TextWrapped("%s",message.c_str());
         ImGui::Spacing();
-        if(ImGui::Button("CHECK APPROVAL",ImVec2(-1.f,44.f)))send("/hello");
+        if(status=="pending"&&!pin.empty()){
+            ImGui::TextDisabled("ONE-TIME PIN");
+            ImGui::SetWindowFontScale(1.8f);
+            ImGui::TextColored(accent,"%s",pin.c_str());
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::TextDisabled("Enter this code in the SYNC admin panel. It expires in five minutes.");
+        }else if(status=="not_requested"||status=="locked"){
+            ImGui::TextWrapped("The scanner does not start until you request access and an administrator approves this session.");
+            ImGui::Checkbox("I agree to send session status and an optional summary report",&consentToAccess);
+            if(!consentToAccess)ImGui::BeginDisabled();
+            if(ImGui::Button("REQUEST SCAN APPROVAL",ImVec2(-1.f,44.f))){
+                if(consentToAccess){sessionId.clear();pin.clear();send("/request");consentToAccess=false;}
+            }
+            if(!consentToAccess)ImGui::EndDisabled();
+        }else{
+            ImGui::TextWrapped("Waiting for the administrator. This session remains visible and does not begin scanning until approved.");
+            if(ImGui::Button("CHECK APPROVAL",ImVec2(-1.f,40.f)))send("/status");
+        }
         ImGui::Spacing();
-        ImGui::TextDisabled("Access is validated by the administrator service.");
+        ImGui::TextDisabled("Only a random installation ID is used. No machine GUID is uploaded.");
         ImGui::EndChild();ImGui::PopStyleColor(2);
         ImGui::End();ImGui::PopStyleColor();
     }
@@ -43454,12 +44022,21 @@ static void drawProposedDetectionCoverage() {
 
 static void renderUI() {
     static double liveLastCheck=-10.0;
-    // Require genuine administrator authorization BEFORE showing the sigil intro.
-    // No local authorization fallback: only the server can unlock the scanner.
-    if(syncLive::status!="unlocked" && ImGui::GetTime()-liveLastCheck>=5.0){
+    static double rulesLastCheck=-10.0;
+    // Request a fresh server-side status during this visible, user-approved session.
+    // No device check-in or report is sent before the operator requests access.
+    if(!syncLive::sessionId.empty() && syncLive::status!="locked" &&
+       syncLive::status!="complete" && ImGui::GetTime()-liveLastCheck>=15.0){
         liveLastCheck=ImGui::GetTime();
-        syncLive::send("/hello");
+        syncLive::send("/status");
     }
+    if(syncLive::status=="locked"&&scanning.load())cancelRequested=true;
+    if(syncLive::status=="unlocked"&&!syncLive::rulesLoaded&&
+       !syncLive::sessionId.empty()&&ImGui::GetTime()-rulesLastCheck>=10.0){
+        rulesLastCheck=ImGui::GetTime();
+        syncLive::send("/scanner-rules");
+    }
+    // Require administrator authorization before the scanner starts.
     if(syncLive::status!="unlocked"){syncLive::render();return;}
     // The one-time Hellsing-inspired opening is visible only after approval.
     if(syncIntroOpen){renderSyncOpening();return;}
@@ -43468,7 +44045,7 @@ static void renderUI() {
     static bool reportSent=false;
     static std::string reportStatus="Not sent";
     static bool lastDone=false;
-    const bool scanComplete=done.load();
+    const bool scanComplete=inspectionResultsReady();
     if(!scanComplete && lastDone){
         reportSent=false;
         shareScanWithAdmin=false;
@@ -43481,24 +44058,12 @@ static void renderUI() {
     if(!shareScanWithAdmin)sendReportRequested=false;
     if(scanComplete && shareScanWithAdmin && sendReportRequested && !reportSent){
         sendReportRequested=false;
-        std::string report="SYNC PC CHECKER - scan evidence\n";
-        {
-            std::lock_guard<std::mutex> lock(dataMutex);
-            report+="Records: "+std::to_string(records.size())+"\n";
-            for(const auto& r:records){
-                const std::string line=r.category+" | "+r.name+" | "+r.detail+"\n";
-                if(report.size()+line.size()>36000){
-                    report+="[TRUNCATED: too many records for one report]\n";
-                    break;
-                }
-                report+=line;
-            }
-        }
+        const std::string report=makeAdminSummaryReport();
         if(syncLive::send("/report",report)){
             reportSent=true;
-            reportStatus="Report sent";
+            reportStatus="Summary sent";
         }else{
-            reportStatus="Report not sent";
+            reportStatus="Summary not sent";
         }
     }
     if(defenderNotificationPending.exchange(false))
@@ -43521,6 +44086,17 @@ static void renderUI() {
     ImGuiViewport* vp=ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
+    const ImVec4 remoteAccent=syncLive::paletteAccent();
+    ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(remoteAccent.x*.48f,remoteAccent.y*.48f,remoteAccent.z*.48f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(remoteAccent.x*.72f,remoteAccent.y*.72f,remoteAccent.z*.72f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,remoteAccent);
+    ImGui::PushStyleColor(ImGuiCol_Header,ImVec4(remoteAccent.x*.38f,remoteAccent.y*.38f,remoteAccent.z*.38f,.75f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered,ImVec4(remoteAccent.x*.58f,remoteAccent.y*.58f,remoteAccent.z*.58f,.85f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,ImVec4(remoteAccent.x*.68f,remoteAccent.y*.68f,remoteAccent.z*.68f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark,remoteAccent);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab,ImVec4(remoteAccent.x*.8f,remoteAccent.y*.8f,remoteAccent.z*.8f,1.f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive,remoteAccent);
+    ImGui::PushStyleColor(ImGuiCol_Separator,ImVec4(remoteAccent.x*.65f,remoteAccent.y*.65f,remoteAccent.z*.65f,.8f));
     ImGui::Begin("##application",nullptr,ImGuiWindowFlags_NoDecoration|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoSavedSettings|
         ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
@@ -43583,7 +44159,7 @@ static void renderUI() {
     const ImVec2 wordmarkLeft=ImGui::GetItemRectMin();
     const ImVec2 wordmarkRight=ImGui::GetItemRectMax();
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextColored(subtleInk,"SYSTEM INSPECTION");
+    ImGui::TextColored(subtleInk,syncLive::remoteBanner.empty()?"SYSTEM INSPECTION":syncLive::remoteBanner.c_str());
     ImGui::EndGroup();
     {
         ImDrawList* brandDraw=ImGui::GetWindowDrawList();
@@ -43664,6 +44240,25 @@ static void renderUI() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    if(scanComplete){
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,ImVec4(.10f,.045f,.062f,1.f));
+        ImGui::PushStyleColor(ImGuiCol_Border,ImVec4(.34f,.10f,.16f,1.f));
+        if(ImGui::BeginChild("##adminSummaryConsent",ImVec2(0,74),ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse)){
+            ImGui::TextColored(ImVec4(.95f,.70f,.73f,1.f),"OPTIONAL ADMIN SUMMARY");
+            ImGui::SameLine(0,14.f);
+            ImGui::Checkbox("Share rule names and counts only",&shareScanWithAdmin);
+            ImGui::SameLine(0,14.f);
+            if(!shareScanWithAdmin||reportSent)ImGui::BeginDisabled();
+            if(ImGui::Button("SEND SUMMARY",ImVec2(145.f,30.f)))sendReportRequested=true;
+            if(!shareScanWithAdmin||reportSent)ImGui::EndDisabled();
+            ImGui::SameLine(0,12.f);
+            ImGui::TextDisabled("%s",reportSent?"Sent":"No paths or raw file contents are included.");
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
 
     // Persistent compact scan progress on all non-dashboard tabs.
     // Drawn from the same presentation counter as the dashboard: no fake
@@ -47988,6 +48583,7 @@ zula.exe)FIVEMSTR";
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+    ImGui::PopStyleColor(10);
     ImGui::End();
     drawProcessDetails();
     drawEvidenceDetails();
@@ -48373,3 +48969,6 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     diagnosticLog("Application exited normally.");
     return 0;
 }
+
+
+
