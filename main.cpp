@@ -43845,7 +43845,7 @@ namespace syncLive {
                         if(route=="/request"){
                             if(std::regex_search(reply,match,std::regex(R"rx("sessionId"\s*:\s*"([a-f0-9]{32})")rx")))sessionId=match[1].str();
                             if(std::regex_search(reply,match,std::regex(R"rx("pin"\s*:\s*"([0-9]{6})")rx")))pin=match[1].str();
-                            if(!sessionId.empty()&&!pin.empty()){status="pending";rulesLoaded=false;{std::lock_guard<std::mutex> lock(siteDetectionRulesMutex);siteDetectionRules.clear();}ok=true;}
+                            if(!sessionId.empty()&&!pin.empty()){status="pending";rulesLoaded=false;{std::lock_guard<std::mutex> lock(binaryInspector::siteDetectionRulesMutex);binaryInspector::siteDetectionRules.clear();}ok=true;}
                         }else if(route=="/status"){
                             std::string sessionState;
                             if(std::regex_search(reply,match,std::regex(R"rx("status"\s*:\s*"([a-z]+)")rx")))sessionState=match[1].str();
@@ -43856,17 +43856,17 @@ namespace syncLive {
                             if(std::regex_search(reply,match,std::regex(R"rx("banner"\s*:\s*"([A-Za-z0-9 .,!?_-]{0,100})")rx")))remoteBanner=match[1].str();
                             ok=true;
                         }else if(route=="/scanner-rules"){
-                            std::vector<RemoteDetectionRule> loaded;
+                            std::vector<binaryInspector::RemoteDetectionRule> loaded;
                             const std::regex rulePattern(R"rx(\{\s*"id"\s*:\s*"([a-f0-9]{16})"\s*,\s*"name"\s*:\s*"([A-Za-z0-9 _.-]{1,80})"\s*,\s*"category"\s*:\s*"([A-Za-z0-9 _.-]{1,48})"\s*,\s*"filename"\s*:\s*"([A-Za-z0-9][A-Za-z0-9._-]{0,79})"\s*,\s*"sha256"\s*:\s*"([a-f0-9]{64})"\s*,\s*"severity"\s*:\s*"(suspicious|detected)"\s*\})rx");
                             for(std::sregex_iterator it(reply.begin(),reply.end(),rulePattern),end;it!=end;++it){
-                                RemoteDetectionRule rule;rule.id=(*it)[1].str();rule.name=(*it)[2].str();
+                                binaryInspector::RemoteDetectionRule rule;rule.id=(*it)[1].str();rule.name=(*it)[2].str();
                                 rule.category=(*it)[3].str();rule.filename=(*it)[4].str();
                                 rule.sha256=(*it)[5].str();rule.severity=(*it)[6].str();
                                 loaded.push_back(std::move(rule));
                             }
                             std::regex_search(reply,match,std::regex(R"rx("version"\s*:\s*([0-9]+))rx"));
-                            siteDetectionRulesVersion=match.empty()?0ULL:std::strtoull(match[1].str().c_str(),nullptr,10);
-                            {std::lock_guard<std::mutex> lock(siteDetectionRulesMutex);siteDetectionRules=std::move(loaded);}rulesLoaded=true;ok=true;
+                            binaryInspector::siteDetectionRulesVersion=match.empty()?0ULL:std::strtoull(match[1].str().c_str(),nullptr,10);
+                            {std::lock_guard<std::mutex> lock(binaryInspector::siteDetectionRulesMutex);binaryInspector::siteDetectionRules=std::move(loaded);}rulesLoaded=true;ok=true;
                         }else if(route=="/report"){
                             status="unlocked";ok=true;
                         }
@@ -48969,6 +48969,3 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
     diagnosticLog("Application exited normally.");
     return 0;
 }
-
-
-
